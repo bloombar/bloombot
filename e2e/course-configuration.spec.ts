@@ -60,6 +60,7 @@ import {
 } from '@bloombot/db'
 import { handleMention, type InboundMention } from '@bloombot/discord'
 
+import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { createFakeLogger } from './support/fake-logger.js'
@@ -150,6 +151,12 @@ test('a project and course defined entirely in the panel route and answer a matc
       .find((candidate) => candidate.title === courseTitle)
     if (!course) throw new Error('setup failed: course not found')
     expect(course.enabled).toBe(true)
+
+    // COST-8 — this test is proving CORE-2/CORE-1's routing and answering
+    // pipeline (QA-8's own scope, this file's own module comment), not the
+    // approval gate; the course the panel just created is otherwise pending
+    // by default (`support/approve-course.ts`'s own module comment).
+    approveCourseForE2e(db, organizationId, course.id)
 
     // Bind a Discord server directly (see this file's own module comment
     // for why: TEN-4's real OAuth consent screen cannot be automated here) —

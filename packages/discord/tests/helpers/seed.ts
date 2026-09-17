@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   accounts,
+  courseApproval,
   courses,
   discordServers,
   organizations,
@@ -51,6 +52,8 @@ export interface SeedOptions {
    * count).
    */
   connectDefaultAuthor?: boolean
+  /** COST-8 — approve the seeded course by default (see below); `false` for a test that specifically wants a pending course, the same "opt out" shape `connectDefaultAuthor` above already gives. */
+  approve?: boolean
 }
 
 /** One organization, one Discord server bound to it, and one enabled course with a single category. */
@@ -120,6 +123,22 @@ export function seedBoundServerWithCourse(
   if (!courseResult.ok) {
     throw new Error(
       `seedBoundServerWithCourse: failed to create course: ${courseResult.conflict.message}`
+    )
+  }
+
+  // COST-8 — this helper's whole reason to exist is exercising `handleMention`'s
+  // own routing and answering, not the approval gate itself, so the seeded
+  // course is approved by default the same way the default author is
+  // connected below. A test that wants a *pending* course for COST-8 itself
+  // passes `approve: false`.
+  if (options.approve ?? true) {
+    courseApproval.approveCourse(
+      organizationId,
+      courseResult.course.id,
+      null,
+      'approve',
+      Date.now(),
+      db
     )
   }
 

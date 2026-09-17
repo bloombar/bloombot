@@ -43,6 +43,7 @@ import {
   ActionRefusedError,
 } from '../errors.js'
 import type { Action } from '../types.js'
+import { approveIfAdministratorOwned } from './courses.js'
 
 type Project = NonNullable<ReturnType<typeof projects.getProject>>
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
@@ -215,7 +216,14 @@ export const importCourseAction: Action<
     resolve: (input, context) =>
       projects.getProject(context.organizationId, input.projectId, context.db),
   },
-  execute: ({ organizationId, entity, input, accountId, db }) => {
+  execute: ({
+    organizationId,
+    entity,
+    input,
+    accountId,
+    db,
+    isPlatformAdministratorEmail,
+  }) => {
     // FILE-4 — an import that carries instructions records them as an
     // authored revision, exactly as `courseInstructions.save` does, so the
     // panel's own instructions history is not blank for a course whose
@@ -309,8 +317,32 @@ export const importCourseAction: Action<
         )
       }
 
+      // COST-8 — the identical "an administrator's course is approved
+      // automatically" rule `courses.save` applies on create
+      // (`courses.ts#approveIfAdministratorOwned`'s own doc comment), shared
+      // rather than duplicated: an import is still a course being created,
+      // just from a file instead of a form. Its three approval columns are
+      // copied onto `result.course` the same way `courses.save` does, so a
+      // caller sees the approval on the very response, not only on a later
+      // read.
+      const approved = approveIfAdministratorOwned(
+        organizationId,
+        result.course.id,
+        accountId,
+        isPlatformAdministratorEmail,
+        tx
+      )
+      const course = approved
+        ? {
+            ...result.course,
+            aiApprovedAt: approved.aiApprovedAt,
+            aiApprovedByAccountId: approved.aiApprovedByAccountId,
+            aiApprovalDecidedAt: approved.aiApprovalDecidedAt,
+          }
+        : result.course
+
       return {
-        course: result.course,
+        course,
         title,
         titleChanged: title !== exported.title.trim(),
         disabled: true,

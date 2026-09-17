@@ -453,3 +453,42 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
     expect(screen.queryByTestId('new-messages-button')).not.toBeInTheDocument()
   })
 })
+
+describe('Chat — declined-not-approved notice (COST-8/SURF-10)', () => {
+  beforeEach(() => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+    ])
+    getChatMessages.mockResolvedValue([])
+  })
+
+  // `routes/chat.ts` already renders the full notice server-side and
+  // attaches it to the result (`postChatMessage`'s own return shape) — this
+  // proves the surface shows exactly that text, not a locally invented one,
+  // the one decline kind whose wording is not local to this file.
+  it('shows the server-rendered notice for a course pending approval', async () => {
+    postChatMessage.mockResolvedValue({
+      kind: 'declined-not-approved',
+      notice:
+        "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at support@bloombot.example.edu to request approval.",
+    })
+
+    render(
+      <Chat
+        organizationId="org-1"
+        onSelectCourse={vi.fn()}
+        onClearCourse={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Ask a question')
+
+    fireEvent.change(screen.getByLabelText('Ask a question'), {
+      target: { value: 'Anybody there?' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at support@bloombot.example.edu to request approval."
+    )
+  })
+})

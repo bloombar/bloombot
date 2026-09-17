@@ -54,6 +54,10 @@ function result(
       answerUnenrolled: true,
       discordServerId: null,
       createdAt: 0,
+      // COST-8 — an import stays pending unless it lands in an
+      // administrator-owned organization (`courses.ts#approveIfAdministratorOwned`'s
+      // own doc comment); this fixture is not about that decision.
+      aiApprovedAt: null,
       categories: [],
     },
     title: 'Intro to CS',

@@ -66,7 +66,17 @@ export const ACTION_JSON_BODY_LIMIT_BYTES = 136 * 1024 * 1024
 /** `:organizationId/actions/:actionName` — mounted with `mergeParams` so both route params are visible here regardless of where `server.ts` mounts this router. */
 export function buildActionsRouter(
   registry: ActionRegistry,
-  db: Database
+  db: Database,
+  /**
+   * COST-8 — threaded straight to `dispatch`'s own
+   * `DispatchContext.isPlatformAdministratorEmail` (that field's own doc
+   * comment has the full "dependency, not an import" reasoning): only
+   * `courses.save`/`courses.import` ever read it, to decide automatic
+   * approval on create. `@bloombot/auth`'s own `isPlatformAdministrator`
+   * in production (`src/server.ts`); omitted, no action here ever
+   * auto-approves anything.
+   */
+  isPlatformAdministratorEmail?: (email: string | null | undefined) => boolean
 ): Router {
   const router = Router({ mergeParams: true })
 
@@ -124,6 +134,9 @@ export function buildActionsRouter(
         organizationId,
         db,
         accountId: req.session.accountId,
+        ...(isPlatformAdministratorEmail
+          ? { isPlatformAdministratorEmail }
+          : {}),
       })
         .then((result) => res.status(200).json({ result }))
         .catch(next)

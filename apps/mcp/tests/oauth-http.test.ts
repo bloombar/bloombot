@@ -63,6 +63,11 @@ async function buildTestApp(db: ServerDependencies['db']) {
       resource: RESOURCE_URL,
     }),
     issuerUrl: ISSUER_URL,
+    // COST-8 — `ServerDependencies.isPlatformAdministratorEmail` is
+    // required now (that field's own doc comment has why); nobody is an
+    // administrator by default, the same safe default this file's own
+    // tests never need to override.
+    isPlatformAdministratorEmail: () => false,
   }
   return startTestServer(buildApp(deps))
 }
@@ -720,6 +725,7 @@ describe('metadata documents (RFC 8414 / RFC 9728)', () => {
         consentUrl: 'http://127.0.0.1:2/connect-assistant',
       }),
       issuerUrl: otherIssuer,
+      isPlatformAdministratorEmail: () => false,
     }
     const server = await startTestServer(buildApp(deps))
 

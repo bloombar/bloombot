@@ -50,6 +50,7 @@ import {
   type Database,
 } from '@bloombot/db'
 
+import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { signIn } from './support/sign-in.js'
 
@@ -87,6 +88,12 @@ function seedRosterAdmittedCourse(
     db
   )
   if (!created.ok) throw new Error('setup failed: course creation refused')
+
+  // COST-8 — this spec is about LINK-10's own connected-organization
+  // handoff, not the approval gate; a course seeded directly like this is
+  // otherwise pending by default (`support/approve-course.ts`'s own module
+  // comment).
+  approveCourseForE2e(db, organizationId, created.course.id)
 
   const discordPerson = people.resolvePersonByIdentity(
     organizationId,

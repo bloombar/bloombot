@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   accounts,
+  courseApproval,
   courses,
   discordServers,
   organizations,
@@ -98,6 +99,18 @@ export function seedBoundServerWithCourse(
       `seedBoundServerWithCourse: failed to create course: ${courseResult.conflict.message}`
     )
   }
+
+  // COST-8 — this helper exists to exercise `runCatchUp`/`handleMention`,
+  // not the approval gate, so the seeded course is approved by default
+  // (`packages/discord/tests/helpers/seed.ts`'s own identical comment).
+  courseApproval.approveCourse(
+    organizationId,
+    courseResult.course.id,
+    null,
+    'approve',
+    Date.now(),
+    db
+  )
 
   // LINK-1 — connected the same way a real proof would
   // (`@bloombot/auth`'s `person-link.ts`): resolving a Discord identity,

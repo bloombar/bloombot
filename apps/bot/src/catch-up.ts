@@ -89,6 +89,10 @@ export interface CatchUpDependencies {
   admission: AdmissionGate
   pricing: PricingTable
   connectUrl: string
+  /** SURF-10 — threaded straight through to `handleMention`'s own `HandleMentionDependencies.supportContact`. Optional, the same reason `admission`/`pricing` above are — a test that does not care about the not-approved notice's own wording omits it. */
+  supportContact?: string
+  /** COST-8 — threaded straight through to `handleMention`'s own `HandleMentionDependencies.isPlatformAdministratorEmail`. Optional, the same reason `admission`/`pricing` above are. */
+  isPlatformAdministratorEmail?: (email: string | null | undefined) => boolean
   bounds: CatchUpBounds
   /** SURF-9 follow-up — the same in-process set the live path claims a message's id in (`MessageHandlerDeps`, `message-handler.ts`); see `in-flight-messages.ts`'s own module comment for why the gateway-hydration double-answer needs it. */
   inFlight: InFlightMessageIds
@@ -408,6 +412,15 @@ export async function runCatchUp(
             admission: deps.admission,
             pricing: deps.pricing,
             connectUrl: deps.connectUrl,
+            ...(deps.supportContact !== undefined
+              ? { supportContact: deps.supportContact }
+              : {}),
+            ...(deps.isPlatformAdministratorEmail
+              ? {
+                  isPlatformAdministratorEmail:
+                    deps.isPlatformAdministratorEmail,
+                }
+              : {}),
           })
           // Recorded *after* `handleMention` returns, the same "a crash
           // mid-answer re-handles rather than silently loses it" discipline

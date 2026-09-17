@@ -116,6 +116,21 @@ export interface CallToolContext {
   /** The account `authenticate.ts` proved the connection is — MCP-1's "an ordinary call by the account that authorized it." */
   accountId: string
   /**
+   * COST-8 — threaded straight to `dispatch`'s own
+   * `DispatchContext.isPlatformAdministratorEmail`, read only by
+   * `courses.save`/`courses.import`'s own `execute` to decide automatic
+   * approval on create (`@bloombot/actions`'s own doc comment on that
+   * field has the full "dependency, not an import" reasoning). **Must-fix**
+   * (rework): this context used to omit the field entirely, so a platform
+   * administrator creating a course through an MCP client got a pending
+   * course the lazy auto-approval path cannot rescue — that path only
+   * checks organization ownership, never the actor
+   * (`docs/DECISIONS.md` D-116). Required, not optional, the same
+   * "a production entry point that can forget an optional field silently
+   * did" reasoning `server.ts`'s own `ServerDependencies` field gives.
+   */
+  isPlatformAdministratorEmail: (email: string | null | undefined) => boolean
+  /**
    * MCP-4's mechanical confirmation. Never a boolean argument the caller's
    * own tool-call arguments could carry — see `server.ts`'s own module
    * comment for why an argument the assistant fills in is not a
@@ -226,6 +241,10 @@ export async function callTool(
     organizationId,
     db: context.db,
     accountId: context.accountId,
+    // COST-8 — must-fix (rework): `courses.save`/`courses.import`'s own
+    // auto-approval on create needs this to reach `dispatch` at all
+    // (`CallToolContext.isPlatformAdministratorEmail`'s own doc comment).
+    isPlatformAdministratorEmail: context.isPlatformAdministratorEmail,
   })
   return { output: tool.sanitizeOutput ? tool.sanitizeOutput(output) : output }
 }

@@ -60,6 +60,14 @@ export interface ExecuteContext<Input, Entity> {
   db: Database
   /** The authenticated caller's own account, when `dispatch` was given one (`dispatch.ts`'s own `DispatchContext.accountId` doc comment). Optional for the same reason it is there — most actions have no reason to read it. */
   accountId?: string
+  /**
+   * COST-8 — is this email a platform administrator's? Read by
+   * `courses.save`/`courses.import` alone, to decide automatic approval on
+   * create (`dispatch.ts`'s own `DispatchContext.isPlatformAdministratorEmail`
+   * doc comment has the full "dependency, not an import" reasoning). Every
+   * other action ignores it, the same way most ignore `accountId`.
+   */
+  isPlatformAdministratorEmail?: (email: string | null | undefined) => boolean
 }
 
 /**

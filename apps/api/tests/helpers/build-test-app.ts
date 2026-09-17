@@ -160,6 +160,14 @@ export function buildTestApp(
     // call, the same "a test overrides only the one field its own scenario
     // needs" convention this helper's own module comment already states.
     model: new FakeModelClient(),
+    // COST-8 — `ServerDependencies.isPlatformAdministratorEmail` is
+    // required now (that field's own doc comment has why); nobody is an
+    // administrator by default, the same safe default
+    // `@bloombot/core#answer.ts`'s own `NO_ADMINISTRATOR` already takes —
+    // a test that wants `courses.save`/`courses.import`/the chat route's
+    // own lazy approval to treat some email as an administrator overrides
+    // this directly with its own predicate.
+    isPlatformAdministratorEmail: () => false,
     ...overrides,
   })
   return startTestServer(app)

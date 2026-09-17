@@ -20,7 +20,10 @@
 
 import { createServer } from 'node:http'
 
-import { createGoogleIdTokenVerifier } from '@bloombot/auth'
+import {
+  createGoogleIdTokenVerifier,
+  isPlatformAdministrator,
+} from '@bloombot/auth'
 import { CONFIG, getModelPricingTable, loadDotEnv } from '@bloombot/config'
 import type { ModelClient } from '@bloombot/core'
 import {
@@ -147,6 +150,10 @@ async function main(): Promise<void> {
   // file's module comment already gives.
   const admissionLimit = CONFIG.MODEL_ADMISSION_LIMIT
   const admissionWaitMs = CONFIG.MODEL_ADMISSION_WAIT_MS
+  // SURF-10 — named in `routes/chat.ts`'s own not-approved notice (COST-8),
+  // read once here alongside every other `CONFIG` value this process reads
+  // at startup.
+  const supportContact = CONFIG.SUPPORT_CONTACT
   // ADMIN-4/COST-5 — the three processes' own loopback health endpoints,
   // read once here alongside every other `CONFIG` value this process
   // reads at startup (`docs/DECISIONS.md` D-33's own accounting of who has
@@ -283,6 +290,13 @@ async function main(): Promise<void> {
     model,
     admission,
     pricing,
+    supportContact,
+    // COST-8 — the real predicate, read live from `ADMIN_EMAILS` on every
+    // check (`isPlatformAdministrator`'s own module comment) — never cached
+    // here, the same "re-checked, not derived once at startup" discipline
+    // `routes/admin.ts`'s own `isRequestFromPlatformAdministrator` already
+    // holds itself to.
+    isPlatformAdministratorEmail: isPlatformAdministrator,
     botHealthUrl,
     workerHealthUrl,
     apiHealthUrl,

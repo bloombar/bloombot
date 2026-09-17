@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 
 import { createPlatformRegistry } from '@bloombot/actions'
 import {
+  accounts,
   courseAttachments,
   courseInstructionRevisions,
   courses,
@@ -55,6 +56,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
       { organizationId: caller.organizationId, name: 'A New Term' },
       {
         toolDefinitions: toolDefinitions(),
+        isPlatformAdministratorEmail: () => false,
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation: () => Promise.resolve(false),
@@ -78,6 +80,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
         { organizationId: caller.organizationId, serverId: 'srv-1' },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -97,6 +100,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
         { organizationId: caller.organizationId, name: '' },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -115,6 +119,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
         { name: 'No org at all' },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -131,6 +136,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
       const definitions = toolDefinitions()
       const context = {
         toolDefinitions: definitions,
+        isPlatformAdministratorEmail: () => false,
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation: () => Promise.resolve(false),
@@ -184,6 +190,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
         { organizationId: caller.organizationId, jobId: job.id },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -208,6 +215,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
         { organizationId: caller.organizationId, jobId },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -245,6 +253,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
         { organizationId: otherOrganizationId, name: 'Should Not Be Created' },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -272,6 +281,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
         },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -286,6 +296,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
         { organizationId: 'org-does-not-exist', name: 'x' },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -311,6 +322,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
         { organizationId: otherOrganizationId },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -328,6 +340,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
       { organizationId: caller.organizationId },
       {
         toolDefinitions: toolDefinitions(),
+        isPlatformAdministratorEmail: () => false,
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation: () => Promise.resolve(false),
@@ -350,6 +363,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
         { organizationId: caller.organizationId, attachmentId },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation,
@@ -381,6 +395,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
       { organizationId: caller.organizationId, attachmentId },
       {
         toolDefinitions: toolDefinitions(),
+        isPlatformAdministratorEmail: () => false,
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation,
@@ -402,6 +417,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
       { organizationId: caller.organizationId, attachmentId },
       {
         toolDefinitions: toolDefinitions(),
+        isPlatformAdministratorEmail: () => false,
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation,
@@ -426,6 +442,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
         { organizationId: caller.organizationId, attachmentId: 'nope' },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation,
@@ -452,6 +469,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
         { organizationId: otherOrganizationId, attachmentId: 'whatever' },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation,
@@ -473,6 +491,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
         { organizationId: caller.organizationId, attachmentId },
         {
           toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: () => false,
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () =>
@@ -492,6 +511,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
       { organizationId: caller.organizationId, name: 'Ordinary' },
       {
         toolDefinitions: toolDefinitions(),
+        isPlatformAdministratorEmail: () => false,
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation,
@@ -535,6 +555,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
           },
           {
             toolDefinitions: toolDefinitions(),
+            isPlatformAdministratorEmail: () => false,
             db: testDb.db,
             accountId: caller.accountId,
             requestConfirmation,
@@ -547,6 +568,54 @@ describe('MCP-4 — a destructive tool asks first', () => {
         caller.organizationId,
         expect.stringContaining('Intro to Testing')
       )
+    })
+
+    // Must-fix (rework): `CallToolContext` used to omit
+    // `isPlatformAdministratorEmail` from every `dispatch` call this file
+    // makes, so a platform administrator creating a course through an MCP
+    // client always got a pending course — the lazy auto-approval path in
+    // `answerQuestion` cannot rescue it either, since that path only checks
+    // organization ownership, never who created it (`docs/DECISIONS.md`
+    // D-116). Fails without the fix: this context supplies a real
+    // predicate, the same way `apps/mcp/src/index.ts` does in production,
+    // and checks the newly created course is approved on the very
+    // response.
+    it('approves a course created through courses.save when the actor is a platform administrator (COST-8, must-fix)', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const ownerAccount = accounts.getAccountById(caller.accountId, testDb.db)
+      if (!ownerAccount) {
+        throw new Error('setup failed: owner account not found')
+      }
+      const project = projects.createProject(
+        caller.organizationId,
+        { name: 'Fall 2026' },
+        testDb.db
+      )
+
+      const result = await callTool(
+        'courses.save',
+        {
+          organizationId: caller.organizationId,
+          projectId: project.id,
+          title: 'Intro to Testing',
+          enabled: true,
+          adminsRole: 'admins',
+          studentsRole: 'students',
+          categories: [],
+        },
+        {
+          toolDefinitions: toolDefinitions(),
+          isPlatformAdministratorEmail: (email) => email === ownerAccount.email,
+          db: testDb.db,
+          accountId: caller.accountId,
+          requestConfirmation: () => Promise.resolve(true),
+        }
+      )
+
+      expect(
+        (result.output as { aiApprovedAt: number | null }).aiApprovedAt
+      ).not.toBeNull()
     })
   })
 
@@ -590,6 +659,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
           { organizationId: caller.organizationId, categoryId },
           {
             toolDefinitions: toolDefinitions(),
+            isPlatformAdministratorEmail: () => false,
             db: testDb.db,
             accountId: caller.accountId,
             requestConfirmation,
@@ -633,6 +703,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
           { organizationId: caller.organizationId, categoryId },
           {
             toolDefinitions: toolDefinitions(),
+            isPlatformAdministratorEmail: () => false,
             db: testDb.db,
             accountId: caller.accountId,
             requestConfirmation,
@@ -673,6 +744,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
           { organizationId: caller.organizationId, categoryId },
           {
             toolDefinitions: toolDefinitions(),
+            isPlatformAdministratorEmail: () => false,
             db: testDb.db,
             accountId: caller.accountId,
             requestConfirmation,
@@ -713,6 +785,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
           { organizationId: caller.organizationId, channelId },
           {
             toolDefinitions: toolDefinitions(),
+            isPlatformAdministratorEmail: () => false,
             db: testDb.db,
             accountId: caller.accountId,
             requestConfirmation,
@@ -751,6 +824,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
           { organizationId: caller.organizationId, courseId },
           {
             toolDefinitions: toolDefinitions(),
+            isPlatformAdministratorEmail: () => false,
             db: testDb.db,
             accountId: caller.accountId,
             requestConfirmation,
@@ -809,6 +883,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
           },
           {
             toolDefinitions: toolDefinitions(),
+            isPlatformAdministratorEmail: () => false,
             db: testDb.db,
             accountId: caller.accountId,
             requestConfirmation,

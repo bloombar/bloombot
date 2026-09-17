@@ -38,6 +38,8 @@ export interface AuthRouterDependencies {
   /** Turns an issued token into the URL the emailed link points at. `@bloombot/auth` has no notion of the web app's own route; this API does. `destination` (MCP-12) is the same-origin path the link should return to, appended as a query hint — see `sign-in-link.ts`. */
   buildSignInLink: (token: string, destination?: string) => string
   googleVerifier: GoogleIdTokenVerifier
+  /** COST-8/SURF-10 — `CONFIG.SUPPORT_CONTACT`, returned on every `/me` response (`account` or not — this is deployment-wide, not account-specific) so `pages/CourseEditor.tsx`'s own pending-approval banner can name it, the same contact every decline notice already names. Defaults to `''` when omitted, matching that variable's own unset default. */
+  supportContact?: string
 }
 
 // Must-fix 3 of the API-1..6 rework: `z.string().min(1)` let a syntactically
@@ -214,7 +216,10 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
    */
   router.get('/me', (req, res) => {
     if (!req.session) {
-      res.status(200).json({ account: null })
+      res.status(200).json({
+        account: null,
+        supportContact: deps.supportContact ?? '',
+      })
       return
     }
     // Unreachable in practice — a session's own foreign key guarantees its
@@ -223,7 +228,10 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
     // few lines below already holds itself to.
     const account = accounts.getAccountById(req.session.accountId, deps.db)
     if (!account) {
-      res.status(200).json({ account: null })
+      res.status(200).json({
+        account: null,
+        supportContact: deps.supportContact ?? '',
+      })
       return
     }
     const accountMemberships = memberships.listMembershipsForAccount(
@@ -275,6 +283,7 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
         }),
         connectedOrganizations,
       },
+      supportContact: deps.supportContact ?? '',
     })
   })
 

@@ -617,6 +617,7 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
     answerUnenrolled: true,
     discordServerId: null,
     createdAt: 0,
+    aiApprovedAt: 1000,
   }
 
   const COURSE_TWO: CourseSummary = {

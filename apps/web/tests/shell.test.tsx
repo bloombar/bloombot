@@ -1399,6 +1399,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       answerUnenrolled: true,
       discordServerId: null,
       createdAt: 0,
+      aiApprovedAt: 1000,
     }
 
     const SECOND_COURSE: CourseSummary = {

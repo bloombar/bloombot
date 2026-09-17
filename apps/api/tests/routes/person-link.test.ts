@@ -45,6 +45,7 @@ import request from 'supertest'
 import { beginDiscordPersonLink, issueMcpPersonLinkToken } from '@bloombot/auth'
 import {
   accounts,
+  courseApproval,
   courses,
   enrolments,
   people,
@@ -136,6 +137,18 @@ function seedEnrolledCourse(
   if (!created.ok) throw new Error('test setup: course creation refused')
   const courseId = created.course.id
 
+  // COST-8 — this helper exists to exercise the person-link acceptance
+  // flow, not the approval gate, so the seeded course is approved by
+  // default (`chat.test.ts#seedEnrolledCourse`'s own identical comment).
+  courseApproval.approveCourse(
+    organizationId,
+    courseId,
+    null,
+    'approve',
+    Date.now(),
+    db
+  )
+
   const discordPerson = people.resolvePersonByIdentity(
     organizationId,
     { surface: 'discord', externalId: discordExternalId },
@@ -182,6 +195,15 @@ function seedSelfEnrolCourse(
     db
   )
   if (!created.ok) throw new Error('test setup: course creation refused')
+  // COST-8 — see `seedEnrolledCourse`'s own identical comment, above.
+  courseApproval.approveCourse(
+    organizationId,
+    created.course.id,
+    null,
+    'approve',
+    Date.now(),
+    db
+  )
   return { courseId: created.course.id }
 }
 

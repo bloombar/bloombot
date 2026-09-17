@@ -301,6 +301,25 @@ export const courses = sqliteTable(
     answerUnenrolled: integer('answer_unenrolled', { mode: 'boolean' })
       .notNull()
       .default(true),
+    // COST-8 — a course answers only once approved for AI use. All three
+    // columns are nullable, and `null` on every one of them is exactly what
+    // a freshly-migrated or newly-created non-administrator course starts
+    // as: "pending", not a distinct state to model separately.
+    // `aiApprovedAt`/`aiApprovedByAccountId` describe the approval itself
+    // (`aiApprovedByAccountId` is `null` for an automatic approval — nobody
+    // decided it, `repos/course-approval.ts`'s own module comment); revoking
+    // clears both back to `null` but does *not* clear
+    // `aiApprovalDecidedAt` below — that column, once set, means "a human or
+    // the automatic rule has already decided this course's approval at
+    // least once," which is what stops `answerQuestion`'s own lazy
+    // auto-approval (`repos/course-approval.ts`) from re-approving a course
+    // a platform administrator deliberately revoked. See `docs/DECISIONS.md`
+    // D-116.
+    aiApprovedAt: integer('ai_approved_at'),
+    aiApprovedByAccountId: text('ai_approved_by_account_id').references(
+      () => accounts.id
+    ),
+    aiApprovalDecidedAt: integer('ai_approval_decided_at'),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
@@ -897,6 +916,49 @@ export const courseInstructionRevisions = sqliteTable(
     index('course_instruction_revisions_course_id_idx').on(table.courseId),
     index('course_instruction_revisions_organization_id_idx').on(
       table.organizationId
+    ),
+  ]
+)
+
+// COST-8 — every approval decision a course has ever had, the audit trail
+// `courses.aiApprovedAt`/`aiApprovedByAccountId` alone do not keep: those two
+// columns only ever hold the *current* decision (D-3's "current, not
+// history" pattern, the same split `courseInstructionRevisions` above draws
+// against `courses.instructions`), so a revoke followed by a re-approval
+// would otherwise leave no trace that the course was ever revoked at all.
+// `accountId` is `null` for `'auto-approve'` — nobody decided it
+// (`repos/course-approval.ts`'s own module comment) — and always set for
+// `'approve'`/`'revoke'`, the two decisions a platform administrator makes
+// by hand (WEB-53, next slice).
+export const COURSE_APPROVAL_ACTIONS = [
+  'auto-approve',
+  'approve',
+  'revoke',
+] as const
+export type CourseApprovalAction = (typeof COURSE_APPROVAL_ACTIONS)[number]
+
+export const courseApprovalEvents = sqliteTable(
+  'course_approval_events',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    action: text('action', { enum: COURSE_APPROVAL_ACTIONS }).notNull(),
+    accountId: text('account_id').references(() => accounts.id),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('course_approval_events_course_id_idx').on(table.courseId),
+    index('course_approval_events_organization_id_idx').on(
+      table.organizationId
+    ),
+    check(
+      'course_approval_events_action_check',
+      sql`${table.action} in ('auto-approve', 'approve', 'revoke')`
     ),
   ]
 )

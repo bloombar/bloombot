@@ -9,6 +9,8 @@
  */
 
 import {
+  accounts,
+  courseApproval,
   courses,
   deletions,
   discordServers,
@@ -16,6 +18,7 @@ import {
   projects,
   schema,
   type Database,
+  type Executor,
 } from '@bloombot/db'
 import { z } from 'zod'
 
@@ -105,6 +108,64 @@ function isOwnDiscordServerOrAbsent(
       discordServerId,
       db
     )
+  )
+}
+
+/**
+ * COST-8 — approve a freshly created course automatically when it is "an
+ * administrator's": created by an account that is a platform administrator
+ * (`accountId`'s own email), or landing in an organization an administrator
+ * owns (`@bloombot/db`'s `courseApproval.isAdministratorOwnedOrganization`).
+ * Shared by `courses.save`'s own `execute` below and
+ * `course-portability.ts#importCourseAction` — both create a course through
+ * `courses.createCourse` and need the identical decision the moment it
+ * exists, and a second copy of it in each module is exactly the kind of
+ * duplicated logic that drifts the moment one copy is fixed and the other
+ * is not.
+ *
+ * `isPlatformAdministratorEmail` is `dispatch.ts`'s own injected predicate
+ * (`ExecuteContext`'s own doc comment has the full "dependency, not an
+ * import" reasoning, D-116) — `undefined` when the caller never wired one,
+ * in which case this is a no-op: the course stays pending, the safe default
+ * every other optional dependency in this platform takes. Always records
+ * `'auto-approve'` with a `null` account, even when the *actor* is the
+ * administrator: nobody made a deliberate WEB-53 decision here, the rule
+ * did.
+ *
+ * `db` accepts `Executor`, not just `Database`: `courses.import` calls this
+ * from inside its own transaction, atomically with `createCourse` itself.
+ */
+export function approveIfAdministratorOwned(
+  organizationId: string,
+  courseId: string,
+  accountId: string | undefined,
+  isPlatformAdministratorEmail:
+    ((email: string | null | undefined) => boolean) | undefined,
+  db: Executor
+): courses.Course | undefined {
+  if (!isPlatformAdministratorEmail) return undefined
+
+  const actorIsAdministrator = accountId
+    ? isPlatformAdministratorEmail(
+        accounts.getAccountById(accountId, db)?.email
+      )
+    : false
+  const administratorOwned =
+    actorIsAdministrator ||
+    courseApproval.isAdministratorOwnedOrganization(
+      organizationId,
+      isPlatformAdministratorEmail,
+      db
+    )
+  if (!administratorOwned) return undefined
+
+  return courseApproval.approveCourse(
+    organizationId,
+    courseId,
+    null,
+    'auto-approve',
+    Date.now(),
+    db
   )
 }
 
@@ -267,7 +328,14 @@ export const saveCourseAction: Action<
       return { project, existingCourse }
     },
   },
-  execute: ({ organizationId, input, entity, db }) => {
+  execute: ({
+    organizationId,
+    input,
+    entity,
+    db,
+    accountId,
+    isPlatformAdministratorEmail,
+  }) => {
     // Finding 2 (rework pass): `promptId`, `model`, `vectorStoreId` and
     // `maxRequestsPerDay` are optional in `saveInputSchema` so a caller can
     // update, say, only a course's title — but that means an *omitted*
@@ -391,6 +459,35 @@ export const saveCourseAction: Action<
     if (!result) throw new ActionRefusedError()
     // PROJ-3's own collision, named — see `docs/DECISIONS.md`.
     if (!result.ok) throw new ActionConflictError(result.conflict)
+
+    // COST-8 — only on *create*: an update never touches approval either
+    // way (`saveInputSchema` above accepts no approval field at all), so
+    // this only ever runs the moment `entity.existingCourse` is unset.
+    // `approveIfAdministratorOwned` hands back the base `courses` row (no
+    // categories/channels — `@bloombot/db`'s own `courses.Course`, not this
+    // file's own `Course` alias) when it approved anything; its three
+    // approval columns are copied onto `result.course` so the caller sees
+    // the approval on the very response that created the course, not only
+    // on a later read, without losing the categories/channels `result.course`
+    // already carries.
+    if (!entity.existingCourse) {
+      const approved = approveIfAdministratorOwned(
+        organizationId,
+        result.course.id,
+        accountId,
+        isPlatformAdministratorEmail,
+        db
+      )
+      if (approved) {
+        return {
+          ...result.course,
+          aiApprovedAt: approved.aiApprovedAt,
+          aiApprovedByAccountId: approved.aiApprovedByAccountId,
+          aiApprovalDecidedAt: approved.aiApprovalDecidedAt,
+        }
+      }
+    }
+
     return result.course
   },
 }

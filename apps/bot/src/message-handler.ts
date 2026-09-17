@@ -32,6 +32,10 @@ export interface MessageHandlerDeps {
   pricing: PricingTable
   /** LINK-2's own address — built once in `main()`, from `CONFIG.PUBLIC_APP_URL`, and shared across every message this process handles. */
   connectUrl: string
+  /** SURF-10 — built once in `main()`, from `CONFIG.SUPPORT_CONTACT`, and shared across every message this process handles. Optional, the same reason `admission`/`pricing` above are. */
+  supportContact?: string
+  /** COST-8 — built once in `main()`, from `@bloombot/auth`'s `isPlatformAdministrator`, and shared across every message this process handles. Optional, the same reason `admission`/`pricing` above are. */
+  isPlatformAdministratorEmail?: (email: string | null | undefined) => boolean
   /** SURF-9 rework cheap-fix — `DISCORD_CATCHUP_LOOKBACK_MS <= 0` (`catchUpBounds.lookbackMs`, `main()`). Recording every handled id exists only to dedup against a catch-up scan; with catch-up disabled there is no scan to dedup against, so recording forever would grow the table for no reader ever to use. */
   catchUpEnabled: boolean
   /** SURF-9 follow-up — the same in-process set threaded into `CatchUpDependencies` (`catch-up.ts`); see `in-flight-messages.ts`'s own module comment for why the gateway-hydration double-answer needs it. */
@@ -80,6 +84,12 @@ export async function onMessageCreate(
       admission: deps.admission,
       pricing: deps.pricing,
       connectUrl: deps.connectUrl,
+      ...(deps.supportContact !== undefined
+        ? { supportContact: deps.supportContact }
+        : {}),
+      ...(deps.isPlatformAdministratorEmail
+        ? { isPlatformAdministratorEmail: deps.isPlatformAdministratorEmail }
+        : {}),
     })
 
     // SURF-9 — recorded *after* `handleMention` returns, for every outcome

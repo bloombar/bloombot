@@ -178,6 +178,25 @@ export interface ServerDependencies {
   model?: ModelClient
   admission?: AdmissionGate
   pricing?: PricingTable
+  /** SURF-10 — threaded to `chat-tools.ts`'s own `ChatToolDependencies.supportContact` the same way `admission`/`pricing` above are. Omitted, `courseNotApprovedNotice` drops the "at <contact>" clause entirely. */
+  supportContact?: string
+  /**
+   * COST-8 — threaded to *both* `chat-tools.ts`'s
+   * `ChatToolDependencies.isPlatformAdministratorEmail` (`chat.ask`'s own
+   * lazy auto-approval, `registerChatTools` below) and `call-tool.ts`'s
+   * `CallToolContext.isPlatformAdministratorEmail` (`courses.save`/`courses.import`'s
+   * own auto-approval on create, `callTool` below) — rework finding: an
+   * earlier version of this file supplied neither, so an MCP client could
+   * never rescue a pre-existing administrator-owned course by asking it a
+   * question, and a platform administrator creating a course through MCP
+   * got a pending one the lazy path cannot reach (it only checks
+   * organization ownership, never the actor). Required, the same "a
+   * production entry point that can forget an optional field silently did"
+   * reasoning `apps/api/src/server.ts`'s own identical field gives —
+   * `@bloombot/auth`'s `isPlatformAdministrator` in production
+   * (`index.ts`).
+   */
+  isPlatformAdministratorEmail: (email: string | null | undefined) => boolean
   /**
    * How long an `elicitation/create` request waits for a human before
    * giving up. Defaults to `DEFAULT_ELICITATION_TIMEOUT_MS` (30s);
@@ -385,6 +404,7 @@ function registerTools(
             toolDefinitions: deps.toolDefinitions,
             db: deps.db,
             accountId,
+            isPlatformAdministratorEmail: deps.isPlatformAdministratorEmail,
             requestConfirmation: (
               confirmingTool,
               organizationId,
@@ -725,8 +745,12 @@ function registerChatTools(
           db: deps.db,
           model: deps.model ?? UNCONFIGURED_MODEL_CLIENT,
           logger: deps.logger,
+          isPlatformAdministratorEmail: deps.isPlatformAdministratorEmail,
           ...(deps.admission ? { admission: deps.admission } : {}),
           ...(deps.pricing ? { pricing: deps.pricing } : {}),
+          ...(deps.supportContact !== undefined
+            ? { supportContact: deps.supportContact }
+            : {}),
         })
         return formatAskChatResult(result)
       } catch (error) {

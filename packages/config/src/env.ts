@@ -111,6 +111,15 @@ export const envSchema = z.object({
   // Read through `isAdminEmail`, never from here — see the note in admin.ts.
   ADMIN_EMAILS: z.string().default(''),
 
+  // SURF-10 — who an unapproved course's owner is told to contact for
+  // approval (COST-8), named on every surface's own decline notice. `''`
+  // default, the same "empty means unset" shape `ADMIN_EMAILS` above
+  // already takes: a deployment that has not decided a support address yet
+  // still starts, and the notice's own wording (`packages/core`'s shared
+  // helper) drops the "at <contact>" clause entirely when this is empty,
+  // rather than rendering a blank.
+  SUPPORT_CONTACT: z.string().default(''),
+
   // JOB-2..3: the background queue's own policy. See docs/DECISIONS.md for
   // why these particular numbers. `@bloombot/jobs` takes every one of these
   // as an explicit argument rather than reading `CONFIG` itself (CORE-4's

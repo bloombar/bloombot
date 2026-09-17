@@ -114,6 +114,10 @@ const COURSE: Course = {
   answerUnenrolled: true,
   discordServerId: null,
   createdAt: 0,
+  // COST-8 — approved by default: this fixture exists to exercise the rest
+  // of the editor, not the pending-approval banner (which has its own
+  // dedicated tests, below).
+  aiApprovedAt: 1000,
   categories: [
     {
       id: 'cat-1',
@@ -2139,6 +2143,68 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
       Record<string, unknown>,
     ]
     expect(input).not.toHaveProperty('promptId')
+  })
+})
+
+/**
+ * COST-8/SURF-10 — an existing course's owner sees the same pending state a
+ * student asking it would be told about, so it "is not discovered only by
+ * asking" (SURF-10's own text).
+ */
+describe('CourseEditor pending-approval banner (COST-8/SURF-10)', () => {
+  it('shows the pending-approval banner for an existing course with no aiApprovedAt', async () => {
+    getCourse.mockResolvedValue({ ...COURSE, aiApprovedAt: null })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(screen.getByText(/Pending approval/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/won.t answer questions until Bloombot support/)
+    ).toBeInTheDocument()
+  })
+
+  it('shows no banner for an already-approved course', async () => {
+    getCourse.mockResolvedValue({ ...COURSE, aiApprovedAt: 1000 })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(screen.queryByText(/Pending approval/)).toBeNull()
+  })
+
+  it('shows no banner for a new, unsaved course — there is no approval decision yet to report', async () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Title')
+
+    expect(screen.queryByText(/Pending approval/)).toBeNull()
   })
 })
 

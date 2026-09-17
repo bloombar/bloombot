@@ -6,6 +6,7 @@ import {
   accounts,
   conversations,
   costLedger,
+  courseApproval,
   courseAttachments,
   courses,
   deletions,
@@ -17,6 +18,7 @@ import {
   people,
   projects,
   rosterChannelAssignments,
+  schema,
   transcriptAccess,
   transcriptExports,
 } from '@bloombot/db'
@@ -176,6 +178,15 @@ function seedFullTenant(testDatabase: TestDatabase) {
     testDatabase.db
   )
 
+  courseApproval.approveCourse(
+    organizationId,
+    course.id,
+    instructor.id,
+    'approve',
+    Date.now(),
+    testDatabase.db
+  )
+
   return { organizationId, course, instructor, survivor, loser }
 }
 
@@ -249,6 +260,16 @@ describe('organizations.deleteOrganizationData (ADMIN-5)', () => {
         testDb.db
       )
     ).toBeUndefined()
+    // COST-8 — the approval event `seedFullTenant` recorded is gone too,
+    // read raw the same way `deletions.test.ts` reads `course_approval_events`
+    // once the course itself no longer exists to look it up through.
+    expect(
+      testDb.db
+        .select()
+        .from(schema.courseApprovalEvents)
+        .all()
+        .filter((row) => row.organizationId === organizationId)
+    ).toHaveLength(0)
     // Confirms the whole tenant is actually gone, not merely the rows this
     // test happened to name — a fresh preview against the same id finds
     // nothing left to count.

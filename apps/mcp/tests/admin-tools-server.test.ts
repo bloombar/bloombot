@@ -76,6 +76,11 @@ async function buildTestApp(
       resource: 'http://127.0.0.1:1/mcp',
     }),
     issuerUrl: new URL('http://127.0.0.1:1'),
+    // COST-8 — `ServerDependencies.isPlatformAdministratorEmail` is
+    // required now (that field's own doc comment has why); nobody is an
+    // administrator by default, the same safe default this file's own
+    // tests never need to override.
+    isPlatformAdministratorEmail: () => false,
     ...overrides,
   }
   return startTestServer(buildApp(deps))

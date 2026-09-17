@@ -117,6 +117,7 @@ const COURSE: Course = {
   answerUnenrolled: true,
   discordServerId: null,
   createdAt: 0,
+  aiApprovedAt: 1000,
   categories: [],
 }
 

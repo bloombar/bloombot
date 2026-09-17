@@ -59,6 +59,7 @@ import {
   projects,
 } from '@bloombot/db'
 
+import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { requestSignInLink } from './support/sign-in.js'
 
@@ -113,6 +114,12 @@ function seedJoinLink(suffix: string): {
       seedDb
     )
     if (!created.ok) throw new Error('setup failed: course creation refused')
+
+    // COST-8 — this spec is about ENRL-3/ENRL-8's own join-link redemption,
+    // not the approval gate; a course seeded directly like this is
+    // otherwise pending by default (`support/approve-course.ts`'s own
+    // module comment).
+    approveCourseForE2e(seedDb, institutionOrganizationId, created.course.id)
 
     courseJoinLinks.createJoinLink(
       institutionOrganizationId,

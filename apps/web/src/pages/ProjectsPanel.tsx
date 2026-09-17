@@ -36,6 +36,8 @@ import { Projects } from './Projects.js'
 
 export interface ProjectsPanelProps {
   organizationId: string
+  /** COST-8/SURF-10 — threaded straight to `CourseEditor`'s own pending-approval banner (`pages/Shell.tsx`'s own module comment on where this originates). Optional, defaulting to `''` — most of this file's own tests do not care. */
+  supportContact?: string
   /** WEB-32 — which of the four project/course addresses is current. */
   route: ProjectsRoute
   navigate: (route: Route, options?: { replace?: boolean }) => void
@@ -52,6 +54,7 @@ type ProjectResolution =
 
 export function ProjectsPanel({
   organizationId,
+  supportContact = '',
   route,
   navigate,
   onOpenChat,
@@ -192,6 +195,7 @@ export function ProjectsPanel({
     <CourseEditor
       organizationId={organizationId}
       project={project}
+      supportContact={supportContact}
       // WEB-36 — `CoursePeople`'s own transcript link, threaded straight
       // through (`CourseEditor`'s own module comment on why it takes this
       // at all).

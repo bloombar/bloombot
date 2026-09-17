@@ -16,6 +16,7 @@ import {
   contentDeletions,
   conversations,
   costLedgerEntries,
+  courseApprovalEvents,
   courseAttachments,
   courseCategories,
   courseChannels,
@@ -321,6 +322,13 @@ export function deleteOrganizationData(
       .run()
     tx.delete(courseJoinLinks)
       .where(eq(courseJoinLinks.organizationId, organizationId))
+      .run()
+    // COST-8 — a course's own approval history, the same "does not outlive
+    // the course, must not block the delete" carve-out `deletions.ts`'s own
+    // `emptyCourse` already gives it, one level up (a whole tenant here,
+    // rather than one course).
+    tx.delete(courseApprovalEvents)
+      .where(eq(courseApprovalEvents.organizationId, organizationId))
       .run()
     tx.delete(enrolments)
       .where(eq(enrolments.organizationId, organizationId))

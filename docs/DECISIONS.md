@@ -12566,3 +12566,57 @@ existing precedent for "destructive, but not `prompt()`-severe": both stop a cou
 deleting anything, and both are trivially reversible (approve again; enable again) — unlike ADMIN-5's own
 tenant deletion, which is irreversible and is the only other destructive control in this console, hence the
 only one severe enough to ask a typed name.
+
+## D-118 — `apps/api`/`apps/web`: ADMIN-6 — a hand-shaped `AdminCourseDetail` rather than reusing `CourseEditor`, three groups instead of five tabs, and metadata-only knowledge files
+
+**Problem.** ADMIN-6 needs a platform administrator to read one course's settings, read-only, grouped "the
+way the course editor groups them" (the brief's own words) — but `pages/CourseEditor.tsx` is a large,
+stateful form wired to `dispatchAction`, organization-scoped writes this console's own router
+(`routes/admin.ts`) deliberately never reaches (ADMIN-4's boundary, that file's own module comment). The
+brief explicitly rules out contorting `CourseEditor` into serving both an owner's editable view and an
+administrator's read-only one.
+
+**Choice.** `GET /admin/courses/:courseId` returns a new, hand-shaped `AdminCourseDetail` — narrower than
+`courses.getCourse`'s own row, the same "narrow by construction" discipline `AdminCourseSummary`
+(`courseApproval.CourseForApproval`, D-117) already holds this router to — and `pages/Admin.tsx` renders it
+directly in a new `CourseDetailView`, with a small `ReadOnlyField` helper (a `<dt>`/`<dd>` pair, never a
+disabled `<input>`) rather than a read-only mode threaded through any existing form component. Three groups,
+not `CourseEditor`'s five tabs: **General** (title, enabled, the two Discord role names, categories and their
+channels — flattened to names only, never scaffolded against a live server — self-enrolment, answering an
+unenrolled student, conversation scope), **AI** (model, prompt id, instructions, max requests per day) and
+**Knowledge** (attachments, web sources), matching the brief's own three-way split verbatim. Approve/Unapprove
+live in this screen's own header, reusing `Admin`'s existing two handlers (widened to take `{ courseId,
+courseTitle }` rather than the full `AdminCourseSummary`, so both `CoursesView`'s list rows and this detail
+screen can call them identically) — a decision made here refreshes this screen (`refreshCurrentCourseScreen`),
+not only the list an operator would otherwise have to navigate back to in order to see it land.
+
+**Knowledge files are metadata only** — `filename`, `sizeBytes`, `status`, and nothing else. Not
+`contentType`, not `providerFileId`, not `failureReason`: the brief's own text asks for "files … metadata
+only," and an administrator deciding an approval needs to know a course _has_ a file and whether it is
+grounding answers, not the provider's own bookkeeping or why an upload failed (the owning organization's own
+problem to fix, not this console's to read). A website is reduced to its `domain` alone, the one field
+`CourseWebSourceSummary` (the owner's own panel type) carries that means anything without a course id
+attached to it.
+
+**The organization is resolved the same way WEB-53's approve/unapprove routes already do** (D-117): a
+`courseApproval.listCoursesForApproval` scan, not a second unscoped "course id to organization id" repo
+function. That same row already carries the course's title, its project and organization names, and its
+full approval state, so `GET /courses/:courseId` reuses it rather than re-deriving any of the four — one
+extra read (`courses.getCourse`, for the settings the list read does not carry) beyond what `GET /courses`
+already pays.
+
+**Not chosen: a `readOnly` prop threaded through `CourseEditor`.** Rejected for the reason the brief states
+outright — `CourseEditor` is wired to `dispatchAction`, which needs an `organizationId` this console
+deliberately never has reason to trust a request for (it is cross-tenant by design, the same TEN-2 exception
+`listCoursesForApproval` already documents). Making it read-only would mean either passing a fake
+organization id that happens to work, or forking every one of its internal fetches — either one leaves dead
+editable affordances (inputs, a Save button, tab-switch guards for unsaved changes) behind a flag nobody
+asked for, exactly what the brief's own "do NOT contort" already rules out.
+
+**Limits.** `AdminCourseDetail` is a second, hand-maintained copy of a course's settings shape, alongside
+`CourseSummary`/`Course` (the owner's own panel type, `apps/web/src/api/types.ts`) and `courses.Course`
+(`packages/db`) — the same "mirrored by hand across a workspace boundary" trade this file's own module
+comment already accepts for every other admin-console type. A field added to a course that an administrator
+should also see when deciding an approval needs a deliberate edit here; nothing forces the two to stay in
+sync, the same risk `docs/DECISIONS.md`'s own entries for `AdminCourseSummary`/`CourseForApproval` already
+carry.

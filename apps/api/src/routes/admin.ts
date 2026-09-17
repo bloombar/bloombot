@@ -1,7 +1,7 @@
 /**
- * The platform-administrator console (ADMIN-4, ADMIN-5) — organizations,
- * their usage and their health, and the one operation that removes a
- * tenant's data entirely.
+ * The platform-administrator console (ADMIN-4, ADMIN-5, ADMIN-6) —
+ * organizations, their usage and their health, and the one operation that
+ * removes a tenant's data entirely.
  *
  * Mounted at `/admin`, not under `/organizations/:organizationId/...`: a
  * platform administrator is not "acting within" any one tenant
@@ -22,20 +22,24 @@
  * "never a self-granted role or a database flag").
  *
  * **ADMIN-4's own boundary, enforced by what this file does not import**:
- * nothing here reaches `transcriptAccess`, `conversations`, `messages` or
- * `people`. Since WEB-53, that boundary is narrower than "never a course" —
- * `GET /courses` (below) lists every course's own identity (its title, its
- * project, its organization, its owner's email) and its approval state,
+ * nothing here reaches `transcriptAccess`, `conversations`, `messages`,
+ * `people` or `courseJoinLinks`. Since WEB-53, that boundary is narrower
+ * than "never a course" — `GET /courses` lists every course's own identity
+ * (its title, its project, its organization, its owner's email) and its
+ * approval state, and, since ADMIN-6, `GET /courses/:courseId` (below)
+ * reads one course's own settings in full — general, AI and knowledge —
  * because deciding COST-8's approval is the one thing ADMIN-4 explicitly
  * admits this console to (the amended requirement, `docs/SPEC.md` §26: "the
  * one exception is ADMIN-6 … an administrator may read a course's settings
  * read-only — never its people, transcripts or join links"). A person, a
  * conversation, a message, a transcript or a join link stays out of reach
- * regardless. `tests/routes/admin.test.ts` proves this by attempting a
- * transcript read through this router and asserting it is refused, not
- * merely by asserting the absence of a route (a route that does not exist
- * today says nothing about one that might be added tomorrow without anyone
- * noticing it crossed this boundary).
+ * regardless — `GET /courses/:courseId`'s own response shape
+ * (`AdminCourseDetail`, below) has no field that could carry one.
+ * `tests/routes/admin.test.ts` proves this by attempting a transcript read
+ * through this router and asserting it is refused, not merely by asserting
+ * the absence of a route (a route that does not exist today says nothing
+ * about one that might be added tomorrow without anyone noticing it crossed
+ * this boundary).
  */
 
 import { Router } from 'express'
@@ -52,6 +56,7 @@ import {
   courseApproval,
   courseAttachments,
   courses,
+  courseWebSources,
   organizations,
   transcriptExports,
   type AttachmentStorage,
@@ -129,6 +134,77 @@ export type AdminCourseSummary = courseApproval.CourseForApproval
 
 export interface AdminCoursesResponse {
   courses: AdminCourseSummary[]
+}
+
+/**
+ * ADMIN-6 — a Discord category a course routes on, with its channels, as an
+ * administrator sees them: names only, the same "declaration, not a live
+ * Discord read" shape `courses.getCourse` already returns, reshaped by hand
+ * so this router's own boundary (its own module comment) stays visible from
+ * this file alone rather than depending on `courses.CourseCategoryWithChannels`
+ * never growing a field this response should not carry.
+ */
+export interface AdminCourseCategory {
+  name: string
+  channels: { name: string; adminsOnly: boolean }[]
+}
+
+/**
+ * ADMIN-6 — one of a course's knowledge files, metadata only: never
+ * `contentType`, `providerFileId` or `failureReason` — an administrator
+ * deciding an approval needs to know a course *has* a file, its name, its
+ * size and whether it is grounding answers yet, not the provider's own
+ * bookkeeping or why an upload failed, which is the owning organization's
+ * own concern to fix, not this console's to read.
+ */
+export interface AdminCourseAttachment {
+  filename: string
+  sizeBytes: number
+  status: 'pending' | 'ready' | 'failed'
+}
+
+/** ADMIN-6 — one of a course's websites: the domain it is grounded in, nothing else. */
+export interface AdminCourseWebSource {
+  domain: string
+}
+
+/**
+ * ADMIN-6's own read: one course's settings, exactly as its owner would see
+ * them in `pages/CourseEditor.tsx` — general, AI and knowledge — with
+ * nothing this router does not already allow through its own boundary
+ * (this file's own module comment). Never a person, an enrolment, a
+ * conversation, a message, a transcript or a join link — there is nothing
+ * in this shape that could carry one, the same "narrow by construction"
+ * discipline `AdminCourseAttachment` above already holds itself to.
+ */
+export interface AdminCourseDetail {
+  courseId: string
+  courseTitle: string
+  enabled: boolean
+  projectId: string
+  projectName: string
+  organizationId: string
+  organizationName: string
+  adminsRole: string | null
+  studentsRole: string | null
+  categories: AdminCourseCategory[]
+  conversationScope: courses.Course['conversationScope']
+  model: string | null
+  promptId: string | null
+  instructions: string | null
+  maxRequestsPerDay: number | null
+  selfEnrolFromDiscord: boolean
+  answerUnenrolled: boolean
+  attachments: AdminCourseAttachment[]
+  webSources: AdminCourseWebSource[]
+  // COST-8's own approval state, the same fields `AdminCourseSummary`
+  // already carries — repeated here rather than nested, so this response
+  // does not ask a caller that only wants one course to also parse the
+  // list's own row shape.
+  aiApprovedAt: number | null
+  aiApprovedByAccountId: string | null
+  aiApprovedByEmail: string | null
+  aiApprovalDecidedAt: number | null
 }
 
 // ADMIN-5's own race — `AdminRouterDependencies.deletedTenantSweepDelayMs`'s
@@ -225,6 +301,103 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
 
     const body: AdminCoursesResponse = {
       courses: courseApproval.listCoursesForApproval(deps.db),
+    }
+    res.status(200).json(body)
+  })
+
+  /**
+   * ADMIN-6: one course's settings, read-only — general, AI and knowledge,
+   * exactly as its owner would see them in `pages/CourseEditor.tsx`, never
+   * its people, enrolments, conversations, messages, transcripts or join
+   * links (this file's own module comment on the boundary WEB-53 already
+   * narrowed once, and stays exactly that narrow here).
+   *
+   * The organization a course belongs to is resolved the same way
+   * `approve`/`unapprove` below already do — a `listCoursesForApproval`
+   * scan rather than a second, unscoped "find a course's own organization
+   * by id alone" repo function (`docs/DECISIONS.md` D-117 already accepts
+   * this trade for the identical reason) — and that same row supplies the
+   * course's title, its project and organization names, and its approval
+   * state, so this route pays for exactly one more read
+   * (`courses.getCourse`, for the settings `listCoursesForApproval` does
+   * not carry) rather than re-deriving what `found` already has.
+   */
+  router.get<{ courseId: string }>('/courses/:courseId', (req, res) => {
+    if (!req.session) {
+      res.status(401).json({ error: 'not_signed_in' })
+      return
+    }
+    if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+      res.status(403).json({ error: 'not_platform_administrator' })
+      return
+    }
+
+    const found = courseApproval
+      .listCoursesForApproval(deps.db)
+      .find((course) => course.courseId === req.params.courseId)
+    if (!found) {
+      res.status(404).json({ error: 'course_not_found' })
+      return
+    }
+
+    const course = courses.getCourse(
+      found.organizationId,
+      req.params.courseId,
+      deps.db
+    )
+    if (!course) {
+      // Unreachable in practice — `found` was just read, above, from the
+      // same database — but guarded rather than assumed, the same TEN-2
+      // race every other route in this router already guards against.
+      res.status(404).json({ error: 'course_not_found' })
+      return
+    }
+
+    const attachments = courseAttachments.listAttachmentsForCourse(
+      found.organizationId,
+      req.params.courseId,
+      deps.db
+    )
+    const webSources = courseWebSources.listWebSourcesForCourse(
+      found.organizationId,
+      req.params.courseId,
+      deps.db
+    )
+
+    const body: AdminCourseDetail = {
+      courseId: course.id,
+      courseTitle: course.title,
+      enabled: course.enabled,
+      projectId: course.projectId,
+      projectName: found.projectName,
+      organizationId: found.organizationId,
+      organizationName: found.organizationName,
+      adminsRole: course.adminsRole,
+      studentsRole: course.studentsRole,
+      categories: course.categories.map((category) => ({
+        name: category.name,
+        channels: category.channels.map((channel) => ({
+          name: channel.name,
+          adminsOnly: channel.adminsOnly,
+        })),
+      })),
+      conversationScope: course.conversationScope,
+      model: course.model,
+      promptId: course.promptId,
+      instructions: course.instructions,
+      maxRequestsPerDay: course.maxRequestsPerDay,
+      selfEnrolFromDiscord: course.selfEnrolFromDiscord,
+      answerUnenrolled: course.answerUnenrolled,
+      attachments: attachments.map((attachment) => ({
+        filename: attachment.filename,
+        sizeBytes: attachment.sizeBytes,
+        status: attachment.status,
+      })),
+      webSources: webSources.map((webSource) => ({ domain: webSource.domain })),
+      aiApprovedAt: found.aiApprovedAt,
+      aiApprovedByAccountId: found.aiApprovedByAccountId,
+      aiApprovedByEmail: found.aiApprovedByEmail,
+      aiApprovalDecidedAt: found.aiApprovalDecidedAt,
     }
     res.status(200).json(body)
   })

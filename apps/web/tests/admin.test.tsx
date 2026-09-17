@@ -49,6 +49,7 @@ const {
   fetchTenantDeletions,
   deleteTenant,
   fetchAdminCourses,
+  fetchAdminCourse,
   approveAdminCourse,
   unapproveAdminCourse,
 } = vi.hoisted(() => ({
@@ -57,6 +58,7 @@ const {
   fetchTenantDeletions: vi.fn(),
   deleteTenant: vi.fn(),
   fetchAdminCourses: vi.fn(),
+  fetchAdminCourse: vi.fn(),
   approveAdminCourse: vi.fn(),
   unapproveAdminCourse: vi.fn(),
 }))
@@ -72,6 +74,7 @@ vi.mock('../src/api/client.js', async () => {
     fetchTenantDeletions,
     deleteTenant,
     fetchAdminCourses,
+    fetchAdminCourse,
     approveAdminCourse,
     unapproveAdminCourse,
   }
@@ -575,5 +578,147 @@ describe('Admin — WEB-53’s Courses screen', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
 
     expect(unapproveAdminCourse).not.toHaveBeenCalled()
+  })
+
+  // ADMIN-6 — a row's own title is a link into `'admin-course'`.
+  it('a row’s title navigates to its own admin-course screen', async () => {
+    fetchAdminCourses.mockResolvedValue({ courses: [PENDING_COURSE] })
+    fetchAdminCourse.mockResolvedValue({
+      ...PENDING_COURSE,
+      projectId: 'proj-1',
+      adminsRole: null,
+      studentsRole: null,
+      categories: [],
+      conversationScope: 'course',
+      model: null,
+      promptId: null,
+      instructions: null,
+      maxRequestsPerDay: null,
+      selfEnrolFromDiscord: false,
+      answerUnenrolled: true,
+      attachments: [],
+      webSources: [],
+      aiApprovalDecidedAt: null,
+    })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Web Design' }))
+
+    await waitFor(() =>
+      expect(fetchAdminCourse).toHaveBeenCalledWith('course-1')
+    )
+  })
+})
+
+describe('Admin — ADMIN-6’s read-only course settings screen', () => {
+  const COURSE_DETAIL = {
+    courseId: 'course-1',
+    courseTitle: 'Web Design',
+    enabled: true,
+    projectId: 'proj-1',
+    projectName: 'Fall 2026',
+    organizationId: 'org-1',
+    organizationName: 'A Real Tenant',
+    adminsRole: 'admins-wd',
+    studentsRole: 'students-wd',
+    categories: [
+      {
+        name: 'Web Design',
+        channels: [{ name: 'general', adminsOnly: false }],
+      },
+    ],
+    conversationScope: 'course',
+    model: 'gpt-5',
+    promptId: null,
+    instructions: 'Answer only from the syllabus.',
+    maxRequestsPerDay: 20,
+    selfEnrolFromDiscord: true,
+    answerUnenrolled: false,
+    attachments: [
+      { filename: 'syllabus.pdf', sizeBytes: 4096, status: 'ready' as const },
+    ],
+    webSources: [{ domain: 'example.edu' }],
+    aiApprovedAt: null,
+    aiApprovedByAccountId: null,
+    aiApprovedByEmail: null,
+    aiApprovalDecidedAt: null,
+  }
+
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+  })
+
+  it('renders each settings group, read-only — nothing a person can type into', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+
+    expect(
+      await screen.findByRole('region', { name: 'General' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'AI' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: 'Knowledge' })
+    ).toBeInTheDocument()
+
+    // General
+    expect(screen.getByText('admins-wd')).toBeInTheDocument()
+    expect(screen.getByText('students-wd')).toBeInTheDocument()
+    // AI
+    expect(screen.getByText('gpt-5')).toBeInTheDocument()
+    expect(
+      screen.getByText('Answer only from the syllabus.')
+    ).toBeInTheDocument()
+    // Knowledge
+    expect(screen.getByText(/syllabus\.pdf/)).toBeInTheDocument()
+    expect(screen.getByText('example.edu')).toBeInTheDocument()
+
+    // Nothing editable — no inputs, no selects, no Save.
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /save/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('back returns to the Courses list', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+    fetchAdminCourses.mockResolvedValue({ courses: [] })
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+    await screen.findByRole('region', { name: 'General' })
+
+    fireEvent.click(screen.getByRole('button', { name: '← Courses' }))
+
+    await waitFor(() => expect(fetchAdminCourses).toHaveBeenCalled())
+  })
+
+  it('a course id absent from the API (404) renders not-found', async () => {
+    fetchAdminCourse.mockRejectedValue(
+      new ApiError(404, { error: 'course_not_found' })
+    )
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'missing' } })
+
+    expect(await screen.findByText(/not found/i)).toBeInTheDocument()
+  })
+
+  it('approves from this screen and refreshes it, not only the list', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+    approveAdminCourse.mockResolvedValue({ approved: true })
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+
+    await waitFor(() =>
+      expect(approveAdminCourse).toHaveBeenCalledWith('course-1')
+    )
+    // Refreshed the detail screen itself, not the list — the list was
+    // never fetched by this test at all.
+    await waitFor(() => expect(fetchAdminCourse).toHaveBeenCalledTimes(2))
+    expect(fetchAdminCourses).not.toHaveBeenCalled()
   })
 })

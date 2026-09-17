@@ -4325,6 +4325,24 @@
   phase: 35
   status: In progress
   review: false
+- id: ROST-18
+  title: A roster's first and last name are authoritative for a student already on
+    file
+  full: "ROST-10 merges a roster's fields onto a person without overwriting
+    anything already there, so a student who signed in with Google, joined by
+    link or was imported before keeps whatever name was recorded first, even
+    when the instructor's roster says otherwise. A name is the one field an
+    instructor is better placed to state than any surface: when a roster row
+    matches a person who already existed before the import, a non-empty first
+    name or last name in the row replaces the person's own. An empty cell
+    changes nothing and never clears a name. Email and GitHub handle keep
+    ROST-10's fill-only rule, and a later Google sign-in (AUTH-7) only fills a
+    name that is still empty, so it never undoes the…"
+  section: §40 Knowing Who Is Enrolled
+  family: ROST
+  phase: 35
+  status: In progress
+  review: false
 - id: WEB-52
   title: A course's People list shows who each person is, not an id
   full: "Each row in a course's People tab — active and ended alike — shows every

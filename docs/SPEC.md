@@ -3163,3 +3163,14 @@ time. The details are laid out compactly, so a row stays a row rather than a car
 labelled and legible at a glance. The person's internal id is shown only when none of the name,
 email or Discord name is known. The row's link to the person's transcript (WEB-36) stays on
 whatever identifies them first.
+
+#### ROST-18 A roster's first and last name are authoritative for a student already on file
+
+ROST-10 merges a roster's fields onto a person without overwriting anything already there, so a
+student who signed in with Google, joined by link or was imported before keeps whatever name was
+recorded first, even when the instructor's roster says otherwise. A name is the one field an
+instructor is better placed to state than any surface: when a roster row matches a person who
+already existed before the import, a non-empty first name or last name in the row replaces the
+person's own. An empty cell changes nothing and never clears a name. Email and GitHub handle keep
+ROST-10's fill-only rule, and a later Google sign-in (AUTH-7) only fills a name that is still empty,
+so it never undoes the roster's.

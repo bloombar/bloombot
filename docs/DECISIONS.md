@@ -12423,3 +12423,79 @@ one, never about an absent cell clearing a name nobody asked to clear. A brand-n
 there is nothing yet for `overwriteRosterFields` to overwrite, so using it there would only add a second way
 to write the identical result. `mergeRosterFields` itself is unchanged; only `roster-import.ts`'s own choice
 of which function to call for which field on a returning person changed.
+
+## D-116 — `packages/db`/`packages/core`/`packages/actions`: COST-8 — "an administrator's course", lazy auto-approval, the audit table, and where the predicate is injected
+
+**"An administrator's course" is defined by two facts, checked independently, never by a stored creator
+column.** COST-8's own text gives two ways in: "created by a platform administrator" or "in an organization an
+administrator owns". Courses carry no `createdByAccountId` — the brief was explicit that none should be
+added — so the first half is only ever checked *at creation time*, from the actor `dispatch.ts` already
+threads through (`courses.save`/`courses.import`'s own policy `execute`), and is never re-derivable for an
+existing course afterward. The second half — an organization with a non-disabled `owner` membership whose
+email an administrator predicate accepts — is a live, re-checkable fact about the organization, and is what
+both creation-time approval *and* the lazy path (below) actually key on. A course created by a
+non-administrator actor in a *then* non-administrator-owned organization that later gains an administrator
+owner (a membership grant, an ownership transfer) becomes eligible for the lazy path the moment that
+happens — this is deliberate, not a gap: the organization is administrator-owned *now*, and COST-8 asks
+"is this an administrator's course", not "was it created by one".
+
+**Lazy auto-approval, keyed on `courses.aiApprovalDecidedAt`, not a startup migration job.** COST-8 requires
+every course that existed before this shipped — every one of them starts with all three approval columns
+`null` — to be swept into the same "administrator-owned courses answer automatically" rule, with "no startup
+job" as an explicit constraint. Walking every course at boot is exactly such a job, and it does the wrong
+thing to a course a platform administrator *revoked*: a revoke also leaves `aiApprovedAt` `null`, and a sweep
+that only looks at that column cannot tell "never decided" from "decided against". `aiApprovalDecidedAt` is
+the column that answers this: cleared to `null` only by a migration (never by `revokeCourseApproval`, which
+always sets it), so "decided at least once" is a permanent fact about a course from the moment any human or
+the automatic rule first touches its approval. `answerQuestion`'s own gate checks it, in order: an approved
+course answers; an unapproved, *undecided*, administrator-owned course is approved on the spot (one write,
+on the very question that would otherwise be refused) and answers; every other unapproved course is refused.
+No course is ever auto-approved a second time once it has a decision on record, revoked or granted.
+
+**`course_approval_events` is a full audit table, separate from the three columns on `courses`, following
+`course_instruction_revisions`' own "current value on the row, history in its own table" split (that table's
+own module comment).** `courses.aiApprovedAt`/`aiApprovedByAccountId`/`aiApprovalDecidedAt` answer "is this
+course approved, and by whom, right now" in one row read — what `answerQuestion`'s own gate needs on every
+question — but they cannot answer "was this course ever revoked, and when" once a later approval overwrites
+them. The events table is append-only (this slice adds no update or delete on it) and is deleted, not
+preserved, when the course or the tenant it belongs to is deleted (`deletions.ts`/`organizations.ts`'s own
+`course_approval_events` cleanup, ordered — like every other course-scoped table — before the `courses`/
+`organizations` row itself) — it is a fact about the course's own history, not a fact about money already
+spent independent of it, so it does not get `cost_ledger_entries`' nullable-FK "survives the course" treatment
+(D-115's own carve-out is for spending specifically, not for every table that happens to reference a course).
+
+**The administrator-email predicate is injected as a function argument at every layer, never imported.**
+`@bloombot/auth`'s `isPlatformAdministrator` reads `ADMIN_EMAILS` from the environment live; `packages/db`
+holds no dependency on `@bloombot/auth` or any env-reading package at all (`schema.ts`'s own module comment:
+"held to the portable subset... SQLite-only idioms belong in migrations, never here" is the same discipline,
+applied to configuration rather than SQL dialect), and `packages/core`/`packages/actions` hold the identical
+"dependencies as arguments" discipline `answer.ts`'s own module comment already states for `model`/
+`admission`/`pricing` (CORE-4, D-29). Three call sites, three shapes, chosen by checking each package's own
+`package.json` dependencies rather than picking one shape and forcing it everywhere:
+- `packages/db#courseApproval.isAdministratorOwnedOrganization(organizationId, isAdminEmail, db)` takes the
+  predicate as a plain parameter — the lowest-level shape, with no notion of "current call" to attach a
+  dependency to.
+- `packages/core#answerQuestion`'s `AnswerDependencies.isPlatformAdministratorEmail` is an optional dependency
+  field, defaulting to `NO_ADMINISTRATOR` (`() => false`) when omitted — the same "expose the seam, default to
+  the safe choice" shape `NO_ADMISSION_LIMIT`/`NO_PRICING_CONFIGURED`/`NO_ADDRESS` already take in that file,
+  so a caller that forgets to wire it simply never gets free lazy approval rather than silently answering an
+  unapproved course.
+- `packages/actions`' `dispatch.ts#DispatchContext.isPlatformAdministratorEmail` is threaded the identical way
+  `accountId` already is, through to `ExecuteContext` — read only by `courses.save`/`courses.import`'s own
+  `execute` (via the shared `courses.ts#approveIfAdministratorOwned` helper, exported for
+  `course-portability.ts#importCourseAction` to reuse rather than duplicate), so this package's `saveCourseAction`/
+  `importCourseAction` stay plain exported objects (not the factory-function shape `course-join-links.ts`/
+  `course-attachments.ts` use for a *credential* dependency) — every other action, and every existing caller
+  of `dispatch`, is unaffected by the new field's existence.
+
+Every real deployment builds the actual predicate once (`apps/api/src/index.ts`, `apps/bot/src/index.ts`) and
+threads it down through the same "read `CONFIG`/the environment once in `main()`" discipline `admission`/
+`pricing` already follow — `apps/mcp` does not: `chat.ask` never creates a course, only answers in one, so it
+only needs `courseNotApprovedNotice`'s own `supportContact`, never the administrator predicate.
+
+**`courseNotApprovedNotice` (`@bloombot/core`) is the one wording function shared by all three surfaces**,
+unlike every other `AnswerResult` kind, whose text stays local to each surface's own module (`answer.ts`'s own
+module comment: "the calling surface's job"). SURF-10's own text requires the *same* sentence, naming the
+*same* configured contact, on the web, in Discord and through MCP alike — a requirement about the wording
+itself, not merely about the kind being handled somewhere — so this is the one refusal kind where a shared
+function, not three independent copies, is what keeps the requirement true as the wording is edited later.

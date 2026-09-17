@@ -12527,3 +12527,42 @@ module comment: "the calling surface's job"). SURF-10's own text requires the *s
 *same* configured contact, on the web, in Discord and through MCP alike — a requirement about the wording
 itself, not merely about the kind being handled somewhere — so this is the one refusal kind where a shared
 function, not three independent copies, is what keeps the requirement true as the wording is edited later.
+
+## D-117 — `apps/api`/`apps/web`/`packages/db`: WEB-53 — resolving a course id to its organization by reusing `listCoursesForApproval`, the approver's own email added to `CourseForApproval`, and Unapprove as a plain `confirm()`
+
+**`routes/admin.ts`'s own `approve`/`unapprove` routes take only `:courseId`, not `:organizationId`** — WEB-53's
+own brief names the address that way, and every other route WEB-53 added (`GET /courses`) is deliberately
+cross-organization by the same TEN-2 exception `courseApproval.listCoursesForApproval` already documents. But
+`courseApproval.approveCourse`/`revokeCourseApproval` are both scoped by `organizationId` (TEN-2/TEN-5, their
+own doc comments), so the route needs one before it can call either. Rather than add a second, unscoped
+"find a course's own organization by id alone" repo function purely for this lookup, both routes call
+`listCoursesForApproval` again and find the matching row — the same read `GET /courses` already performs, so
+no new query shape enters `course-approval.ts` at all. This is an `O(courses)` scan on every approve/unapprove
+call rather than an indexed point lookup; accepted deliberately, the same trade the file's own module comment
+already accepts for `listCoursesForApproval` itself — a platform-administrator console, not a per-request path
+any other surface touches, where course counts are small enough that this is not a real cost.
+
+**`CourseForApproval` gained two fields it did not have before this slice**: `aiApprovedByAccountId` and
+`aiApprovedByEmail`. WEB-53's own text requires "the approver and approval time" for an approved course, and
+the interface as COST-8 left it carried only `aiApprovedAt` — enough to know *that* a course was approved,
+nothing about *who*. Extending it (rather than adding a second read) keeps `GET /courses` at one round trip per
+page, the same reasoning that interface's own doc comment already gives for carrying `ownerEmails` inline
+instead of a second per-course fetch. The email lookup batches by id (`inArray`), the identical "one extra
+query over the small set actually referenced, not one per row" shape the existing owner-email lookup right next
+to it already uses. `aiApprovedByEmail` is `null` under the same two conditions `aiApprovedByAccountId` already
+was: a pending course, and one approved by `'auto-approve'` (this file's own module comment — no human
+decision-maker to name).
+
+**`listApprovalEventsForCourse` was added to `course-approval.ts`**, alongside the two routes and the fields
+above, so this slice's own route tests could prove "recorded with who acted and when" by reading the audit
+trail back rather than only inferring it from the course row's own three columns — the same shape
+`transcript-access.ts#listAccessLogForCourse` already gives ADMIN-2's own audit trail. Not named in the brief
+directly, but the brief's own verification list asks for proof that approve/unapprove "writes an audit event",
+and there was no existing way to read one back for a single course without this.
+
+**Unapprove is `confirm()`, not `prompt()`** — the brief's own words ("it needs no typed-name prompt"),
+mirrored here against `components/CourseRows.tsx`'s own disable-a-course confirmation, which is the closest
+existing precedent for "destructive, but not `prompt()`-severe": both stop a course from answering rather than
+deleting anything, and both are trivially reversible (approve again; enable again) — unlike ADMIN-5's own
+tenant deletion, which is irreversible and is the only other destructive control in this console, hence the
+only one severe enough to ask a typed name.

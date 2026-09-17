@@ -58,6 +58,7 @@ import {
   courses,
   courseWebSources,
   organizations,
+  projects,
   transcriptExports,
   type AttachmentStorage,
   type Database,
@@ -312,15 +313,20 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
    * links (this file's own module comment on the boundary WEB-53 already
    * narrowed once, and stays exactly that narrow here).
    *
-   * The organization a course belongs to is resolved the same way
-   * `approve`/`unapprove` below already do — a `listCoursesForApproval`
-   * scan rather than a second, unscoped "find a course's own organization
-   * by id alone" repo function (`docs/DECISIONS.md` D-117 already accepts
-   * this trade for the identical reason) — and that same row supplies the
-   * course's title, its project and organization names, and its approval
-   * state, so this route pays for exactly one more read
-   * (`courses.getCourse`, for the settings `listCoursesForApproval` does
-   * not carry) rather than re-deriving what `found` already has.
+   * **Must-fix, second review round**: the organization a course belongs to
+   * is resolved through `courseApproval.findCourseOrganizationId` — a
+   * scoped, indexed point lookup on `courses.id`, that function's own doc
+   * comment — not the `listCoursesForApproval` scan `approve`/`unapprove`
+   * below use (D-117's own trade, accepted there for a rare, deliberate
+   * button click, not for an interactive page load, which this route is).
+   * The course's title, its enabled state, its settings and its own
+   * approval columns all come from `courses.getCourse` directly — COST-8's
+   * three approval columns live on `courses` itself (`schema.ts`), so
+   * nothing here needs `listCoursesForApproval`'s own join to read them
+   * back. Only the organization's and project's own *names*, and the
+   * approving account's own *email*, need anything beyond that single
+   * scoped read — three more indexed point lookups, each by primary key,
+   * still far cheaper than the full scan this route no longer pays for.
    */
   router.get<{ courseId: string }>('/courses/:courseId', (req, res) => {
     if (!req.session) {
@@ -332,34 +338,67 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       return
     }
 
-    const found = courseApproval
-      .listCoursesForApproval(deps.db)
-      .find((course) => course.courseId === req.params.courseId)
-    if (!found) {
+    const organizationId = courseApproval.findCourseOrganizationId(
+      req.params.courseId,
+      deps.db
+    )
+    if (!organizationId) {
       res.status(404).json({ error: 'course_not_found' })
       return
     }
 
     const course = courses.getCourse(
-      found.organizationId,
+      organizationId,
       req.params.courseId,
       deps.db
     )
     if (!course) {
-      // Unreachable in practice — `found` was just read, above, from the
-      // same database — but guarded rather than assumed, the same TEN-2
-      // race every other route in this router already guards against.
+      // Unreachable in practice — `organizationId` was just resolved,
+      // above, from the same database — but guarded rather than assumed,
+      // the same TEN-2 race every other route in this router already
+      // guards against.
       res.status(404).json({ error: 'course_not_found' })
       return
     }
 
+    // Unreachable in practice, guarded the same way: `organizationId` and
+    // `course.projectId` were each just resolved from rows that name them
+    // as a foreign key (`courses.organizationId`/`courses.projectId`,
+    // `schema.ts`), so the organization and the project they name cannot
+    // fail to exist without a foreign-key violation nothing in this
+    // codebase currently permits.
+    const organization = organizations.getOrganizationById(
+      organizationId,
+      deps.db
+    )
+    const project = projects.getProject(
+      organizationId,
+      course.projectId,
+      deps.db
+    )
+    if (!organization || !project) {
+      res.status(404).json({ error: 'course_not_found' })
+      return
+    }
+
+    // The approver's own email — `null` for a pending course and for one
+    // approved by `'auto-approve'` (`course-approval.ts`'s own module
+    // comment: no human decision-maker to name), the same two conditions
+    // `courseApproval.listCoursesForApproval`'s own `aiApprovedByEmail`
+    // already documents.
+    const aiApprovedByEmail =
+      course.aiApprovedByAccountId === null
+        ? null
+        : (accounts.getAccountById(course.aiApprovedByAccountId, deps.db)
+            ?.email ?? null)
+
     const attachments = courseAttachments.listAttachmentsForCourse(
-      found.organizationId,
+      organizationId,
       req.params.courseId,
       deps.db
     )
     const webSources = courseWebSources.listWebSourcesForCourse(
-      found.organizationId,
+      organizationId,
       req.params.courseId,
       deps.db
     )
@@ -369,9 +408,9 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       courseTitle: course.title,
       enabled: course.enabled,
       projectId: course.projectId,
-      projectName: found.projectName,
-      organizationId: found.organizationId,
-      organizationName: found.organizationName,
+      projectName: project.name,
+      organizationId,
+      organizationName: organization.name,
       adminsRole: course.adminsRole,
       studentsRole: course.studentsRole,
       categories: course.categories.map((category) => ({
@@ -394,10 +433,10 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         status: attachment.status,
       })),
       webSources: webSources.map((webSource) => ({ domain: webSource.domain })),
-      aiApprovedAt: found.aiApprovedAt,
-      aiApprovedByAccountId: found.aiApprovedByAccountId,
-      aiApprovedByEmail: found.aiApprovedByEmail,
-      aiApprovalDecidedAt: found.aiApprovalDecidedAt,
+      aiApprovedAt: course.aiApprovedAt,
+      aiApprovedByAccountId: course.aiApprovedByAccountId,
+      aiApprovedByEmail,
+      aiApprovalDecidedAt: course.aiApprovalDecidedAt,
     }
     res.status(200).json(body)
   })
@@ -409,6 +448,14 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
    * `action` is always `'approve'` here: `'auto-approve'` is
    * `answerQuestion`'s and `courses.save`/`courses.import`'s own
    * automatic path (COST-8), never something a request body can select.
+   *
+   * `approveCourse` is scoped by `organizationId` (TEN-2/TEN-5, that
+   * function's own doc comment) — resolved here through
+   * `courseApproval.findCourseOrganizationId`, the same scoped, indexed
+   * lookup `GET /courses/:courseId` above uses, not the
+   * `listCoursesForApproval` scan this route used before the second review
+   * round (`docs/DECISIONS.md` D-118's update) — nothing here needs
+   * anything else that scan computes.
    */
   router.post<{ courseId: string }>(
     '/courses/:courseId/approve',
@@ -422,20 +469,17 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         return
       }
 
-      // `approveCourse` is scoped by `organizationId` (TEN-2/TEN-5, that
-      // function's own doc comment) — resolved here from the same
-      // cross-organization read `GET /courses` above already uses, rather
-      // than adding a second, unscoped repo lookup by course id alone.
-      const found = courseApproval
-        .listCoursesForApproval(deps.db)
-        .find((course) => course.courseId === req.params.courseId)
-      if (!found) {
+      const organizationId = courseApproval.findCourseOrganizationId(
+        req.params.courseId,
+        deps.db
+      )
+      if (!organizationId) {
         res.status(404).json({ error: 'course_not_found' })
         return
       }
 
       const updated = courseApproval.approveCourse(
-        found.organizationId,
+        organizationId,
         req.params.courseId,
         req.session.accountId,
         'approve',
@@ -443,9 +487,9 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         deps.db
       )
       if (!updated) {
-        // Unreachable in practice — `found` was just read, above — but
-        // guarded rather than assumed, the same TEN-2 race this router's
-        // delete route already guards against.
+        // Unreachable in practice — `organizationId` was just resolved,
+        // above — but guarded rather than assumed, the same TEN-2 race
+        // this router's delete route already guards against.
         res.status(404).json({ error: 'course_not_found' })
         return
       }
@@ -477,6 +521,16 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
    * *decided* pending (a prior revoke) is a true no-op; a never-decided
    * pending course still calls `revokeCourseApproval` so the decision is
    * actually recorded.
+   *
+   * **Second review round**: resolves the organization through
+   * `courseApproval.findCourseOrganizationId`, the same scoped lookup
+   * `approve` (above) and `GET /courses/:courseId` now use, rather than the
+   * `listCoursesForApproval` scan (`docs/DECISIONS.md` D-118's update).
+   * That scan used to also supply `aiApprovedAt`/`aiApprovalDecidedAt` for
+   * the idempotence check just below — read here instead from
+   * `courses.getCourse`, since both columns live on `courses` itself
+   * (`schema.ts`); still two scoped, indexed reads total, not one full
+   * cross-organization join.
    */
   router.post<{ courseId: string }>(
     '/courses/:courseId/unapprove',
@@ -490,25 +544,38 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         return
       }
 
-      const found = courseApproval
-        .listCoursesForApproval(deps.db)
-        .find((course) => course.courseId === req.params.courseId)
-      if (!found) {
+      const organizationId = courseApproval.findCourseOrganizationId(
+        req.params.courseId,
+        deps.db
+      )
+      if (!organizationId) {
+        res.status(404).json({ error: 'course_not_found' })
+        return
+      }
+      const course = courses.getCourse(
+        organizationId,
+        req.params.courseId,
+        deps.db
+      )
+      if (!course) {
+        // Unreachable in practice — `organizationId` was just resolved,
+        // above — but guarded rather than assumed, the same TEN-2 race
+        // every other route in this router already guards against.
         res.status(404).json({ error: 'course_not_found' })
         return
       }
 
       // Already decided pending — a genuine no-op, not an error (this
-      // route's own doc comment above). Not `found.aiApprovedAt === null`
+      // route's own doc comment above). Not `course.aiApprovedAt === null`
       // alone: see that comment for why a never-decided course must still
       // fall through to `revokeCourseApproval` below.
-      if (found.aiApprovedAt === null && found.aiApprovalDecidedAt !== null) {
+      if (course.aiApprovedAt === null && course.aiApprovalDecidedAt !== null) {
         res.status(200).json({ approved: false })
         return
       }
 
       const updated = courseApproval.revokeCourseApproval(
-        found.organizationId,
+        organizationId,
         req.params.courseId,
         req.session.accountId,
         Date.now(),

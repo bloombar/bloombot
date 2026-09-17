@@ -24,7 +24,7 @@ import { ApiError } from '../src/api/client.js'
 import { Admin } from '../src/pages/Admin.js'
 import type { AdminRoute, Route } from '../src/routing/route.js'
 import { isAdminRoute } from '../src/routing/route.js'
-import { renderWithModal } from './helpers/render-with-modal.js'
+import { renderWithModal, withModal } from './helpers/render-with-modal.js'
 
 /** Mirrors `tests/shell.test.tsx`'s own `renderShell` — defaults to `'admin-organizations'`, the console's own landing screen once `'platform-admin'` itself resolves and replaces (`Admin.tsx`'s own module comment). */
 function renderAdmin({
@@ -720,5 +720,120 @@ describe('Admin — ADMIN-6’s read-only course settings screen', () => {
     // never fetched by this test at all.
     await waitFor(() => expect(fetchAdminCourse).toHaveBeenCalledTimes(2))
     expect(fetchAdminCourses).not.toHaveBeenCalled()
+  })
+
+  // Must-fix, second review round: `currentCourseIdRef`'s own doc comment
+  // in `Admin.tsx` has the full scenario — course A's read is slow, an
+  // operator moves on to course B (fast), and A's response then lands
+  // after B's already has. Controls `route` directly across two renders
+  // (`rerender`, not `renderAdmin`'s own click-driven navigation) so A's
+  // own fetch can be left deliberately unresolved while B's already has —
+  // the failure this guards against is a *timing* one, not reachable by
+  // driving the UI at whatever speed a click resolves at.
+  it('a slow response for a previous course does not overwrite the one now on screen', async () => {
+    const courseA = {
+      ...COURSE_DETAIL,
+      courseId: 'course-a',
+      courseTitle: 'Course A',
+    }
+    const courseB = {
+      ...COURSE_DETAIL,
+      courseId: 'course-b',
+      courseTitle: 'Course B',
+    }
+    let resolveA: ((value: typeof courseA) => void) | undefined
+    fetchAdminCourse.mockImplementation((courseId: string) => {
+      if (courseId === 'course-a') {
+        return new Promise((resolve) => {
+          resolveA = resolve
+        })
+      }
+      if (courseId === 'course-b') return Promise.resolve(courseB)
+      throw new Error(`unexpected courseId ${courseId}`)
+    })
+
+    const navigate = vi.fn()
+    const { rerender } = renderWithModal(
+      <Admin
+        route={{ kind: 'admin-course', courseId: 'course-a' }}
+        navigate={navigate}
+        onBack={vi.fn()}
+      />
+    )
+    await waitFor(() =>
+      expect(fetchAdminCourse).toHaveBeenCalledWith('course-a')
+    )
+
+    // Course B's own address becomes current before A's response has
+    // landed — A's own fetch (`resolveA`) is still unsettled here.
+    rerender(
+      withModal(
+        <Admin
+          route={{ kind: 'admin-course', courseId: 'course-b' }}
+          navigate={navigate}
+          onBack={vi.fn()}
+        />
+      )
+    )
+    await screen.findByText('Course B')
+
+    // A's late response arrives now — must be ignored, not overwrite B.
+    resolveA?.(courseA)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByText('Course B')).toBeInTheDocument()
+    expect(screen.queryByText('Course A')).not.toBeInTheDocument()
+  })
+
+  // The mirrored direction — a stale *404* for the previous course must not
+  // mark the current one not-found, and must not leave the current one
+  // stuck on a skeleton either (nothing re-fires the effect once its own
+  // address is already current).
+  it('a stale 404 for a previous course does not mark the current one not-found', async () => {
+    const courseB = {
+      ...COURSE_DETAIL,
+      courseId: 'course-b',
+      courseTitle: 'Course B',
+    }
+    let rejectA: ((reason: unknown) => void) | undefined
+    fetchAdminCourse.mockImplementation((courseId: string) => {
+      if (courseId === 'course-a') {
+        return new Promise((_resolve, reject) => {
+          rejectA = reject
+        })
+      }
+      if (courseId === 'course-b') return Promise.resolve(courseB)
+      throw new Error(`unexpected courseId ${courseId}`)
+    })
+
+    const navigate = vi.fn()
+    const { rerender } = renderWithModal(
+      <Admin
+        route={{ kind: 'admin-course', courseId: 'course-a' }}
+        navigate={navigate}
+        onBack={vi.fn()}
+      />
+    )
+    await waitFor(() =>
+      expect(fetchAdminCourse).toHaveBeenCalledWith('course-a')
+    )
+
+    rerender(
+      withModal(
+        <Admin
+          route={{ kind: 'admin-course', courseId: 'course-b' }}
+          navigate={navigate}
+          onBack={vi.fn()}
+        />
+      )
+    )
+    await screen.findByText('Course B')
+
+    // A's stale 404 lands now — must be ignored, not render NotFound over B.
+    rejectA?.(new ApiError(404, { error: 'course_not_found' }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByText('Course B')).toBeInTheDocument()
+    expect(screen.queryByText(/not found/i)).not.toBeInTheDocument()
   })
 })

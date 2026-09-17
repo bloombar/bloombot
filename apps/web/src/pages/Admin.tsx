@@ -65,7 +65,7 @@
  * — WEB-34's ordinary rule, the same the rest of the panel already follows.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -216,11 +216,32 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
   // own comment already gives its sibling. A `course_not_found` (404) is
   // this course id's own state, not a console-wide refusal — kept apart
   // from `error` so it renders `NotFound` rather than the top-level banner.
+  //
+  // **Must-fix, first review round**: `currentCourseIdRef` guards against
+  // an out-of-order response — course A's read is slow, an operator goes
+  // back and opens course B (fast), and A's response then lands *after*
+  // B's already has. Without this, A's late `.then` would overwrite B's
+  // already-rendered detail (or, worse, mark B `courseNotFound` off the
+  // back of a stale 404 for A), and — since nothing re-fires the effect
+  // once B's own address is already current — the `course.courseId !==
+  // courseId` guard in `CourseDetailView` would then render the skeleton
+  // forever, with no fetch left in flight to ever resolve it. A plain
+  // boolean "ignore late responses" ref would not do: the *next* read for
+  // the *same* course (a retry, or Approve's own refresh) has to still be
+  // honoured, so this stores which course id is actually current rather
+  // than merely whether one read has already landed.
+  const currentCourseIdRef = useRef<string | undefined>(undefined)
+
   const refreshCourseDetail = useCallback((courseId: string) => {
+    currentCourseIdRef.current = courseId
     setCourseNotFound(false)
     fetchAdminCourse(courseId).then(
-      (result) => setCourseDetail(result),
+      (result) => {
+        if (currentCourseIdRef.current !== courseId) return
+        setCourseDetail(result)
+      },
       (caught: unknown) => {
+        if (currentCourseIdRef.current !== courseId) return
         if (caught instanceof ApiError) {
           if (caught.status === 404) setCourseNotFound(true)
           else setError(caught)
@@ -240,7 +261,17 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
   }, [route.kind, refreshCourses])
 
   useEffect(() => {
-    if (route.kind !== 'admin-course') return
+    if (route.kind !== 'admin-course') {
+      // Leaving the detail screen entirely (not merely to another course):
+      // a still-in-flight response for the course last viewed here is now
+      // for nobody's own current address, so `currentCourseIdRef` above
+      // must not still call it current the next time this screen is
+      // reached — `refreshCourseDetail`, below, always overwrites it again
+      // before that happens regardless, this only prevents a leftover
+      // stale value from lingering unobserved in between.
+      currentCourseIdRef.current = undefined
+      return
+    }
     // A fresh navigation between two courses must not render the previous
     // one under the new address while the new read is still in flight.
     setCourseDetail(undefined)
@@ -972,39 +1003,52 @@ function CourseDetailView({
         <h3 className="text-section-title font-semibold text-neutral-900">
           General
         </h3>
-        <ReadOnlyField label="Enabled" value={course.enabled ? 'Yes' : 'No'} />
-        <ReadOnlyField label="Admins role" value={course.adminsRole ?? '—'} />
-        <ReadOnlyField
-          label="Students role"
-          value={course.studentsRole ?? '—'}
-        />
-        <ReadOnlyField
-          label="Categories"
-          value={
-            course.categories.length === 0
-              ? '—'
-              : course.categories
-                  .map(
-                    (category) =>
-                      `${category.name} (${category.channels
-                        .map((channel) => channel.name)
-                        .join(', ')})`
-                  )
-                  .join('; ')
-          }
-        />
-        <ReadOnlyField
-          label="Self-enrolment from Discord"
-          value={course.selfEnrolFromDiscord ? 'On' : 'Off'}
-        />
-        <ReadOnlyField
-          label="Answers an unenrolled student"
-          value={course.answerUnenrolled ? 'Yes' : 'No'}
-        />
-        <ReadOnlyField
-          label="Conversation scope"
-          value={course.conversationScope}
-        />
+        {/* Must-fix, second review round: a `<dt>`/`<dd>` pair with no `<dl>`
+            ancestor is invalid HTML, and it drops exactly the description-
+            list semantics `ReadOnlyField`'s own doc comment gives as the
+            reason to use `<dt>`/`<dd>` over a disabled `<input>` in the
+            first place. Wrapped the same way `pages/Home.tsx`'s own
+            "What it does" list and `pages/Mcp.tsx`'s own per-client field
+            lists already wrap theirs — a `<dl>` around the series of
+            `<div>`s each `ReadOnlyField` renders. */}
+        <dl className="flex flex-col gap-2">
+          <ReadOnlyField
+            label="Enabled"
+            value={course.enabled ? 'Yes' : 'No'}
+          />
+          <ReadOnlyField label="Admins role" value={course.adminsRole ?? '—'} />
+          <ReadOnlyField
+            label="Students role"
+            value={course.studentsRole ?? '—'}
+          />
+          <ReadOnlyField
+            label="Categories"
+            value={
+              course.categories.length === 0
+                ? '—'
+                : course.categories
+                    .map(
+                      (category) =>
+                        `${category.name} (${category.channels
+                          .map((channel) => channel.name)
+                          .join(', ')})`
+                    )
+                    .join('; ')
+            }
+          />
+          <ReadOnlyField
+            label="Self-enrolment from Discord"
+            value={course.selfEnrolFromDiscord ? 'On' : 'Off'}
+          />
+          <ReadOnlyField
+            label="Answers an unenrolled student"
+            value={course.answerUnenrolled ? 'Yes' : 'No'}
+          />
+          <ReadOnlyField
+            label="Conversation scope"
+            value={course.conversationScope}
+          />
+        </dl>
       </section>
 
       <section
@@ -1014,19 +1058,21 @@ function CourseDetailView({
         <h3 className="text-section-title font-semibold text-neutral-900">
           AI
         </h3>
-        <ReadOnlyField label="Model" value={course.model ?? '—'} />
-        {course.promptId && (
-          <ReadOnlyField label="Prompt id" value={course.promptId} />
-        )}
-        <ReadOnlyField
-          label="Max requests per day"
-          value={course.maxRequestsPerDay?.toString() ?? '—'}
-        />
-        <ReadOnlyField
-          label="Instructions"
-          value={course.instructions ?? '—'}
-          multiline
-        />
+        <dl className="flex flex-col gap-2">
+          <ReadOnlyField label="Model" value={course.model ?? '—'} />
+          {course.promptId && (
+            <ReadOnlyField label="Prompt id" value={course.promptId} />
+          )}
+          <ReadOnlyField
+            label="Max requests per day"
+            value={course.maxRequestsPerDay?.toString() ?? '—'}
+          />
+          <ReadOnlyField
+            label="Instructions"
+            value={course.instructions ?? '—'}
+            multiline
+          />
+        </dl>
       </section>
 
       <section

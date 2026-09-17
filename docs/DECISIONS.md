@@ -12542,6 +12542,13 @@ call rather than an indexed point lookup; accepted deliberately, the same trade 
 already accepts for `listCoursesForApproval` itself — a platform-administrator console, not a per-request path
 any other surface touches, where course counts are small enough that this is not a real cost.
 
+**Superseded by D-118's second update.** ADMIN-6's own review round found the identical scan behind an
+*interactive page load* (`GET /courses/:courseId`), not merely a button click, and added
+`courseApproval.findCourseOrganizationId` — the indexed point lookup this paragraph declined to add — for that
+route. Once it existed, `approve`/`unapprove` switched to it too, for consistency, rather than leaving three
+routes in this file on two different patterns for the same lookup; see D-118 for the full reasoning and why
+the switch was judged worth it there despite the trade this paragraph accepted a slice earlier.
+
 **`CourseForApproval` gained two fields it did not have before this slice**: `aiApprovedByAccountId` and
 `aiApprovedByEmail`. WEB-53's own text requires "the approver and approval time" for an approved course, and
 the interface as COST-8 left it carried only `aiApprovedAt` — enough to know *that* a course was approved,
@@ -12598,12 +12605,32 @@ problem to fix, not this console's to read). A website is reduced to its `domain
 `CourseWebSourceSummary` (the owner's own panel type) carries that means anything without a course id
 attached to it.
 
-**The organization is resolved the same way WEB-53's approve/unapprove routes already do** (D-117): a
-`courseApproval.listCoursesForApproval` scan, not a second unscoped "course id to organization id" repo
-function. That same row already carries the course's title, its project and organization names, and its
-full approval state, so `GET /courses/:courseId` reuses it rather than re-deriving any of the four — one
-extra read (`courses.getCourse`, for the settings the list read does not carry) beyond what `GET /courses`
-already pays.
+**The organization is resolved through `courseApproval.findCourseOrganizationId`** — a scoped, indexed point
+lookup on `courses.id` (that function's own doc comment), added in this slice's second review round. The
+first version of this route resolved the organization the same way WEB-53's approve/unapprove routes already
+did (D-117): a `courseApproval.listCoursesForApproval` scan, reusing the same row `GET /courses` already
+computes. That trade is real for a rare, deliberate button click (D-117's own words) — but `GET
+/courses/:courseId` fires on an interactive page load, every time a row is clicked, and the scan pays for a
+full `courses`/`projects`/`organizations` join plus the owner-email and approver-email batches to keep exactly
+one row. `findCourseOrganizationId` replaces that with the point lookup, and three more small, indexed reads
+(`organizations.getOrganizationById`, `projects.getProject`, `accounts.getAccountById` for the approver's own
+email) supply what the scan used to hand over for free — still far cheaper than the scan itself, and the same
+"narrow, single-purpose repo function" shape `listApprovalEventsForCourse` (D-117) already added to this file
+for an equally specific need.
+
+**Judgment call: `approve`/`unapprove` switched to `findCourseOrganizationId` too**, not left on the
+`listCoursesForApproval` scan D-117 accepted for them. The reviewer flagged this as optional — those two
+routes fire on a deliberate button click, not a page load, so D-117's own trade still holds for them in
+isolation. Chosen anyway, for two reasons: first, `approve`'s own switch is a pure win with no added
+complexity (nothing else in that route reads from the scanned row); second, leaving three routes in the same
+file on two different patterns for identically shaped "resolve this course id's organization" problem is
+itself a cost — the next person editing any of the three has to know which pattern applies, and why, rather
+than one answer holding for the whole file. `unapprove`'s own idempotence check (`aiApprovedAt`/
+`aiApprovalDecidedAt`, the must-fix from this slice's *first* review round) used to read both off the scanned
+row; it now reads them off `courses.getCourse` instead, since both columns live on `courses` itself
+(`schema.ts`) — one extra scoped read, not a second scan. `docs/DECISIONS.md`'s own D-117 entry, above, is
+left in place with a note pointing here rather than rewritten, so the trade it accepted (and why this slice
+revisited it) both stay legible.
 
 **Not chosen: a `readOnly` prop threaded through `CourseEditor`.** Rejected for the reason the brief states
 outright — `CourseEditor` is wired to `dispatchAction`, which needs an `organizationId` this console

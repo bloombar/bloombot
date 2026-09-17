@@ -146,6 +146,12 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //  - course-approval.ts#listCoursesForApproval: COST-8/WEB-53, the same
 //    class `cost-ledger.ts#listOrganizationTotals` already is — a platform
 //    administrator's own read, spanning every organization by definition.
+//  - course-approval.ts#findCourseOrganizationId: ADMIN-6, second review
+//    round — the one function whose whole job is answering "which
+//    organization does this course id belong to" before a caller has an
+//    organization id to scope anything else by (that function's own doc
+//    comment); there is no `organizationId` to take as a first parameter
+//    without it being the very thing this function exists to produce.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': [
     'getAccountByEmail',
@@ -154,7 +160,7 @@ const ALLOWLIST: Record<string, string[]> = {
     'setAccountNames',
   ],
   'cost-ledger.ts': ['listOrganizationTotals'],
-  'course-approval.ts': ['listCoursesForApproval'],
+  'course-approval.ts': ['listCoursesForApproval', 'findCourseOrganizationId'],
   'discord-handled-messages.ts': [
     'recordHandledMessage',
     'listHandledMessageIds',

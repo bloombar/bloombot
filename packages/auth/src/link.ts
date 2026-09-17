@@ -16,6 +16,16 @@ export interface GoogleIdentity {
   email: string
   /** Whether *Google* asserts this address is verified — never trust the caller's own say-so. */
   emailVerified: boolean
+  /**
+   * AUTH-7 — the ID token's `given_name`/`family_name` claims, when Google
+   * sent a non-empty string for them. `undefined`, not `null`, for an absent
+   * claim — the same "absent means unchanged" reading `sign-in.ts`'s own
+   * fill-only writes give every optional field, so a token that happens not
+   * to carry a name this time never clears one a previous sign-in already
+   * stored.
+   */
+  givenName?: string
+  familyName?: string
 }
 
 export type LinkDecision =

@@ -104,6 +104,57 @@ describe('createGoogleIdTokenVerifier', () => {
     expect(result.ok && result.identity.emailVerified).toBe(false)
   })
 
+  // AUTH-7 — `given_name`/`family_name` are extracted onto the identity when
+  // Google sends them, so `sign-in.ts` has something to fill an account's
+  // stored names from.
+  it('extracts given_name/family_name when the token carries them', async () => {
+    const verifier = createGoogleIdTokenVerifier({
+      issuer: server.baseUrl,
+      audience: 'test-client-id',
+    })
+    const token = await server.signIdToken({
+      sub: 'google-subject-1',
+      email: 'student@example.edu',
+      email_verified: true,
+      given_name: 'Jane',
+      family_name: 'Doe',
+    })
+
+    const result = await verifier.verifyIdToken(token)
+
+    expect(result).toEqual({
+      ok: true,
+      identity: {
+        subject: 'google-subject-1',
+        email: 'student@example.edu',
+        emailVerified: true,
+        givenName: 'Jane',
+        familyName: 'Doe',
+      },
+    })
+  })
+
+  // AUTH-7 — an account configuration (or consent scope) that sends no name
+  // claim at all must not surface as an empty string or `null`: `undefined`
+  // is what "no claim sent" means to `sign-in.ts`'s own fill-only write.
+  it('extracts no name fields when the token carries neither claim', async () => {
+    const verifier = createGoogleIdTokenVerifier({
+      issuer: server.baseUrl,
+      audience: 'test-client-id',
+    })
+    const token = await server.signIdToken({
+      sub: 'google-subject-1',
+      email: 'student@example.edu',
+      email_verified: true,
+    })
+
+    const result = await verifier.verifyIdToken(token)
+
+    expect(result.ok).toBe(true)
+    expect(result.ok && result.identity.givenName).toBeUndefined()
+    expect(result.ok && result.identity.familyName).toBeUndefined()
+  })
+
   it('refuses a token signed for a different issuer', async () => {
     const verifier = createGoogleIdTokenVerifier({
       issuer: server.baseUrl,

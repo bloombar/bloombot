@@ -30,6 +30,9 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //  - accounts.ts#disableAccount: `disabled_at` lives on `accounts`, not
 //    `memberships` — disabling is account-wide, not scoped to one
 //    organization (AUTH-1..4 rework, finding 3).
+//  - accounts.ts#setAccountNames: the same class — `first_name`/`last_name`
+//    live on `accounts`, not `people`, so a Google sign-in's own name fill
+//    (AUTH-7) is account-wide too, not scoped to one organization.
 //  - organizations.ts#listTenantDeletions: ADMIN-5's own audit trail, read
 //    by the platform-administrator console — spans every (former)
 //    organization by definition, the same class `cost-ledger.ts`'s own
@@ -141,7 +144,12 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    which is a property of the gateway connection `apps/bot` holds, not of
 //    any one organization.
 const ALLOWLIST: Record<string, string[]> = {
-  'accounts.ts': ['getAccountByEmail', 'getAccountById', 'disableAccount'],
+  'accounts.ts': [
+    'getAccountByEmail',
+    'getAccountById',
+    'disableAccount',
+    'setAccountNames',
+  ],
   'cost-ledger.ts': ['listOrganizationTotals'],
   'discord-handled-messages.ts': [
     'recordHandledMessage',

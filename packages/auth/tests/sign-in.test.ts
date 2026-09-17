@@ -162,6 +162,51 @@ describe('redeemSignInLink (AUTH-1, TEN-1)', () => {
     expect(person?.connectedAt).not.toBeNull()
   })
 
+  // AUTH-7 (rework round 1, must-fix 3) — the healing path's own fill call
+  // (`createConnectedWebPerson`, shared by `findOrCreateAccountForEmail`'s
+  // create branch and this healing path): a pre-rework account that already
+  // has names stored (an earlier Google sign-in, before this rework ever
+  // shipped a person for it) gets them on the person this heal creates,
+  // immediately — not only on some later Google sign-in. Fails without
+  // `createConnectedWebPerson`'s own `fillPersonNamesFromAccount` call: the
+  // healed person's `firstName`/`lastName` would stay `null`.
+  it('heals a pre-existing account with no web person, filling the new person with names the account already had', () => {
+    testDb = createTestDatabase()
+    const organizationId = crypto.randomUUID()
+    organizations.createOrganization(
+      organizationId,
+      { name: 'Pre-rework Org', isPersonal: true },
+      testDb.db
+    )
+    const preExisting = accounts.createAccount(
+      organizationId,
+      {
+        email: 'pre-rework-named@example.edu',
+        displayName: 'Pre Rework',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    accounts.setAccountNames(
+      preExisting.id,
+      { firstName: 'Ada', lastName: 'Lovelace' },
+      testDb.db
+    )
+
+    const { token } = issueSignInToken(
+      'pre-rework-named@example.edu',
+      testDb.db
+    )
+    redeemSignInLink(token, testDb.db)
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: preExisting.id },
+      testDb.db
+    )
+    expect(person).toMatchObject({ firstName: 'Ada', lastName: 'Lovelace' })
+  })
+
   it('a second sign-in for an already-healed account does not create a second person', () => {
     testDb = createTestDatabase()
     const organizationId = crypto.randomUUID()
@@ -393,6 +438,129 @@ describe('signInWithGoogle (AUTH-2)', () => {
     )
     expect(person).toBeDefined()
     expect(person?.connectedAt).not.toBeNull()
+  })
+
+  // AUTH-7 — a brand-new account's own web person gets the Google identity's
+  // names, not merely a connected-but-nameless person.
+  it("fills the account's own names and the new web person's, for a brand-new account", () => {
+    testDb = createTestDatabase()
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({
+        email: 'new-with-name@example.edu',
+        givenName: 'Jane',
+        familyName: 'Doe',
+      }),
+      testDb.db
+    )
+    expect(result?.createdAccount).toBe(true)
+
+    const account = accounts.getAccountById(result!.account.id, testDb.db)
+    expect(account).toMatchObject({ firstName: 'Jane', lastName: 'Doe' })
+
+    const membershipRows = testDb.db.select().from(schema.memberships).all()
+    const organizationId = membershipRows[0]!.organizationId
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: result!.account.id },
+      testDb.db
+    )
+    expect(person).toMatchObject({ firstName: 'Jane', lastName: 'Doe' })
+  })
+
+  // AUTH-7 — a returning account whose connected person already has roster
+  // names must keep them: Google's own claims never overwrite a name a
+  // roster import already supplied.
+  //
+  // Rework round 1, must-fix 3 — the assertion on the *person* below is a
+  // regression guard, not a TDD-style failing test: removing this file's
+  // `fillNamesFromGoogleIdentity` call entirely also leaves it passing
+  // (nothing writes the person either way), so on its own it cannot prove
+  // the wiring runs, only that it declines correctly when it does. This
+  // asserts on the *account* too — `setAccountNames` is fill-only on a
+  // `null` field the same way, but the account started with no name at
+  // all, so this half genuinely fails without the call
+  // (`fillNamesFromGoogleIdentity`'s own account-level write never runs),
+  // while the person half proves the *decline* on top: one call, two
+  // targets, one correctly filled and one correctly left alone.
+  it("does not overwrite a returning person's existing roster first/last names, though it does fill the account's own (still-null) ones", () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('rostered@example.edu', testDb.db)
+    const existing = redeemSignInLink(token, testDb.db)!
+    const organizationId = testDb.db.select().from(schema.memberships).all()[0]!
+      .organizationId
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: existing.account.id },
+      testDb.db
+    )!
+    people.mergeRosterFields(
+      organizationId,
+      person.id,
+      { firstName: 'Roster', lastName: 'Name' },
+      testDb.db
+    )
+
+    signInWithGoogle(
+      verifiedGoogleIdentity({
+        email: 'rostered@example.edu',
+        givenName: 'Google',
+        familyName: 'Identity',
+      }),
+      testDb.db
+    )
+
+    const after = people.getPerson(organizationId, person.id, testDb.db)
+    expect(after).toMatchObject({ firstName: 'Roster', lastName: 'Name' })
+    const account = accounts.getAccountById(existing.account.id, testDb.db)
+    expect(account).toMatchObject({ firstName: 'Google', lastName: 'Identity' })
+  })
+
+  // AUTH-7 — a person with only `lastName` already set (say, from a partial
+  // roster row) gets `firstName` filled by Google while `lastName` is kept.
+  it('fills only the missing half of a name, keeping an already-set lastName', () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('half-named@example.edu', testDb.db)
+    const existing = redeemSignInLink(token, testDb.db)!
+    const organizationId = testDb.db.select().from(schema.memberships).all()[0]!
+      .organizationId
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: existing.account.id },
+      testDb.db
+    )!
+    people.mergeRosterFields(
+      organizationId,
+      person.id,
+      { lastName: 'Existing' },
+      testDb.db
+    )
+
+    signInWithGoogle(
+      verifiedGoogleIdentity({
+        email: 'half-named@example.edu',
+        givenName: 'Filled',
+        familyName: 'FromGoogle',
+      }),
+      testDb.db
+    )
+
+    const after = people.getPerson(organizationId, person.id, testDb.db)
+    expect(after).toMatchObject({ firstName: 'Filled', lastName: 'Existing' })
+  })
+
+  // AUTH-7 — a token carrying neither name claim writes nothing: no account
+  // update, no person update.
+  it('writes no names when the Google token carries neither claim', () => {
+    testDb = createTestDatabase()
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({ email: 'no-names@example.edu' }),
+      testDb.db
+    )
+
+    const account = accounts.getAccountById(result!.account.id, testDb.db)
+    expect(account).toMatchObject({ firstName: null, lastName: null })
   })
 
   // AUTH-2's own attack sentence, exercised end to end: an unverified email
@@ -851,6 +1019,41 @@ describe('ensureWebPersonForAccount (LINK-6/7/8)', () => {
         testDb.db
       )?.id
     ).toBe(person.id)
+  })
+
+  // AUTH-7 (rework round 1, must-fix 3) — `ensureWebPersonForAccount`'s own
+  // fill call: an account that already has names stored (an earlier Google
+  // sign-in in some other organization) gets them on a brand-new person
+  // this creates in an organization it had never reached before — LINK-6/7's
+  // own "on demand" connect, not a Google sign-in itself. Fails without
+  // that call: the new person's `firstName`/`lastName` would stay `null`.
+  it("fills a newly-created person's names from the account's own stored ones", () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken(
+      'named-instructor@example.edu',
+      testDb.db
+    )
+    const signedIn = redeemSignInLink(token, testDb.db)
+    if (!signedIn) throw new Error('setup failed')
+    accounts.setAccountNames(
+      signedIn.account.id,
+      { firstName: 'Grace', lastName: 'Hopper' },
+      testDb.db
+    )
+    const institutionId = crypto.randomUUID()
+    organizations.createOrganization(
+      institutionId,
+      { name: 'Institution', isPersonal: false },
+      testDb.db
+    )
+
+    const person = ensureWebPersonForAccount(
+      institutionId,
+      signedIn.account.id,
+      testDb.db
+    )
+
+    expect(person).toMatchObject({ firstName: 'Grace', lastName: 'Hopper' })
   })
 
   it('is idempotent — a second call for the same organization and account returns the same person, creating nothing further', () => {

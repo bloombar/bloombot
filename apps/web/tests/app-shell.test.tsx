@@ -107,3 +107,14 @@ describe('AppShell drawer closing (WEB-29, coordinator review round 2)', () => {
     expect(dialog).not.toBeVisible()
   })
 })
+
+describe('AppShell footer support link', () => {
+  it('mails bloombot@wonkledge.com, not the old placeholder address', () => {
+    renderShell()
+
+    expect(screen.getByRole('link', { name: 'Support' })).toHaveAttribute(
+      'href',
+      'mailto:bloombot@wonkledge.com'
+    )
+  })
+})

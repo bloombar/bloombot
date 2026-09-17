@@ -139,6 +139,8 @@ export function getAccountInOrganization(
       id: accounts.id,
       email: accounts.email,
       displayName: accounts.displayName,
+      firstName: accounts.firstName,
+      lastName: accounts.lastName,
       disabledAt: accounts.disabledAt,
       createdAt: accounts.createdAt,
     })
@@ -152,6 +154,46 @@ export function getAccountInOrganization(
     )
     .where(eq(accounts.id, accountId))
     .get()
+}
+
+/**
+ * AUTH-7 — fill `firstName`/`lastName` on an account from a Google ID
+ * token's claims, the same fill-only rule `@bloombot/db`'s
+ * `people.ts#mergeRosterFields` already gives roster fields: a name already
+ * stored on the account (from an earlier Google sign-in) is never
+ * overwritten, and an omitted claim (`undefined` in `names`) leaves the
+ * corresponding column untouched. Returns the account unchanged (no `UPDATE`
+ * at all) when neither field is currently `null`, or both incoming values
+ * are `undefined` — the ordinary case for an email magic-link sign-in, which
+ * never calls this at all, and for a *returning* Google sign-in whose token
+ * happens to omit a claim it supplied before. `undefined` when `accountId`
+ * does not exist, matching `disableAccount`'s refusal shape.
+ */
+export function setAccountNames(
+  accountId: string,
+  names: { firstName?: string; lastName?: string },
+  db: TransactingExecutor
+): Account | undefined {
+  return writeTransaction(db, (tx) => {
+    const existing = getAccountById(accountId, tx)
+    if (!existing) return undefined
+
+    const patch: Partial<Pick<Account, 'firstName' | 'lastName'>> = {}
+    if (existing.firstName === null && names.firstName !== undefined) {
+      patch.firstName = names.firstName
+    }
+    if (existing.lastName === null && names.lastName !== undefined) {
+      patch.lastName = names.lastName
+    }
+    if (Object.keys(patch).length === 0) return existing
+
+    return tx
+      .update(accounts)
+      .set(patch)
+      .where(eq(accounts.id, accountId))
+      .returning()
+      .get()
+  })
 }
 
 /**

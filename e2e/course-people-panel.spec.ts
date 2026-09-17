@@ -109,9 +109,10 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   //    back on this exact course's own address, no re-navigation through
   //    Projects needed — and the People panel now lists the student as
   //    enrolled — admitted through the join link, and offering only End
-  //    (this student joined with no display name set anywhere, so the row
-  //    falls back to their own person id — WEB-22's own "never an email"
-  //    fallback, `components/CoursePeople.tsx`'s own module comment).
+  //    (this student joined with no name, email or Discord display name
+  //    known anywhere, so the row falls back to their own person id —
+  //    WEB-52's own last resort, `components/CoursePeople.tsx`'s own module
+  //    comment).
   await page.reload()
   // WEB-35: reload holds the General tab last navigated to (step 3) — back
   // to People to see the enrolment.
@@ -325,12 +326,12 @@ test('clicking a person’s name in the People panel opens their transcript, alr
       .find((candidate) => candidate.title === courseTitle)
     if (!course) throw new Error('setup failed: course not found')
 
+    // No `email` here (unlike some other fixtures in this suite) — WEB-52
+    // now shows email ahead of a Discord display name on the People panel's
+    // own primary line, and this test's own assertions below find each
+    // link by `displayName`, not by email.
     const seedStudent = (displayName: string, content: string) => {
-      const person = people.createPerson(
-        organizationId,
-        { displayName, email: `${displayName.toLowerCase()}@example.edu` },
-        db
-      )
+      const person = people.createPerson(organizationId, { displayName }, db)
       const conversation = conversations.getOrCreateConversation(
         organizationId,
         { courseId: course.id, personId: person.id, surface: 'web' },
@@ -358,6 +359,27 @@ test('clicking a person’s name in the People panel opens their transcript, alr
       'Can I still submit late work?'
     )
     enrolments.endEnrolment(organizationId, endedEnrolment.id, db)
+
+    // WEB-52 — a third person, this one with a full name and an email
+    // (roster-supplied — the exact shape a roster import leaves), so this
+    // spec also proves what a real row looks like now: the full name as the
+    // primary line, and email alongside how/when they joined on the
+    // secondary line.
+    const namedPerson = people.createPerson(
+      organizationId,
+      {
+        firstName: 'Jane',
+        lastName: `Doe ${suffix}`,
+        email: `jane-${suffix}@example.edu`,
+      },
+      db
+    )
+    const namedEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: namedPerson.id },
+      db
+    )
+    if (!namedEnrolment) throw new Error('setup failed: enrolment')
   } finally {
     closeDatabase(db)
   }
@@ -365,8 +387,19 @@ test('clicking a person’s name in the People panel opens their transcript, alr
   // 3. WEB-35: People is its own tab.
   await page.getByRole('tab', { name: 'People' }).click()
   await expect(page.getByRole('heading', { name: 'People' })).toBeVisible()
-  await expect(page.getByText('Enrolled (1)')).toBeVisible()
+  await expect(page.getByText('Enrolled (2)')).toBeVisible()
   await expect(page.getByText('Enrolment ended (1)')).toBeVisible()
+
+  // WEB-52 — the roster-supplied person's row: the full name as the primary
+  // line, email and how/when they joined on the secondary line.
+  const namedRow = page.getByRole('link', { name: `Jane Doe ${suffix}` })
+  await expect(namedRow).toBeVisible()
+  // Rework round 1, must-fix 1 — every secondary-line fact is labelled now
+  // (`Email: …`, `Joined: <source> — <date>`).
+  const namedSecondaryLine = page.getByText(
+    new RegExp(`Email: jane-${suffix}@example\\.edu.*Joined: Roster import`)
+  )
+  await expect(namedSecondaryLine).toBeVisible()
 
   // 4. The active student's own name is a real link — clicking it lands on
   //    their transcript, with the course, the person and the message

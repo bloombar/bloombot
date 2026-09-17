@@ -60,6 +60,13 @@ export const accounts = sqliteTable('accounts', {
   // uniqueness cannot be bypassed by case alone.
   email: text('email').notNull().unique(),
   displayName: text('display_name').notNull(),
+  // AUTH-7 — filled only from a Google ID token's `given_name`/`family_name`
+  // claims, fill-only (never overwritten once set) the same as `people`'s
+  // own roster fields — `repos/accounts.ts#setAccountNames`. `null` for an
+  // account that has never signed in with Google (email magic-link sign-in
+  // supplies no name claim to fill these from).
+  firstName: text('first_name'),
+  lastName: text('last_name'),
   // Set to disable sign-in without deleting the account or anything it owns.
   disabledAt: integer('disabled_at'),
   createdAt: integer('created_at').notNull(),

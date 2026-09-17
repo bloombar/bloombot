@@ -24,13 +24,36 @@
  * immediately, the same "no confirmation for a grant" choice this app makes
  * nowhere else needs stating twice.
  *
- * **No email.** `CourseEnrolment.displayName` is nullable — a person PPL-3
- * created on first contact and never named since — and this screen falls
- * back to `personId` for that row, not the person's own email
- * (`api/types.ts#CourseEnrolment`'s own doc comment): a `null` display name
- * is already told apart from another by a distinct id, and these are real
- * students' addresses, shown only where a screen genuinely cannot tell two
- * people apart without one, which is not the case here.
+ * **WEB-52 reverses this screen's earlier "no email" choice.** Every row now
+ * shows whichever of a full name (`firstName`/`lastName`), an email, and a
+ * Discord display name (`displayName`) are known, omitting the rest — the
+ * first of these that is known is the primary line, linking to the
+ * transcript, and a smaller secondary line names whichever of the others
+ * are known, followed by how the person joined and when (`SOURCE_LABELS`,
+ * date *and* time) and, once ended, when that happened too. `personId` —
+ * the bare UUID — is shown only when all three identifiers are unknown, the
+ * same "nothing left to fall back to" case this screen has always had, just
+ * pushed one identifier further out now that email and Discord name are
+ * also tried first. This is an instructor-only view of their own course's
+ * enrolments (`docs/DECISIONS.md`), which is why showing email here does
+ * not reopen the concern the original "no email" choice was guarding
+ * against.
+ *
+ * **Rework round 1: every detail is labelled, not only Discord's.** Before
+ * this, only the secondary line's own `Discord: …` prefix named what it was
+ * showing — a bare email or a bare name on the primary line, and a bare
+ * date on the secondary one, left an instructor to infer what each thing
+ * *was* from its shape alone, which breaks down the moment the primary line
+ * is an email rather than a name (nothing about `jane@x.edu` on its own
+ * says "this is standing in for a name"). `identityFields`/`primaryField`/
+ * `secondaryFields` below build a small, uniform `{ label, value }` pair
+ * (`PersonField`) for every known identifier and for the join/end facts,
+ * labelled the same way regardless of which one ends up on the primary
+ * line — the primary line's own label sits just above it, in small, muted
+ * text of its own (`Name`/`Email`/`Discord`/`ID`), and the secondary line's
+ * labels sit inline, right beside each value (`Email: … · Joined: …`); both
+ * stay compact — one or two lines per row, no new visual weight — but
+ * neither ever leaves a value unlabelled.
  *
  * WEB-36: every row's own name is also a real link to that person's
  * transcript for this course (`routing/route.ts#TranscriptsRoute`) — a
@@ -92,9 +115,82 @@ const SOURCE_LABELS: Record<CourseEnrolment['source'], string> = {
   self_enrolment: 'Self-enrolled',
 }
 
-/** What a row shows in place of a name — `displayName` when the person has one, `personId` otherwise (this file's own module comment on why never email). */
-function label(entry: CourseEnrolment): string {
-  return entry.displayName ?? entry.personId
+/** `firstName`/`lastName` joined, whichever exists — `undefined` when neither is known, not an empty string, so callers can tell "no name" apart from a name that happens to be blank. */
+function fullName(entry: CourseEnrolment): string | undefined {
+  const parts = [entry.firstName, entry.lastName].filter(
+    (part): part is string => part !== null && part !== ''
+  )
+  return parts.length > 0 ? parts.join(' ') : undefined
+}
+
+/** One labelled fact a row shows — `Name: Jane Doe`, `Email: jane@x.edu`, `Joined: Roster import — 16 Sep 2026, 14:03`, and so on. Always rendered as `${label}: ${value}` — a label is never separated from its own value. */
+interface PersonField {
+  label: string
+  value: string
+}
+
+/**
+ * WEB-52 (rework round 1) — every identifier this screen knows about a
+ * person, labelled, in priority order: full name, email, Discord display
+ * name. The first of these is what the primary line shows (`primaryField`,
+ * below); the rest (`remainingFields`) go on the secondary line — each
+ * still carrying its own label, so an email standing in for a missing name
+ * on the primary line reads as `Email: jane@x.edu`, not a bare address with
+ * no explanation of what it is standing in for.
+ */
+function identityFields(entry: CourseEnrolment): PersonField[] {
+  const fields: PersonField[] = []
+  const name = fullName(entry)
+  if (name !== undefined) fields.push({ label: 'Name', value: name })
+  if (entry.email !== null) fields.push({ label: 'Email', value: entry.email })
+  if (entry.displayName !== null) {
+    fields.push({ label: 'Discord', value: entry.displayName })
+  }
+  return fields
+}
+
+/**
+ * The row's primary line: the first known identifier (this file's own
+ * module comment has the ordering), or the bare person id when none of the
+ * three is known — labelled `ID`, the same "nothing left to fall back to"
+ * case this screen has always had.
+ */
+function primaryField(entry: CourseEnrolment): PersonField {
+  return identityFields(entry)[0] ?? { label: 'ID', value: entry.personId }
+}
+
+/** Just the primary field's own value — what a confirmation dialog or an aria-label names the row by; those read as plain prose ("End Jane Doe's enrolment"), not as a labelled fact, so no `label` prefix belongs there. */
+function identifierText(entry: CourseEnrolment): string {
+  return primaryField(entry).value
+}
+
+/** Every known identifier *except* whichever one `primaryField` already used, so nothing repeats between the primary and secondary lines. */
+function remainingIdentityFields(entry: CourseEnrolment): PersonField[] {
+  return identityFields(entry).slice(1)
+}
+
+/** `Joined: <how> — <when>` — always present, on both the active and the ended list. */
+function joinedField(entry: CourseEnrolment): PersonField {
+  return {
+    label: 'Joined',
+    value: `${SOURCE_LABELS[entry.source]} — ${new Date(entry.createdAt).toLocaleString()}`,
+  }
+}
+
+/** `Ended: <when>` — rework round 1, must-fix 2: an ended row used to show only this and never how/when the person had joined in the first place; `secondaryFields` below always puts `joinedField` before this one. */
+function endedField(entry: CourseEnrolment): PersonField {
+  return {
+    label: 'Ended',
+    value:
+      entry.endedAt !== null ? new Date(entry.endedAt).toLocaleString() : '',
+  }
+}
+
+/** The secondary line's own fields, in order — whichever identifiers were not already the primary line, then how/when the person joined, then (only once ended) when that happened too. */
+function secondaryFields(entry: CourseEnrolment): PersonField[] {
+  const fields = [...remainingIdentityFields(entry), joinedField(entry)]
+  if (entry.endedAt !== null) fields.push(endedField(entry))
+  return fields
 }
 
 /**
@@ -205,7 +301,7 @@ export function CoursePeople({
     // same discipline `JoinLinks.tsx`'s own revoke confirmation holds
     // itself to for ENRL-4.
     const confirmed = await confirm({
-      title: `End ${label(entry)}'s enrolment?`,
+      title: `End ${identifierText(entry)}'s enrolment?`,
       description:
         'This stops them asking this course. It does not delete their transcript or the course’s record of what was asked.',
       confirmLabel: 'End enrolment',
@@ -216,7 +312,7 @@ export function CoursePeople({
     setEndingId(entry.id)
     try {
       await endCourseEnrolment(organizationId, entry.id)
-      setStatusMessage(`Ended ${label(entry)}'s enrolment.`)
+      setStatusMessage(`Ended ${identifierText(entry)}'s enrolment.`)
       await refresh()
     } catch (caught) {
       if (caught instanceof ApiError) setEndError(caught)
@@ -235,7 +331,7 @@ export function CoursePeople({
     setReinstatingId(entry.id)
     try {
       await reinstateCourseEnrolment(organizationId, entry.id)
-      setStatusMessage(`Reinstated ${label(entry)}'s enrolment.`)
+      setStatusMessage(`Reinstated ${identifierText(entry)}'s enrolment.`)
       await refresh()
     } catch (caught) {
       if (caught instanceof ApiError) setReinstateError(caught)
@@ -281,22 +377,26 @@ export function CoursePeople({
                 className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
               >
                 <div>
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+                    {primaryField(entry).label}
+                  </p>
                   <TranscriptLink
                     organizationId={organizationId}
                     courseId={courseId}
                     personId={entry.personId}
                     onNavigate={handleNavigate}
                   >
-                    {label(entry)}
+                    {primaryField(entry).value}
                   </TranscriptLink>
                   <p className="text-sm text-neutral-500">
-                    {SOURCE_LABELS[entry.source]} — admitted{' '}
-                    {new Date(entry.createdAt).toLocaleString()}
+                    {secondaryFields(entry)
+                      .map((field) => `${field.label}: ${field.value}`)
+                      .join(' · ')}
                   </p>
                 </div>
                 <Button
                   variant="destructive"
-                  aria-label={`End ${label(entry)}'s enrolment`}
+                  aria-label={`End ${identifierText(entry)}'s enrolment`}
                   icon={<DisableIcon aria-hidden="true" className="size-4" />}
                   onClick={() => void handleEnd(entry)}
                   disabled={endingId === entry.id}
@@ -330,24 +430,26 @@ export function CoursePeople({
                   {/* WEB-36 — an ended enrolment links identically (this
                       file's own module comment on why: ending never
                       deletes the transcript, ENRL-6). */}
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+                    {primaryField(entry).label}
+                  </p>
                   <TranscriptLink
                     organizationId={organizationId}
                     courseId={courseId}
                     personId={entry.personId}
                     onNavigate={handleNavigate}
                   >
-                    {label(entry)}
+                    {primaryField(entry).value}
                   </TranscriptLink>
                   <p className="text-sm text-neutral-500">
-                    {SOURCE_LABELS[entry.source]} — ended{' '}
-                    {entry.endedAt !== null
-                      ? new Date(entry.endedAt).toLocaleString()
-                      : ''}
+                    {secondaryFields(entry)
+                      .map((field) => `${field.label}: ${field.value}`)
+                      .join(' · ')}
                   </p>
                 </div>
                 <Button
                   variant="secondary"
-                  aria-label={`Reinstate ${label(entry)}'s enrolment`}
+                  aria-label={`Reinstate ${identifierText(entry)}'s enrolment`}
                   icon={<RestoreIcon aria-hidden="true" className="size-4" />}
                   onClick={() => void handleReinstate(entry)}
                   disabled={reinstatingId === entry.id}

@@ -431,19 +431,25 @@ export interface RevealedCourseJoinLink {
  * as `enrolments.listForCourse` returns it. Mirrors
  * `packages/db/src/repos/enrolments.ts`'s own `CourseEnrolmentEntry` by
  * hand, the same "not imported from the workspace" discipline this file's
- * own module comment already explains. `displayName`, not the person's own
- * email — the same "no genuine need to disambiguate by it" reasoning that
- * repo function's own doc comment gives; a `null` `displayName` is told
- * apart from another by `personId` instead (`components/CoursePeople.tsx`'s
- * own fallback, the same one `Transcripts.tsx` already uses for the
- * identical case). `endedAt`/`reinstatedByAccountId`/`reinstatedAt` are all
- * `null` for an enrolment that has never been ended (ENRL-6) or, having
- * been ended, never reinstated (ENRL-9).
+ * own module comment already explains.
+ *
+ * WEB-52 reverses this interface's own earlier "no email" choice: `email`,
+ * `firstName` and `lastName` are now included alongside `displayName`, so
+ * `components/CoursePeople.tsx` can show a name, an email and a Discord
+ * display name side by side, falling back to `personId` only when every one
+ * of `displayName`/`email`/`firstName`/`lastName` is `null`
+ * (`docs/DECISIONS.md`'s own note on why this is scoped to this
+ * instructor-only screen). `endedAt`/`reinstatedByAccountId`/`reinstatedAt`
+ * are all `null` for an enrolment that has never been ended (ENRL-6) or,
+ * having been ended, never reinstated (ENRL-9).
  */
 export interface CourseEnrolment {
   id: string
   personId: string
   displayName: string | null
+  email: string | null
+  firstName: string | null
+  lastName: string | null
   // ENRL-13 — 'self_enrolment' added by this slice; see
   // `packages/db/src/schema.ts#ENROLMENT_SOURCES`.
   source: 'join_link' | 'discord_role' | 'roster' | 'self_enrolment'

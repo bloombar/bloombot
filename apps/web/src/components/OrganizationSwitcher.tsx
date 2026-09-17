@@ -231,7 +231,6 @@ export function OrganizationSwitcher({
       <Button
         ref={triggerRef}
         variant="ghost"
-        aria-haspopup="true"
         aria-expanded={open}
         icon={<ExpandIcon aria-hidden="true" className="size-4" />}
         onClick={() => {
@@ -251,10 +250,12 @@ export function OrganizationSwitcher({
       >
         {active ? active.organizationName : activeOrganizationId}
         {active ? (
-          <span className="font-normal text-neutral-500">
+          <>
             {' '}
-            ({active.role ?? 'connected'})
-          </span>
+            <span className="font-normal text-neutral-500">
+              ({active.role ?? 'connected'})
+            </span>
+          </>
         ) : (
           ''
         )}

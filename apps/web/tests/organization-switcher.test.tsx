@@ -21,7 +21,7 @@
  * `tests/kebab-menu.test.tsx` asserts it for the pattern this borrows.
  */
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { OrganizationSwitcher } from '../src/components/OrganizationSwitcher.js'
@@ -119,12 +119,20 @@ describe('OrganizationSwitcher (WEB-3)', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /Acme U/ }))
 
+    // Code review, cheap-fix 5 — scoped to the popup itself: the trigger's
+    // own accessible name is `Acme U (owner)` too (the active organization,
+    // named the same way both places), so an unscoped query for that exact
+    // name would match both it and this item.
+    const menu = screen.getByRole('group', { name: 'Organizations' })
+
     // The two-organization user TEN-7 exists for picks between names, not
     // UUIDs.
-    const activeItem = screen.getByRole('button', { name: /Acme U \(owner\)/ })
+    const activeItem = within(menu).getByRole('button', {
+      name: 'Acme U (owner)',
+    })
     expect(activeItem).toHaveAttribute('aria-current', 'true')
-    const otherItem = screen.getByRole('button', {
-      name: /Northwind College \(assistant\)/,
+    const otherItem = within(menu).getByRole('button', {
+      name: 'Northwind College (assistant)',
     })
     expect(otherItem).not.toHaveAttribute('aria-current')
 
@@ -247,12 +255,16 @@ describe('OrganizationSwitcher (WEB-3)', () => {
     fireEvent.click(
       screen.getByRole('button', { name: /The student's own organization/ })
     )
+    // Code review, cheap-fix 5 — scoped to the popup: the trigger's own
+    // accessible name is the identical string, now that both carry the
+    // space the same way (`OrganizationSwitcher.tsx`'s own module comment).
+    const menu = screen.getByRole('group', { name: 'Organizations' })
     expect(
-      screen.getByRole('button', {
+      within(menu).getByRole('button', {
         name: "The student's own organization (owner)",
       })
     ).toBeInTheDocument()
-    const connectedItem = screen.getByRole('button', {
+    const connectedItem = within(menu).getByRole('button', {
       name: 'A University (connected)',
     })
     expect(connectedItem).toBeInTheDocument()

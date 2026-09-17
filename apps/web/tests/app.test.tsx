@@ -1090,7 +1090,7 @@ describe('App — WEB-55: the arrival list', () => {
     expect(
       await screen.findByRole('heading', { name: 'Choose an organization' })
     ).toBeInTheDocument()
-    expect(window.location.pathname).toBe('/organizations')
+    expect(window.location.pathname).toBe('/choose-organization')
     expect(screen.getByRole('link', { name: 'Org One' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Org Two' })).toBeInTheDocument()
   })
@@ -1211,6 +1211,72 @@ describe('App — /invitations/:secret (ENRL-10)', () => {
     expect(
       screen.queryByRole('combobox', { name: 'Organization' })
     ).not.toBeInTheDocument()
+  })
+
+  // WEB-55 (code review, note 6) — the identical race `'join-link'`'s own
+  // module comment (above, `describe('App — / home resolution')`) already
+  // documents and fixes for join links, now proven for an invitation too:
+  // `onRedeemed` awaits `refreshSession()` before navigating home, so
+  // `resolveHomeRoute` reads the membership this invitation just granted,
+  // not the stale, single-organization session redemption started with.
+  // Reverting that one hunk in `App.tsx`'s own `'invitation'` branch leaves
+  // this test failing — landing straight on the stale personal
+  // organization's own Projects screen instead of WEB-55's own arrival
+  // list, exactly the defect a real colleague hit (this file's own sibling,
+  // `e2e/membership-invitation-panel.spec.ts`, is where it was actually
+  // found).
+  it('a redeemed invitation lands on the arrival list once the fresh session reflects the granted membership, not the stale one it started with', async () => {
+    redeemMembershipInvitation.mockResolvedValue(undefined)
+    fetchMe
+      // The mount's own refreshSession() — stale, one organization only,
+      // exactly what this account looked like before the invitation this
+      // test redeems ever granted a second membership.
+      .mockResolvedValueOnce({
+        account: {
+          id: 'account-1',
+          email: 'colleague@example.edu',
+          memberships: [
+            {
+              organizationId: 'personal-org',
+              organizationName: 'Colleague',
+              role: 'owner',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+      // The refreshSession() `onRedeemed` awaits — fresh, now carrying the
+      // membership the invitation just granted. Every call after the first
+      // resolves this same way — `mockResolvedValueOnce` then
+      // `mockResolvedValue`, the same "one stale answer, then the settled
+      // one" device this file's own cross-account race tests already use.
+      .mockResolvedValue({
+        account: {
+          id: 'account-1',
+          email: 'colleague@example.edu',
+          memberships: [
+            {
+              organizationId: 'personal-org',
+              organizationName: 'Colleague',
+              role: 'owner',
+            },
+            {
+              organizationId: 'institution-org',
+              organizationName: 'A University',
+              role: 'instructor',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+    window.history.pushState(null, '', '/invitations/secret-abc')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Choose an organization' })
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/choose-organization')
   })
 
   // AUTH-6, rework — found in review: this used to be the one entry point

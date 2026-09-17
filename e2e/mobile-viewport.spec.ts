@@ -236,7 +236,7 @@ test('the arrival list and the header’s own organization menu hold at a phone 
   await signIn(page, email)
 
   // The arrival list itself.
-  await expect(page).toHaveURL('/organizations')
+  await expect(page).toHaveURL('/choose-organization')
   await expect(page.getByTestId('organizations-page')).toBeVisible()
   await assertNoHorizontalOverflow(page, 'the arrival list')
 

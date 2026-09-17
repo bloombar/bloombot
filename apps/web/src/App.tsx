@@ -298,22 +298,36 @@ function renderSignedInNotFound(
 /**
  * WEB-55 — `pages/Organizations.tsx`'s own arrival list, wrapped in
  * `SignedInChrome` the identical way `renderSignedInNotFound` (above) wraps
- * `NotFound`: acting in the account's own default organization for the
- * header's sake (`resolveDefaultOrganization`), since `/organizations`
- * itself names no organization this account is acting in yet — that is
- * exactly what this screen is for choosing.
+ * `NotFound`, but with **no** active organization — unlike every other
+ * caller of `SignedInChrome`, this one deliberately does not resolve
+ * `resolveDefaultOrganization` and pass its result through.
+ *
+ * Code review, must-fix 2: it used to. Passing a guessed default organization
+ * here contradicted the one screen whose whole purpose is choosing one — the
+ * header's own switcher (and the drawer's copy) showed that guess as
+ * `aria-current`/active, `OrganizationSwitcher.tsx`'s own `!isActive` guard
+ * made clicking it a no-op, and the drawer's nav navigated into it — the
+ * guessed organization was the one entry you could not actually pick from
+ * the header. `activeOrganizationId={undefined}` is `SignedInChrome`'s own
+ * existing "no organization at all" case (its own module comment: no
+ * organization switcher and no organization-scoped nav) — the identical
+ * treatment a genuinely relationship-less account already gets on every
+ * other standalone page, applied here on purpose rather than only by
+ * accident of having none: nothing in the header claims to already be
+ * acting anywhere, and the page body's own `OrganizationList` (which never
+ * received an `activeOrganizationId` either) is the one place to choose, in
+ * this render, exactly as intended.
  */
 function renderOrganizationsList(
   account: AccountSummary,
   navigate: (route: Route, options?: { replace?: boolean }) => void,
   onSignedOut: () => void
 ) {
-  const defaultOrganization = resolveDefaultOrganization(account)
   return (
     <SignedInChrome
       account={account}
-      activeOrganizationId={defaultOrganization?.organizationId}
-      isMember={defaultOrganization?.isMember ?? false}
+      activeOrganizationId={undefined}
+      isMember={false}
       navigate={navigate}
       onSignedOut={onSignedOut}
     >

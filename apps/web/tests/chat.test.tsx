@@ -377,6 +377,14 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(thread.scrollTop).toBe(100))
+    // `resolvePost` is assigned by `postChatMessage`'s own mock when the
+    // component calls it. The thread scrolls as soon as the student's own
+    // message renders optimistically, which can happen a tick before that
+    // call — so waiting on `scrollTop` alone is not waiting for the promise
+    // this test is about to resolve. Under a loaded machine that gap opened
+    // wide enough to reach `resolvePost` while it was still the throwing
+    // placeholder.
+    await waitFor(() => expect(postChatMessage).toHaveBeenCalled())
 
     // The transcript grows again once the reply lands — a taller thread
     // than the student's own message alone produced. If the effect only
@@ -430,6 +438,14 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(thread.scrollTop).toBe(100))
+    // `resolvePost` is assigned by `postChatMessage`'s own mock when the
+    // component calls it. The thread scrolls as soon as the student's own
+    // message renders optimistically, which can happen a tick before that
+    // call — so waiting on `scrollTop` alone is not waiting for the promise
+    // this test is about to resolve. Under a loaded machine that gap opened
+    // wide enough to reach `resolvePost` while it was still the throwing
+    // placeholder.
+    await waitFor(() => expect(postChatMessage).toHaveBeenCalled())
     expect(screen.queryByTestId('new-messages-button')).not.toBeInTheDocument()
 
     // The reader scrolls back up to reread something while the reply is

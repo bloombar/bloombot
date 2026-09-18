@@ -13888,3 +13888,18 @@ child and then its parent uses `vi`'s fake clock (`vi.setSystemTime`) to force t
 deliberately — an honest admission that the collision is real and the tests are working around it, not proof it
 cannot happen with a real clock, where two deletes issued in the same request-handling millisecond are
 entirely possible.
+
+## D-139 — `apps/web`: WEB-74 — a course's Discord server chooser shows the option's own text, not both name and id
+
+**Each `<option>`'s visible text is `binding.serverName ?? binding.serverId`** (`pages/CourseEditor.tsx`'s
+Discord-tab selector), not the "name, id alongside" pairing `DiscordServerRow` (`InstallButton.tsx`) uses for
+the organization's own Discord screen. A `<select>` option renders as a single line of plain text — there is
+no room for a secondary, de-emphasised id the way a row's own `<p>` can hold `<span>`/`<code>` side by side —
+so showing both would either run them together illegibly or force an arbitrary separator that reads worse
+than picking one. The id stays discoverable through the saved value itself (an operator inspecting the page,
+or simply knowing which server they picked) rather than being carried in the label. The `value` submitted on
+save is unchanged — still the snowflake `serverId` — so this is a label-only change; `discordServerId` in the
+saved course record never becomes a name.
+
+A binding with `serverName: null` (WEB-68: never reinstalled since that slice) falls back to the id exactly
+as the option read before this slice, matching `DiscordServerRow`'s own fallback and requiring no backfill.

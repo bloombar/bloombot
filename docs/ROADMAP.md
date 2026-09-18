@@ -475,3 +475,12 @@ filtering back down to the course already on screen. This phase closes those gap
 administrator's own way into the console, and makes the drawer close on an outside click.
 
 **In scope:** WEB-59, WEB-60, WEB-61, WEB-62, WEB-63, WEB-64
+
+## Phase 39 — Reading a conversation across surfaces
+
+A conversation can span Discord, the web panel and an assistant, and the messages table has recorded which
+surface each message came from — and its Discord category and channel — since CONV-1. None of it ever
+reached a screen: a transcript showed "<name> — asked" and "<name> — answered" with no time, no surface and
+no way to filter by one. This phase puts that on the message and adds the filter.
+
+**In scope:** WEB-65, WEB-66

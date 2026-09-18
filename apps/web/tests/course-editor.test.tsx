@@ -3153,3 +3153,55 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
     expect(afterSave.at(-1)).not.toHaveAttribute('aria-invalid', 'true')
   })
 })
+
+/**
+ * WEB-62: a way into this course's own chat, from the course screen itself
+ * — the same handoff `components/CourseRows.tsx`'s own row already offers
+ * on the project and organization screens (WEB-28), rather than this
+ * screen having none at all.
+ */
+describe('CourseEditor — Chat button (WEB-62)', () => {
+  it('renders a Chat button for an existing course and opens chat for it', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    const onOpenChat = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onOpenChat={onOpenChat}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Chat about "Web Design"' })
+    )
+
+    expect(onOpenChat).toHaveBeenCalledWith('course-1')
+  })
+
+  // A brand-new, unsaved course has no chat to open yet — the same
+  // "existing record only" gate every other course-scoped section on this
+  // screen already uses (join links, attachments, people, …).
+  it('offers no Chat button for a course that does not exist yet', () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.queryByRole('button', { name: /^Chat/ })
+    ).not.toBeInTheDocument()
+  })
+})

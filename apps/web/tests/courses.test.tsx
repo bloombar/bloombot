@@ -20,6 +20,15 @@ const {
   downloadTextFile,
   previewDeleteCourse,
   deleteCourse,
+  // WEB-61 — `Courses` now carries the project's own kebab too
+  // (`hooks/useProjectMenu.tsx`), so every test in this file needs these
+  // mocked, not only the ones below that assert on them.
+  archiveProject,
+  unarchiveProject,
+  renameProject,
+  duplicateProject,
+  previewDeleteProject,
+  deleteProject,
 } = vi.hoisted(() => ({
   listCourses: vi.fn(),
   enableCourse: vi.fn(),
@@ -28,6 +37,12 @@ const {
   downloadTextFile: vi.fn(),
   previewDeleteCourse: vi.fn(),
   deleteCourse: vi.fn(),
+  archiveProject: vi.fn(),
+  unarchiveProject: vi.fn(),
+  renameProject: vi.fn(),
+  duplicateProject: vi.fn(),
+  previewDeleteProject: vi.fn(),
+  deleteProject: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -43,6 +58,12 @@ vi.mock('../src/api/client.js', async () => {
     downloadTextFile,
     previewDeleteCourse,
     deleteCourse,
+    archiveProject,
+    unarchiveProject,
+    renameProject,
+    duplicateProject,
+    previewDeleteProject,
+    deleteProject,
   }
 })
 
@@ -75,6 +96,13 @@ const COURSE: CourseSummary = {
   aiApprovedAt: 1000,
 }
 
+/** WEB-61 — opens the project's own kebab menu (distinct from a course row's own, above, by name: the project's is named after `project.name`, never a course title). */
+function openProjectMenu(projectName: string) {
+  fireEvent.click(
+    screen.getByRole('button', { name: `Actions for "${projectName}"` })
+  )
+}
+
 /** Opens a course row's own kebab menu, by its own `aria-label` (WEB-26) — every menu item test below goes through this rather than reaching the item directly, so it also proves the item is actually reachable behind the row's own control. */
 function openCourseMenu(courseTitle: string) {
   fireEvent.click(
@@ -97,6 +125,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
 
@@ -124,6 +153,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
 
@@ -146,6 +176,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
 
@@ -174,6 +205,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
 
@@ -199,6 +231,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
 
@@ -230,6 +263,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
 
@@ -251,6 +285,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -278,6 +313,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -305,6 +341,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={onOpenChat}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -340,6 +377,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     const otherProject: Project = {
@@ -355,6 +393,7 @@ describe('Courses (WEB-8)', () => {
           onBack={vi.fn()}
           onOpenCourse={vi.fn()}
           onOpenChat={vi.fn()}
+          onProjectChanged={vi.fn()}
         />
       )
     )
@@ -384,6 +423,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={onOpenCourse}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -416,6 +456,7 @@ describe('Courses (WEB-8)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -483,6 +524,7 @@ describe('Courses — export (WEB-39)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -529,6 +571,7 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -550,6 +593,7 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -585,6 +629,7 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -636,6 +681,7 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
         onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
@@ -654,5 +700,340 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
 
     expect(await screen.findByRole('alert')).toBeInTheDocument()
     expect(await screen.findByText('Web Design')).toBeInTheDocument()
+  })
+})
+
+/**
+ * WEB-61: the project's own screen (this component, at
+ * `/o/:organizationId/projects/:projectId`) now carries the same kebab menu
+ * `pages/Projects.tsx`'s own row shows for this project — Archive/Restore,
+ * Duplicate, Import, Rename, Delete, through the shared
+ * `hooks/useProjectMenu.tsx` — proving each item is reachable and dispatches
+ * the same action `tests/projects.test.tsx` already pins for the row.
+ */
+describe('Courses — the project screen carries the same menu its row does (WEB-61)', () => {
+  it('sits in the row holding "New course," immediately to its left', async () => {
+    listCourses.mockResolvedValue([])
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    const kebab = screen.getByRole('button', {
+      name: 'Actions for "Fall 2026"',
+    })
+    const newCourse = screen.getByRole('button', { name: 'New course' })
+    // `compareDocumentPosition` — DOCUMENT_POSITION_FOLLOWING (4) means
+    // `newCourse` comes *after* `kebab` in the DOM, i.e. the kebab is to
+    // its left.
+    expect(
+      kebab.compareDocumentPosition(newCourse) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
+  it('offers every item the row does — Archive/Restore, Duplicate, Import, Rename, Delete, in that order', async () => {
+    listCourses.mockResolvedValue([])
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    openProjectMenu('Fall 2026')
+    const menu = screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+    const items = within(menu).getAllByRole('button')
+    expect(items.map((item) => item.textContent)).toEqual([
+      'Archive',
+      'Duplicate',
+      'Import',
+      'Rename',
+      'Delete',
+    ])
+  })
+
+  it('archives the project through the same non-destructive confirmation the row uses, and reports the archived project back', async () => {
+    listCourses.mockResolvedValue([])
+    archiveProject.mockResolvedValue({ archived: true })
+    const onProjectChanged = vi.fn()
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={onProjectChanged}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Archive' })
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Archive Fall 2026?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }))
+
+    await waitFor(() =>
+      expect(archiveProject).toHaveBeenCalledWith('org-1', 'project-1')
+    )
+    // `projects.archive` returns only `{ archived: boolean }`
+    // (`hooks/useProjectMenu.tsx`'s own doc comment on why) — this screen's
+    // own heading has no archived badge of its own to check, so this pins
+    // the one thing observable from here: the caller is told, so its own
+    // "Restore" label (once it re-renders `Courses` with the updated
+    // project) is not still offering "Archive" for a project that already
+    // is.
+    await waitFor(() =>
+      expect(onProjectChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'project-1',
+          archivedAt: expect.any(Number),
+        })
+      )
+    )
+  })
+
+  it('renames the project through the same prompt modal the row uses, and reports the renamed project back (this screen does not own the record its own heading names)', async () => {
+    listCourses.mockResolvedValue([])
+    const renamed = { ...PROJECT, name: 'Autumn 2026' }
+    renameProject.mockResolvedValue(renamed)
+    const onProjectChanged = vi.fn()
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={onProjectChanged}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Rename' })
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Rename "Fall 2026"',
+    })
+    fireEvent.change(within(dialog).getByLabelText('Project name'), {
+      target: { value: 'Autumn 2026' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rename' }))
+
+    await waitFor(() =>
+      expect(renameProject).toHaveBeenCalledWith(
+        'org-1',
+        'project-1',
+        'Autumn 2026'
+      )
+    )
+    // WEB-61 — `pages/ProjectsPanel.tsx` is what actually holds `project`;
+    // this is the cue it updates in place. Fails without it: the caller
+    // (here, the real `ProjectsPanel`) would keep passing the *old*
+    // `project`, and this screen's own heading — `project.name` — would
+    // still read "Fall 2026" after a successful rename.
+    await waitFor(() => expect(onProjectChanged).toHaveBeenCalledWith(renamed))
+  })
+
+  it('duplicates the project through the same prompt modal, reporting the same disabled-courses notice', async () => {
+    listCourses.mockResolvedValue([])
+    duplicateProject.mockResolvedValue({
+      project: { ...PROJECT, id: 'project-2', name: 'Spring 2027' },
+      coursesCopied: 1,
+      coursesDisabled: true,
+    })
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Duplicate' })
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Duplicate "Fall 2026"',
+    })
+    fireEvent.change(within(dialog).getByLabelText('New project name'), {
+      target: { value: 'Spring 2027' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Duplicate' }))
+
+    await waitFor(() =>
+      expect(duplicateProject).toHaveBeenCalledWith(
+        'org-1',
+        'project-1',
+        'Spring 2027'
+      )
+    )
+    expect(await screen.findByTestId('duplicate-notice')).toHaveTextContent(
+      'Spring 2027'
+    )
+  })
+
+  it('opens the import dialog for this project', async () => {
+    listCourses.mockResolvedValue([])
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+
+    expect(
+      screen.getByText('Import a course into "Fall 2026"')
+    ).toBeInTheDocument()
+  })
+
+  it('Delete previews and confirms by typing the project’s own name, the same as the row does, before deleteProject is ever called', async () => {
+    listCourses.mockResolvedValue([])
+    previewDeleteProject.mockResolvedValue({
+      organizationId: 'org-1',
+      projectId: 'project-1',
+      projectName: 'Fall 2026',
+      courses: 2,
+      conversations: 3,
+      messages: 12,
+      enrolments: 2,
+      courseAttachments: 1,
+    })
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('2 course(s)')
+
+    // Typing the wrong name never calls through.
+    const field = within(dialog).getByLabelText('Project name')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    expect(confirmButton).toBeDisabled()
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    expect(confirmButton).toBeDisabled()
+    expect(deleteProject).not.toHaveBeenCalled()
+
+    fireEvent.change(field, { target: { value: 'Fall 2026' } })
+    expect(confirmButton).not.toBeDisabled()
+  })
+
+  // WEB-61 — deleting the project this screen names leaves nothing here to
+  // show, so it must navigate away rather than merely refresh (the fate
+  // every other project mutation gets). `onBack` is the same "go somewhere
+  // that still exists" control the `← Projects` button already is.
+  it('after Delete succeeds, navigates back to the project list rather than staying on a project that no longer exists', async () => {
+    listCourses.mockResolvedValue([])
+    previewDeleteProject.mockResolvedValue({
+      organizationId: 'org-1',
+      projectId: 'project-1',
+      projectName: 'Fall 2026',
+      courses: 0,
+      conversations: 0,
+      messages: 0,
+      enrolments: 0,
+      courseAttachments: 0,
+    })
+    deleteProject.mockResolvedValue({
+      organizationId: 'org-1',
+      projectId: 'project-1',
+      projectName: 'Fall 2026',
+      courses: 0,
+      conversations: 0,
+      messages: 0,
+      enrolments: 0,
+      courseAttachments: 0,
+    })
+    const onBack = vi.fn()
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={onBack}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Project name'), {
+      target: { value: 'Fall 2026' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(deleteProject).toHaveBeenCalledWith('org-1', 'project-1')
+    )
+    await waitFor(() => expect(onBack).toHaveBeenCalled())
   })
 })

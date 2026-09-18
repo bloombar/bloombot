@@ -12954,3 +12954,75 @@ file already takes (`renameProject`/`archiveProject`, immediately above where th
 caller reads `renameOrganization`'s own resolved value — both re-read `GET /auth/me` instead (this file's own
 module comment on why) — so its return type is the minimal `{ id: string; name: string }` rather than a full
 `Organization` type this bundle has never needed to declare before.
+
+## D-123 — `apps/web`/`apps/api`: WEB-59..62 — the admin link, the drawer's outside click, and two controls that were missing
+
+**Problem.** Four small, independent gaps: the drawer never offered a platform administrator a way into the
+console; a click outside the drawer did nothing, unlike `Escape`; the project's own screen carried no menu
+for the same actions its row offers; the course's own screen carried no way into its chat.
+
+**WEB-59 — `isPlatformAdministrator` is read live, per request, in `routes/auth.ts`, and shipped as a plain
+boolean on `GET /auth/me`'s `account`, never cached alongside the session or inferred in the browser.**
+`@bloombot/auth`'s own `isPlatformAdministrator` already reads `ADMIN_EMAILS` from the environment on every
+call (`packages/config/src/admin.ts`'s own module comment: "takes effect by editing the environment, with no
+restart") — the API route just has to call it on every `/auth/me`, not once at sign-in, or granting an
+administrator mid-session would need a fresh sign-in to take effect. `components/SignedInChrome.tsx`'s own
+`adminGroup` is a third `navGroups` entry, appended unconditionally after the organization-scoped groups
+(including the empty array a standalone page with no organization at all produces) — the admin console is
+not organization-scoped either (`App.tsx`'s own module comment on `/platform-admin`), so gating this on
+`activeOrganizationId`/`isMember` the way `everydayGroup`/`organizationGroup` are would have hidden the link
+on exactly the pages (`/connect/:id`, `/account`) an administrator most plausibly reaches it from.
+
+**WEB-60 — the backdrop click is `event.target === event.currentTarget` on the `<dialog>`'s own `onClick`,
+reusing `closeDrawer` directly, not a second listener.** A click on the native `<dialog>`'s backdrop
+dispatches its `click` event with `target` set to the dialog element itself — there is no other element
+there to receive it — while every real control inside the drawer is a descendant, so its own click bubbles up
+with `target` set to that descendant, never the dialog. This is the same device a `<dialog>`-as-modal
+implementation commonly uses for "close on backdrop click," verified directly rather than assumed:
+`tests/app-shell.test.tsx`'s own new cases fire a `click` at the dialog itself (backdrop) and at a descendant
+inside it (not backdrop), and only the first closes.
+
+**WEB-61 — the row's own kebab (item list, handlers, confirmations) moved to a new hook,
+`hooks/useProjectMenu.tsx`, called once at each caller's own top level — not a shared component.**
+`components/CourseRows.tsx` is the precedent for "one implementation of a row's own menu," but it is a
+component precisely because `pages/Projects.tsx` mounts one *per project*, inside a `.map()` — each instance
+needs its own React fiber (and thus its own hook state) to keep two projects' own busy/error/notice state from
+colliding. The project menu is the opposite shape: `pages/Projects.tsx` already kept exactly one
+`busyProjectId`/`error`/`duplicateNotice` for the whole page (not one per row) before this slice, and
+`pages/Courses.tsx` (the project's own screen) only ever needs one instance for the one project it names. A
+hook called once per caller's own render, exposing `itemsFor(project): KebabMenuItem[]` for `Projects.tsx` to
+call inside its own `.map()` — legal because the *hook itself* is not called there, only the plain function it
+returns — reuses the exact page-level state shape both screens already had, rather than restructuring
+`Projects.tsx`'s per-row state to match a component that was never how this particular menu was scoped.
+
+**`Courses.tsx` (the project's own screen) does not own the `Project` it renders — `pages/ProjectsPanel.tsx`
+resolves it once, from the route's own id (`useResolvedProject`) — so Archive/Restore/Rename need a way to
+correct that resolved copy, or the screen's own heading reads stale until it is left and reached again.**
+The first pass of this slice left `onChanged` as a no-op on `Courses.tsx`, on the theory that "no live
+project refetch" was an acceptable, pre-existing limit (nothing on this screen refetches `project` today).
+This was wrong, caught by this slice's own e2e test (`e2e/projects-row-menus.spec.ts`): renaming a project
+from its own screen's kebab and expecting the heading to still read the old name is not a reasonable reading
+of "the same behaviour" the brief asks for — the row's own copy on `Projects.tsx` updates immediately (a
+relist), and a screen offering the identical menu that visibly does nothing is worse than one that offered
+no menu at all. Fixed by giving `Courses` a new `onProjectChanged: (project: Project) => void` prop,
+threaded from `hooks/useProjectMenu.tsx`'s own `onChanged` — called with the renamed/restored project
+`renameProject`/`unarchiveProject` actually return, or (`projects.archive` returns only `{ archived: boolean
+}`) a reconstructed copy for the one case the action does not echo back — and `ProjectsPanel.tsx` updates its
+own `resolution` state in place, no refetch. Duplicate and Import are deliberately excluded: neither changes
+the project this screen names (Duplicate creates a second one; Import adds a course to this one), so only
+their own notice fires.
+
+**Delete gets its own, distinct callback (`onDeleted`/`onBack`), not `onProjectChanged`.** The project this
+screen names is gone, not merely different — `pages/Courses.tsx`'s own `onBack` (already the target of the
+`← Projects` control) is the "go somewhere that still exists" cue, matching the brief's own text. `Projects.tsx`
+treats Delete identically to every other mutation (`refresh()`), since a deleted row disappearing from a
+relist already is "navigating away," for a list.
+
+**WEB-62 — `onOpenChat` on `CourseEditor` is optional, defaulting to a no-op, rather than required.**
+`pages/ProjectsPanel.tsx` always has a real one to thread through (the same `onOpenChat` `Courses`/`Projects`
+already take), but `tests/course-editor.test.tsx` mounts `CourseEditor` directly at roughly thirty call
+sites, almost none of which exercise Chat. Required would have meant a mechanical edit to all of them for a
+button most of that file does not care about — the same trade-off `onNavigateTab` on this same component
+already made, one slice earlier, for the identical reason. The Chat button itself is gated on
+`courseId !== undefined`, the same "existing record only" rule every other course-scoped section on this
+screen already follows — a course that has not been saved yet has no chat to open.

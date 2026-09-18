@@ -104,6 +104,13 @@
  * `courseId !== undefined`, unchanged by this slice), so there is nothing
  * worth splitting into tabs; it keeps the single-form layout it always
  * had, and `tab`/`onNavigateTab` are simply not read.
+ *
+ * WEB-62: this screen also carries a **Chat** button, in the row holding
+ * the course title, at its trailing edge — the same way into a course's
+ * chat `components/CourseRows.tsx`'s own row already offers on the project
+ * and organization screens (WEB-28), rather than this screen having no way
+ * in at all. Gated the same "existing record only" way as everything else
+ * above — a course that has not been saved yet has no chat to open.
  */
 
 import {
@@ -154,7 +161,13 @@ import {
 } from '../components/Skeleton.js'
 import { useFormDirty } from '../hooks/useFormDirty.js'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard.js'
-import { AddIcon, DeleteIcon, ErrorIcon, WarningIcon } from '../icons.js'
+import {
+  AddIcon,
+  ChatIcon,
+  DeleteIcon,
+  ErrorIcon,
+  WarningIcon,
+} from '../icons.js'
 
 export interface CourseEditorProps {
   organizationId: string
@@ -176,6 +189,8 @@ export interface CourseEditorProps {
   onNavigateTab?: (tab: CourseEditorTab) => void
   /** WEB-36 — threaded straight through to `components/CoursePeople.tsx`'s own People tab, so a click on a person's name there can push that person's transcript address; see that file's own module comment for the click itself. */
   navigate: (route: Route, options?: { replace?: boolean }) => void
+  /** WEB-62 — the same Chat handoff `components/CourseRows.tsx`'s own row already offers on the project and organization screens (WEB-28), so this screen's own Chat button opens the identical chat rather than a second implementation of "switch the shell to its Chat tab with this course selected." Only ever called with `courseId` itself — the button that calls it is gated on `courseId !== undefined` below (a new, unsaved course has no chat to open). Optional, the same way `onNavigateTab` above is — most of `tests/course-editor.test.tsx` does not care, and the button itself simply does nothing if clicked with none supplied. */
+  onOpenChat?: (courseId: string) => void
   onSaved: (course: Course) => void
   onCancel: () => void
   /**
@@ -424,6 +439,7 @@ export function CourseEditor({
   tab,
   onNavigateTab,
   navigate,
+  onOpenChat,
   onSaved,
   onCancel,
   savedClearAfterMs = DEFAULT_SAVED_CLEAR_AFTER_MS,
@@ -1808,9 +1824,27 @@ export function CourseEditor({
       <Button variant="ghost" onClick={() => void handleCancel()}>
         ← {project.name}
       </Button>
-      <h1 className="text-page-title font-semibold text-neutral-900">
-        {courseId === undefined ? 'New course' : form.title || 'Course'}
-      </h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-page-title font-semibold text-neutral-900">
+          {courseId === undefined ? 'New course' : form.title || 'Course'}
+        </h1>
+        {/* WEB-62 — the same way into this course's chat
+            `components/CourseRows.tsx`'s own row already offers elsewhere,
+            at this row's trailing edge. Only for a course that already
+            exists (`courseId !== undefined`) — a new, unsaved course has no
+            chat to open yet, the same "existing record only" gate every
+            other course-scoped section on this screen already uses. */}
+        {courseId !== undefined && (
+          <Button
+            variant="secondary"
+            icon={<ChatIcon aria-hidden="true" className="size-4" />}
+            aria-label={`Chat about "${form.title || 'Course'}"`}
+            onClick={() => onOpenChat?.(courseId)}
+          >
+            Chat
+          </Button>
+        )}
+      </div>
 
       {/* COST-8/SURF-10 — an existing course's owner sees the same pending
           state a student asking it would be told about, rather than

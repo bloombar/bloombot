@@ -45,10 +45,11 @@ export interface ConnectedOrganizationSummary {
   organizationName: string
 }
 
-/** `GET /auth/me`'s `account` field — `null` for an anonymous or dead session. `email` (LINK-6): `pages/Connect.tsx` names the account signed in, not merely which organizations it belongs to. */
+/** `GET /auth/me`'s `account` field — `null` for an anonymous or dead session. `email` (LINK-6): `pages/Connect.tsx` names the account signed in, not merely which organizations it belongs to. `isPlatformAdministrator` (WEB-59): read live, per request, by `apps/api`'s own `routes/auth.ts` — `components/SignedInChrome.tsx` reads this to decide whether the drawer offers an **Admin** link, never inferring it itself from the email or a membership. */
 export interface AccountSummary {
   id: string
   email: string
+  isPlatformAdministrator: boolean
   memberships: MembershipSummary[]
   connectedOrganizations: ConnectedOrganizationSummary[]
 }

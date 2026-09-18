@@ -54,6 +54,11 @@
  * its own `transition-colors` (`Button.tsx`), and that bubbling event was
  * closing the drawer early, mid-slide, on an unrelated hover-color
  * transition finishing first (coordinator review finding, below).
+ *
+ * WEB-60: a click on the backdrop closes the drawer, through the same
+ * `closeDrawer` path `Escape` already takes — see the `<dialog>`'s own
+ * `onClick` below for why `event.target === event.currentTarget` is exactly
+ * "the backdrop, and nothing inside the drawer."
  */
 
 import {
@@ -317,6 +322,18 @@ export function AppShell({
           // here too, rather than the drawer vanishing outright.
           event.preventDefault()
           closeDrawer()
+        }}
+        // WEB-60: a click on the backdrop closes the drawer, the same
+        // `closeDrawer` path `Escape` already takes above. A click on the
+        // backdrop dispatches its `click` event with `target` set to the
+        // `<dialog>` element itself (there being no other element there to
+        // receive it) — `event.target === event.currentTarget` is exactly
+        // that case, and nothing else: every actual control inside the
+        // drawer (an item, the organization switcher, sign-out) is a
+        // descendant, so a click on any of *those* bubbles up with a
+        // `target` further down the tree and never reaches this branch.
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closeDrawer()
         }}
       >
         <div className="flex h-full flex-col">

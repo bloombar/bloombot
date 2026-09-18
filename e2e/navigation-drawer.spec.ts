@@ -81,3 +81,30 @@ test('the navigation drawer is the only nav at a desktop viewport, and the heade
     (organizationName ?? '').trim()
   )
 })
+
+test('a click on the backdrop closes the drawer, the same as Escape (WEB-60)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web60-${suffix}@example.edu`
+
+  await signIn(page, email)
+
+  await page.getByRole('button', { name: 'Open navigation menu' }).click()
+  const drawer = page.getByRole('dialog', { name: 'Navigation' })
+  await expect(drawer).toBeVisible()
+
+  // A click on something inside the drawer's own box must not close it —
+  // the "Menu" title bar, inert but still a descendant, is the same
+  // negative case `tests/app-shell.test.tsx`'s own unit test already pins.
+  await drawer.getByText('Menu').click()
+  await expect(drawer).toBeVisible()
+
+  // A click on the backdrop itself — outside the drawer's own box, inside
+  // the dialog's top-layer bounds — closes it. `{ position: { x: 5, y: 5 }
+  // }` lands inside the dialog element's own full-viewport box (its own
+  // `inset: 0`, `AppShell.tsx`) but well outside the 16rem-wide drawer panel
+  // itself, which is exactly what a real backdrop click is.
+  await drawer.click({ position: { x: 700, y: 5 } })
+  await expect(drawer).toBeHidden()
+})

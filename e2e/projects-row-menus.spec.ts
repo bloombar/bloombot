@@ -176,3 +176,126 @@ test('a project is created through the "New project" modal, renamed through its 
     thread.getByRole('heading', { level: 1, name: 'Bloombot' })
   ).toBeVisible()
 })
+
+/**
+ * WEB-61/WEB-62, end to end: the project's own screen
+ * (`/o/:organizationId/projects/:projectId`) carries the same kebab menu the
+ * project's row does — proven here by renaming *from that screen*, not the
+ * row — and the course's own screen carries a Chat button that opens a real
+ * chat for it, the same harness the spec above already uses.
+ */
+test("a project is renamed from its own screen's kebab, and a course's own screen opens a real chat for it (WEB-61, WEB-62)", async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web61-${suffix}@example.edu`
+  const projectName = `Spring 2027 — ${suffix}`
+  const renamedProjectName = `Summer 2027 — ${suffix}`
+  const courseTitle = `Intro to Design — ${suffix}`
+  const studentsRole = `students-${suffix}`
+  const adminsRole = `admins-${suffix}`
+
+  await signIn(page, email)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await navigateTo(page, 'Projects')
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await expect(
+    page.getByRole('button', { name: projectName, exact: true })
+  ).toBeVisible()
+
+  // Into the project's own screen.
+  await page.getByRole('button', { name: projectName, exact: true }).click()
+  await expect(
+    page.getByRole('heading', { name: projectName, level: 1 })
+  ).toBeVisible()
+
+  // WEB-61: the same kebab the row offered on the Projects list, now on the
+  // project's own screen — immediately left of "New course."
+  const kebab = page.getByRole('button', {
+    name: `Actions for "${projectName}"`,
+  })
+  const newCourseButton = page.getByRole('button', { name: 'New course' })
+  await expect(kebab).toBeVisible()
+  const kebabBox = await kebab.boundingBox()
+  const newCourseBox = await newCourseButton.boundingBox()
+  if (!kebabBox || !newCourseBox) throw new Error('setup failed: no layout')
+  expect(kebabBox.x).toBeLessThan(newCourseBox.x)
+
+  await kebab.click()
+  await page
+    .getByRole('group', { name: `Actions for "${projectName}"` })
+    .getByRole('button', { name: 'Rename' })
+    .click()
+  const renameDialog = page.getByRole('dialog', {
+    name: `Rename "${projectName}"`,
+  })
+  await renameDialog.getByLabel('Project name').fill(renamedProjectName)
+  await renameDialog.getByRole('button', { name: 'Rename' }).click()
+  await expect(
+    page.getByRole('heading', { name: renamedProjectName, level: 1 })
+  ).toBeVisible()
+
+  // Define and enable a course, the same two steps the spec above drives.
+  await page.getByRole('button', { name: 'New course' }).click()
+  await page.getByLabel('Title').fill(courseTitle)
+  await page.getByLabel('Admins role').fill(adminsRole)
+  await page.getByLabel('Students role').fill(studentsRole)
+  await page.getByLabel('Enabled').check()
+  await page.getByRole('button', { name: 'Save course' }).click()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
+
+  // Seed this account's own enrolment and approve the course — the same
+  // harness stand-in the spec above already uses — so Chat has something
+  // to answer once the course screen's own Chat button opens it.
+  const db = openDatabase(E2E_DATABASE_PATH)
+  try {
+    const account = accounts.getAccountByEmail(email, db)
+    if (!account) throw new Error('setup failed: account not found')
+    const [membership] = memberships.listMembershipsForAccount(account.id, db)
+    if (!membership) throw new Error('setup failed: membership not found')
+    const organizationId = membership.organizationId
+
+    const project = projects
+      .listProjects(organizationId, db)
+      .find((candidate) => candidate.name === renamedProjectName)
+    if (!project) throw new Error('setup failed: project not found')
+    const course = courses
+      .listCourses(organizationId, db, { projectId: project.id })
+      .find((candidate) => candidate.title === courseTitle)
+    if (!course) throw new Error('setup failed: course not found')
+
+    approveCourseForE2e(db, organizationId, course.id)
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: account.id },
+      db
+    )
+    if (!person) throw new Error('setup failed: no connected web person')
+    const enrolled = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      db
+    )
+    if (!enrolled) throw new Error('setup failed: enrolment refused')
+  } finally {
+    closeDatabase(db)
+  }
+
+  // WEB-62: the course's own screen — no back-and-forth through the project
+  // list's own row — carries the same way into chat. No reload needed:
+  // `courseId` is already defined the moment the save above lands on this
+  // screen (`onSaved`'s own `replace` navigation), which is all the Chat
+  // button is gated on.
+  await page
+    .getByRole('button', { name: `Chat about "${courseTitle}"` })
+    .click()
+  await expect(
+    page.getByRole('heading', { name: 'Chat', level: 1 })
+  ).toBeVisible()
+  await expect(page.getByText(courseTitle)).toBeVisible()
+})

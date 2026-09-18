@@ -19,7 +19,7 @@ const {
   exportCourse,
   downloadTextFile,
   previewDeleteCourse,
-  deleteCourse,
+  softDeleteCourse,
   // WEB-61 — `Courses` now carries the project's own kebab too
   // (`hooks/useProjectMenu.tsx`), so every test in this file needs these
   // mocked, not only the ones below that assert on them.
@@ -28,7 +28,7 @@ const {
   renameProject,
   duplicateProject,
   previewDeleteProject,
-  deleteProject,
+  softDeleteProject,
   importCourse,
 } = vi.hoisted(() => ({
   listCourses: vi.fn(),
@@ -37,13 +37,13 @@ const {
   exportCourse: vi.fn(),
   downloadTextFile: vi.fn(),
   previewDeleteCourse: vi.fn(),
-  deleteCourse: vi.fn(),
+  softDeleteCourse: vi.fn(),
   archiveProject: vi.fn(),
   unarchiveProject: vi.fn(),
   renameProject: vi.fn(),
   duplicateProject: vi.fn(),
   previewDeleteProject: vi.fn(),
-  deleteProject: vi.fn(),
+  softDeleteProject: vi.fn(),
   importCourse: vi.fn(),
 }))
 
@@ -59,13 +59,13 @@ vi.mock('../src/api/client.js', async () => {
     exportCourse,
     downloadTextFile,
     previewDeleteCourse,
-    deleteCourse,
+    softDeleteCourse,
     archiveProject,
     unarchiveProject,
     renameProject,
     duplicateProject,
     previewDeleteProject,
-    deleteProject,
+    softDeleteProject,
     importCourse,
   }
 })
@@ -616,9 +616,16 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
     expect(dialog).toHaveTextContent('2 enrolment(s)')
     expect(dialog).toHaveTextContent('1 knowledge file(s)')
 
+    // PROJ-11 — this row's own delete is the reversible one now: the
+    // dialog says so, and never claims this "cannot be undone."
+    expect(dialog).toHaveTextContent(
+      'It is reversible for the deployment’s retention window, and permanent after that.'
+    )
+    expect(dialog).not.toHaveTextContent('cannot be undone')
+
     // Cancelling deletes nothing.
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
-    expect(deleteCourse).not.toHaveBeenCalled()
+    expect(softDeleteCourse).not.toHaveBeenCalled()
   })
 
   it('typing the wrong title keeps the dialog open and never calls through; the exact title proceeds and the row disappears', async () => {
@@ -654,15 +661,15 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
     expect(confirmButton).toBeDisabled()
     fireEvent.change(field, { target: { value: 'the wrong title' } })
     expect(confirmButton).toBeDisabled()
-    expect(deleteCourse).not.toHaveBeenCalled()
+    expect(softDeleteCourse).not.toHaveBeenCalled()
 
     fireEvent.change(field, { target: { value: 'Web Design' } })
     expect(confirmButton).not.toBeDisabled()
-    deleteCourse.mockResolvedValue(PREVIEW)
+    softDeleteCourse.mockResolvedValue(PREVIEW)
     fireEvent.click(confirmButton)
 
     await waitFor(() =>
-      expect(deleteCourse).toHaveBeenCalledWith('org-1', 'course-1')
+      expect(softDeleteCourse).toHaveBeenCalledWith('org-1', 'course-1')
     )
     // The list refetches on success — the row is gone.
     await waitFor(() =>
@@ -673,7 +680,7 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
   it('a failed delete is reported and the row stays', async () => {
     listCourses.mockResolvedValue([COURSE])
     previewDeleteCourse.mockResolvedValue(PREVIEW)
-    deleteCourse.mockRejectedValue(
+    softDeleteCourse.mockRejectedValue(
       new ApiError(403, { error: 'not_authorized' })
     )
 
@@ -1002,7 +1009,7 @@ describe('Courses — the project screen carries the same menu its row does (WEB
     expect(listCourses).toHaveBeenCalledTimes(2)
   })
 
-  it('Delete previews and confirms by typing the project’s own name, the same as the row does, before deleteProject is ever called', async () => {
+  it('Delete previews and confirms by typing the project’s own name, the same as the row does, before softDeleteProject is ever called', async () => {
     listCourses.mockResolvedValue([])
     previewDeleteProject.mockResolvedValue({
       organizationId: 'org-1',
@@ -1044,7 +1051,7 @@ describe('Courses — the project screen carries the same menu its row does (WEB
     expect(confirmButton).toBeDisabled()
     fireEvent.change(field, { target: { value: 'the wrong name' } })
     expect(confirmButton).toBeDisabled()
-    expect(deleteProject).not.toHaveBeenCalled()
+    expect(softDeleteProject).not.toHaveBeenCalled()
 
     fireEvent.change(field, { target: { value: 'Fall 2026' } })
     expect(confirmButton).not.toBeDisabled()
@@ -1066,7 +1073,7 @@ describe('Courses — the project screen carries the same menu its row does (WEB
       enrolments: 0,
       courseAttachments: 0,
     })
-    deleteProject.mockResolvedValue({
+    softDeleteProject.mockResolvedValue({
       organizationId: 'org-1',
       projectId: 'project-1',
       projectName: 'Fall 2026',
@@ -1103,7 +1110,7 @@ describe('Courses — the project screen carries the same menu its row does (WEB
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
     await waitFor(() =>
-      expect(deleteProject).toHaveBeenCalledWith('org-1', 'project-1')
+      expect(softDeleteProject).toHaveBeenCalledWith('org-1', 'project-1')
     )
     await waitFor(() => expect(onBack).toHaveBeenCalled())
   })

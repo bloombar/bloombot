@@ -16,7 +16,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import type {
   Database,
@@ -29,6 +29,7 @@ import {
   courseSelfEnrolmentIntents,
   enrolments,
   messages,
+  organizations,
   people,
   personIdentities,
   rosterChannelAssignments,
@@ -350,6 +351,176 @@ export function listConnectedOrganizationsForAccount(
         eq(personIdentities.surface, 'web'),
         eq(personIdentities.externalId, accountId),
         isNotNull(people.connectedAt)
+      )
+    )
+    .all()
+}
+
+/** ADMIN-11 — one organization `listConnectedOrganizationsWithNamesForAccount` reports, the same shape `ConnectedOrganization` above with its name joined in. */
+export interface ConnectedOrganizationWithName {
+  organizationId: string
+  organizationName: string
+  personId: string
+}
+
+/**
+ * ADMIN-11: the same read `listConnectedOrganizationsForAccount` (above)
+ * already is, with the organization's own name joined in — the account's
+ * own console screen names each connected organization, not merely its id.
+ *
+ * TEN-2 exception, the same class `listConnectedOrganizationsForAccount`
+ * already is, allowlisted in `tests/tenant-scoping-convention.test.ts`
+ * accordingly.
+ */
+export function listConnectedOrganizationsWithNamesForAccount(
+  accountId: string,
+  db: Executor
+): ConnectedOrganizationWithName[] {
+  return db
+    .select({
+      organizationId: people.organizationId,
+      organizationName: organizations.name,
+      personId: people.id,
+    })
+    .from(people)
+    .innerJoin(
+      personIdentities,
+      and(
+        eq(personIdentities.personId, people.id),
+        eq(personIdentities.organizationId, people.organizationId)
+      )
+    )
+    .innerJoin(organizations, eq(organizations.id, people.organizationId))
+    .where(
+      and(
+        eq(personIdentities.surface, 'web'),
+        eq(personIdentities.externalId, accountId),
+        isNotNull(people.connectedAt)
+      )
+    )
+    .all()
+}
+
+/** ADMIN-11 — one person record `listPeopleForAccount` reports, with every identity ever proven on it. */
+export interface AccountPersonRecord {
+  personId: string
+  organizationId: string
+  organizationName: string
+  displayName: string | null
+  email: string | null
+  githubHandle: string | null
+  connectedAt: number | null
+  createdAt: number
+  identities: { surface: Surface; externalId: string; createdAt: number }[]
+}
+
+/**
+ * ADMIN-11: every person record `accountId` is connected to, across every
+ * organization, each with every identity ever proven on it (PPL-2) — not
+ * only the `web` one `listConnectedOrganizationsWithNamesForAccount` names.
+ * PPL-1's own catalogue of an account's own people, for the account's
+ * console screen.
+ *
+ * Batched in three queries total regardless of how many people or
+ * identities the account holds: the connected-people read above, then one
+ * `inArray` read each for the person rows and their identities, rather than
+ * one round trip per person the way a naive per-person loop would.
+ *
+ * TEN-2 exception, the same class `listConnectedOrganizationsForAccount`
+ * already is: an account's connected people are not scoped to one
+ * organization until this call names them, allowlisted in
+ * `tests/tenant-scoping-convention.test.ts` accordingly.
+ */
+export function listPeopleForAccount(
+  accountId: string,
+  db: Database
+): AccountPersonRecord[] {
+  const connections = listConnectedOrganizationsWithNamesForAccount(
+    accountId,
+    db
+  )
+  if (connections.length === 0) return []
+
+  const personIds = connections.map((connection) => connection.personId)
+  const personRows = db
+    .select()
+    .from(people)
+    .where(inArray(people.id, personIds))
+    .all()
+  const personById = new Map(personRows.map((row) => [row.id, row]))
+
+  const identityRows = db
+    .select()
+    .from(personIdentities)
+    .where(inArray(personIdentities.personId, personIds))
+    .all()
+  const identitiesByPersonId = new Map<string, PersonIdentity[]>()
+  for (const identity of identityRows) {
+    const existing = identitiesByPersonId.get(identity.personId) ?? []
+    existing.push(identity)
+    identitiesByPersonId.set(identity.personId, existing)
+  }
+
+  return connections.flatMap((connection) => {
+    const person = personById.get(connection.personId)
+    // Unreachable in practice — `connections` was just resolved from a
+    // `people` row moments earlier, in the same call — but guarded rather
+    // than assumed, the same TEN-2 race every other lookup in this package
+    // guards against.
+    if (!person) return []
+    return [
+      {
+        personId: connection.personId,
+        organizationId: connection.organizationId,
+        organizationName: connection.organizationName,
+        displayName: person.displayName,
+        email: person.email,
+        githubHandle: person.githubHandle,
+        connectedAt: person.connectedAt,
+        createdAt: person.createdAt,
+        identities: (identitiesByPersonId.get(connection.personId) ?? []).map(
+          (identity) => ({
+            surface: identity.surface,
+            externalId: identity.externalId,
+            createdAt: identity.createdAt,
+          })
+        ),
+      },
+    ]
+  })
+}
+
+/** ADMIN-9 — one of `personIds`' own `web` identity, `listWebIdentitiesForPeople`'s own row. */
+export interface PersonWebIdentity {
+  personId: string
+  accountId: string
+}
+
+/**
+ * ADMIN-9: the account id backing each of `personIds`' own `web` identity,
+ * if any, batched in one query rather than one `getPersonIdentity` call per
+ * person — a course's own people list needs to know, for every person
+ * enrolled, whether they are reachable as a console account at all
+ * (ADMIN-11's own link), across however many people the course's roster
+ * holds.
+ */
+export function listWebIdentitiesForPeople(
+  organizationId: string,
+  personIds: string[],
+  db: Database
+): PersonWebIdentity[] {
+  if (personIds.length === 0) return []
+  return db
+    .select({
+      personId: personIdentities.personId,
+      accountId: personIdentities.externalId,
+    })
+    .from(personIdentities)
+    .where(
+      and(
+        eq(personIdentities.organizationId, organizationId),
+        eq(personIdentities.surface, 'web'),
+        inArray(personIdentities.personId, personIds)
       )
     )
     .all()

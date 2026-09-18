@@ -40,6 +40,15 @@
  * the absence of a route (a route that does not exist today says nothing
  * about one that might be added tomorrow without anyone noticing it crossed
  * this boundary).
+ *
+ * **ADMIN-7..11** add the console's own read model — an organization's, a
+ * project's and an account's own screen, and a course's screen widened from
+ * ADMIN-6's settings-only read to a full overview (structure, membership and
+ * cost, per the amended ADMIN-4, `docs/SPEC.md` §26) — but the boundary
+ * above is unchanged: every new response here is still built only from
+ * structure, membership and cost, never from `conversations`/`messages`/
+ * `courseJoinLinks`, and a course's own people are named (`AdminCourseDetail.people`,
+ * below) without ever reaching what any of them said.
  */
 
 import { Router } from 'express'
@@ -57,7 +66,10 @@ import {
   courseAttachments,
   courses,
   courseWebSources,
+  enrolments,
+  memberships,
   organizations,
+  people,
   projects,
   transcriptExports,
   type AttachmentStorage,
@@ -137,6 +149,80 @@ export interface AdminCoursesResponse {
   courses: AdminCourseSummary[]
 }
 
+/** ADMIN-7/ADMIN-8/ADMIN-11 — the least an account needs to be linked to from another entity's own screen: its id, email and display name, never anything this router's own boundary would not otherwise allow. */
+export interface AdminAccountRef {
+  accountId: string
+  email: string
+  displayName: string
+}
+
+/**
+ * ADMIN-7/ADMIN-8 — one course, as it appears inside a project's or an
+ * organization's own console screen: identity, approval state, enrolment
+ * count and cost, never its settings (that is `AdminCourseDetail`'s own,
+ * wider job, reached by following this row's own link).
+ */
+export interface AdminCourseBrief {
+  courseId: string
+  title: string
+  enabled: boolean
+  aiApprovedAt: number | null
+  enrolmentCount: number
+  totalCostMicros: number
+}
+
+/**
+ * ADMIN-7: an organization's own console screen — its identity, its usage
+ * (COST-4/COST-7), the accounts that own it, its full membership, and every
+ * project it holds with that project's own courses nested inside it, so an
+ * administrator reads the whole tenant's shape from one screen rather than
+ * following a chain of lists.
+ */
+export interface AdminOrganizationDetail {
+  organizationId: string
+  name: string
+  isPersonal: boolean
+  spendingCapMicros: number | null
+  createdAt: number
+  usage: {
+    totalCostMicros: number
+    callCount: number
+    hasEstimated: boolean
+    bySurface: costLedger.CostBySurface[]
+  }
+  owners: AdminAccountRef[]
+  members: {
+    accountId: string
+    email: string
+    displayName: string
+    role: string
+    grantedAt: number | null
+  }[]
+  projects: {
+    projectId: string
+    name: string
+    archivedAt: number | null
+    createdAt: number
+    courses: AdminCourseBrief[]
+  }[]
+}
+
+/**
+ * ADMIN-8: a project's own console screen — its identity, whether it is
+ * archived, its organization (a link back to ADMIN-7's own screen), and its
+ * courses, each carrying the same brief `AdminOrganizationDetail`'s own
+ * nested projects do.
+ */
+export interface AdminProjectDetail {
+  projectId: string
+  name: string
+  organizationId: string
+  organizationName: string
+  archivedAt: number | null
+  createdAt: number
+  courses: AdminCourseBrief[]
+}
+
 /**
  * ADMIN-6 — a Discord category a course routes on, with its channels, as an
  * administrator sees them: names only, the same "declaration, not a live
@@ -167,6 +253,27 @@ export interface AdminCourseAttachment {
 /** ADMIN-6 — one of a course's websites: the domain it is grounded in, nothing else. */
 export interface AdminCourseWebSource {
   domain: string
+}
+
+/** ADMIN-9 — one entry of a course's own approval history (`courseApproval.listApprovalEventsForCourse`), the acting account's email resolved rather than left as a bare id — `null` under the same two conditions `AdminCourseDetail.aiApprovedByEmail` already documents (a pending course, or `'auto-approve'`, which has no human decision-maker). */
+export interface AdminCourseApprovalEvent {
+  id: string
+  action: courseApproval.CourseApprovalEvent['action']
+  accountId: string | null
+  accountEmail: string | null
+  createdAt: number
+}
+
+/** ADMIN-9 — one person enrolled in the course: named as WEB-52 names them, when they enrolled, their own usage in the course, and, when they are reachable as a console account, the id to link to (ADMIN-11) — `null` when this person has no `web` identity at all. Never a transcript: nothing here names a conversation or a message. */
+export interface AdminCoursePerson {
+  personId: string
+  displayName: string | null
+  email: string | null
+  enroledAt: number
+  connectedAt: number | null
+  accountId: string | null
+  totalCostMicros: number
+  callCount: number
 }
 
 /**
@@ -206,6 +313,103 @@ export interface AdminCourseDetail {
   aiApprovedByAccountId: string | null
   aiApprovedByEmail: string | null
   aiApprovalDecidedAt: number | null
+  // ADMIN-9's own widening from ADMIN-6's settings-only read: the course's
+  // approval history and its usage (COST-4/COST-7), and the people enrolled
+  // in it (WEB-52's own naming) with their own usage — never a transcript
+  // (this router's own module comment on the boundary).
+  approvalEvents: AdminCourseApprovalEvent[]
+  usage: {
+    totalCostMicros: number
+    callCount: number
+    bySurface: costLedger.CostBySurface[]
+  }
+  people: AdminCoursePerson[]
+}
+
+/**
+ * ADMIN-10 — one row of `GET /admin/accounts`'s own list: name, email, when
+ * it joined, whether it is disabled, how many organizations it belongs to
+ * and its total cost. Never a person, an enrolment or anything this
+ * router's own boundary would not otherwise allow.
+ */
+export interface AdminAccountSummary {
+  accountId: string
+  email: string
+  displayName: string
+  firstName: string | null
+  lastName: string | null
+  createdAt: number
+  disabledAt: number | null
+  isPlatformAdministrator: boolean
+  organizationCount: number
+  totalCostMicros: number
+}
+
+export interface AdminAccountsResponse {
+  accounts: AdminAccountSummary[]
+}
+
+/** ADMIN-11 — one organization `AdminAccountDetail.memberships` names, with the account's own role in it. */
+export interface AdminAccountMembership {
+  organizationId: string
+  organizationName: string
+  role: string
+  grantedAt: number | null
+}
+
+/** ADMIN-11 — one organization `AdminAccountDetail.connectedOrganizations` names — a proven identity (LINK-3/LINK-4), not a membership (TEN-1). */
+export interface AdminAccountConnectedOrganization {
+  organizationId: string
+  organizationName: string
+  personId: string
+}
+
+/** ADMIN-11 — one person record (PPL-1) `AdminAccountDetail.people` names, with every identity it has been proven on (PPL-2). */
+export interface AdminAccountPerson {
+  personId: string
+  organizationId: string
+  organizationName: string
+  displayName: string | null
+  email: string | null
+  githubHandle: string | null
+  connectedAt: number | null
+  createdAt: number
+  identities: { surface: string; externalId: string; createdAt: number }[]
+}
+
+/** ADMIN-11 — one course `AdminAccountDetail.enrolments` names, across any organization the account's own people are enrolled in. */
+export interface AdminAccountEnrolment {
+  courseId: string
+  courseTitle: string
+  projectId: string
+  projectName: string
+  organizationId: string
+  organizationName: string
+  enroledAt: number
+}
+
+/**
+ * ADMIN-11: an account's own console screen — its identity, its
+ * organizations (membership and merely-connected alike), the courses its
+ * own people are enrolled in, the people records themselves (PPL-1), and its
+ * activity — total cost and call count, broken down by surface and by
+ * course, and when it was last active. As ADMIN-4 requires, none of this
+ * reaches a transcript.
+ */
+export interface AdminAccountDetail {
+  accountId: string
+  email: string
+  displayName: string
+  firstName: string | null
+  lastName: string | null
+  createdAt: number
+  disabledAt: number | null
+  isPlatformAdministrator: boolean
+  memberships: AdminAccountMembership[]
+  connectedOrganizations: AdminAccountConnectedOrganization[]
+  people: AdminAccountPerson[]
+  enrolments: AdminAccountEnrolment[]
+  usage: costLedger.AccountUsageSummary
 }
 
 // ADMIN-5's own race — `AdminRouterDependencies.deletedTenantSweepDelayMs`'s
@@ -244,6 +448,38 @@ async function sweepStorage(
   )
 }
 
+/**
+ * ADMIN-7/ADMIN-8 — `AdminCourseBrief[]` for `courseRows`, from the two
+ * already-batched reads both `GET /organizations/:organizationId` and
+ * `GET /projects/:projectId` share: `enrolmentCounts` (`enrolments.countActiveEnrolmentsByCourse`)
+ * and `usageSummary` (`costLedger.getOrganizationUsageSummary`) are each one
+ * query for the whole organization, looked up here by map rather than
+ * queried again per course — the "watch N+1" discipline this router's own
+ * brief calls out, the same "batch the fan-out" style
+ * `course-approval.ts#listCoursesForApproval` already uses for its own
+ * owner-email lookup.
+ */
+function buildCourseBriefs(
+  courseRows: courses.Course[],
+  enrolmentCounts: enrolments.CourseEnrolmentCount[],
+  usageSummary: costLedger.OrganizationUsageSummary
+): AdminCourseBrief[] {
+  const enrolmentCountByCourseId = new Map(
+    enrolmentCounts.map((row) => [row.courseId, row.count])
+  )
+  const usageByCourseId = new Map(
+    usageSummary.courses.map((row) => [row.courseId, row])
+  )
+  return courseRows.map((course) => ({
+    courseId: course.id,
+    title: course.title,
+    enabled: course.enabled,
+    aiApprovedAt: course.aiApprovedAt,
+    enrolmentCount: enrolmentCountByCourseId.get(course.id) ?? 0,
+    totalCostMicros: usageByCourseId.get(course.id)?.costMicros ?? 0,
+  }))
+}
+
 export function buildAdminRouter(deps: AdminRouterDependencies): Router {
   const router = Router()
 
@@ -280,6 +516,181 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         res.status(200).json(body)
       })
       .catch(next)
+  })
+
+  /**
+   * ADMIN-7: one organization's own console screen — its identity, its
+   * usage, the accounts that own it, its full membership, and every project
+   * it holds with that project's own courses nested inside it.
+   *
+   * `members`/`owners` both come from `memberships.listMembershipsForOrganizationWithAccounts`
+   * — one join, not `listMembershipsForOrganization`'s bare rows plus a
+   * `getAccountById` per member. `owners` is that same list filtered to the
+   * `owner` role, not a second query.
+   */
+  router.get<{ organizationId: string }>(
+    '/organizations/:organizationId',
+    (req, res) => {
+      if (!req.session) {
+        res.status(401).json({ error: 'not_signed_in' })
+        return
+      }
+      if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+        res.status(403).json({ error: 'not_platform_administrator' })
+        return
+      }
+
+      const organizationId = req.params.organizationId
+      const organization = organizations.getOrganizationById(
+        organizationId,
+        deps.db
+      )
+      if (!organization) {
+        res.status(404).json({ error: 'organization_not_found' })
+        return
+      }
+
+      const membershipRows =
+        memberships.listMembershipsForOrganizationWithAccounts(
+          organizationId,
+          deps.db
+        )
+      const owners: AdminAccountRef[] = membershipRows
+        .filter((row) => row.role === 'owner')
+        .map((row) => ({
+          accountId: row.accountId,
+          email: row.email,
+          displayName: row.displayName,
+        }))
+
+      const usageSummary = costLedger.getOrganizationUsageSummary(
+        organizationId,
+        deps.db
+      )
+      const enrolmentCounts = enrolments.countActiveEnrolmentsByCourse(
+        organizationId,
+        deps.db
+      )
+      const projectRows = projects.listProjects(organizationId, deps.db, {
+        includeArchived: true,
+      })
+      const allCourseRows = courses.listCourses(organizationId, deps.db)
+      const courseBriefs = buildCourseBriefs(
+        allCourseRows,
+        enrolmentCounts,
+        usageSummary
+      )
+      const courseBriefsByCourseId = new Map(
+        courseBriefs.map((brief) => [brief.courseId, brief])
+      )
+      const courseBriefsByProjectId = new Map<string, AdminCourseBrief[]>()
+      for (const course of allCourseRows) {
+        const brief = courseBriefsByCourseId.get(course.id)
+        if (!brief) continue // Unreachable — `courseBriefs` is built from `allCourseRows` itself.
+        const list = courseBriefsByProjectId.get(course.projectId) ?? []
+        list.push(brief)
+        courseBriefsByProjectId.set(course.projectId, list)
+      }
+
+      const body: AdminOrganizationDetail = {
+        organizationId: organization.id,
+        name: organization.name,
+        isPersonal: organization.isPersonal,
+        spendingCapMicros: organization.spendingCapMicros,
+        createdAt: organization.createdAt,
+        usage: {
+          totalCostMicros: usageSummary.totalCostMicros,
+          // Summed from `bySurface`, not from `usageSummary.courses`
+          // (COST-7's own per-course entries) — a course whose own row has
+          // since been deleted (PROJ-8 nulls `cost_ledger_entries.course_id`)
+          // still contributes to the organization's own total call count,
+          // but has no course entry left to sum from.
+          callCount: usageSummary.bySurface.reduce(
+            (total, entry) => total + entry.callCount,
+            0
+          ),
+          hasEstimated: usageSummary.totalEstimatedCostMicros > 0,
+          bySurface: usageSummary.bySurface,
+        },
+        owners,
+        members: membershipRows,
+        projects: projectRows.map((project) => ({
+          projectId: project.id,
+          name: project.name,
+          archivedAt: project.archivedAt,
+          createdAt: project.createdAt,
+          courses: courseBriefsByProjectId.get(project.id) ?? [],
+        })),
+      }
+      res.status(200).json(body)
+    }
+  )
+
+  /**
+   * ADMIN-8: a project's own console screen — its identity, whether it is
+   * archived, its organization (a link back to ADMIN-7's own screen), and
+   * its courses.
+   *
+   * `projectId` alone does not name an organization, so this resolves one
+   * first through `projects.findProjectOrganizationId` — the same scoped,
+   * indexed lookup `course-approval.ts#findCourseOrganizationId` already is
+   * for a course, one table up.
+   */
+  router.get<{ projectId: string }>('/projects/:projectId', (req, res) => {
+    if (!req.session) {
+      res.status(401).json({ error: 'not_signed_in' })
+      return
+    }
+    if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+      res.status(403).json({ error: 'not_platform_administrator' })
+      return
+    }
+
+    const projectId = req.params.projectId
+    const organizationId = projects.findProjectOrganizationId(
+      projectId,
+      deps.db
+    )
+    if (!organizationId) {
+      res.status(404).json({ error: 'project_not_found' })
+      return
+    }
+    const project = projects.getProject(organizationId, projectId, deps.db)
+    const organization = organizations.getOrganizationById(
+      organizationId,
+      deps.db
+    )
+    if (!project || !organization) {
+      // Unreachable in practice — `organizationId` was just resolved from
+      // this project's own row, above — but guarded rather than assumed,
+      // the same TEN-2 race every other route in this router already
+      // guards against.
+      res.status(404).json({ error: 'project_not_found' })
+      return
+    }
+
+    const usageSummary = costLedger.getOrganizationUsageSummary(
+      organizationId,
+      deps.db
+    )
+    const enrolmentCounts = enrolments.countActiveEnrolmentsByCourse(
+      organizationId,
+      deps.db
+    )
+    const courseRows = courses.listCourses(organizationId, deps.db, {
+      projectId,
+    })
+
+    const body: AdminProjectDetail = {
+      projectId: project.id,
+      name: project.name,
+      organizationId,
+      organizationName: organization.name,
+      archivedAt: project.archivedAt,
+      createdAt: project.createdAt,
+      courses: buildCourseBriefs(courseRows, enrolmentCounts, usageSummary),
+    }
+    res.status(200).json(body)
   })
 
   /**
@@ -403,6 +814,91 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       deps.db
     )
 
+    // ADMIN-9 — the course's own approval history, with each acting
+    // account's email resolved. The set of distinct approvers on one
+    // course's own history is small (a handful of approve/revoke events at
+    // most), unlike `listCoursesForApproval`'s own cross-course batch — a
+    // plain `getAccountById` per approver here is not the "watch N+1" case
+    // this router's brief calls out, which is about scanning every course in
+    // an organization, not one course's own audit trail.
+    const approvalEventRows = courseApproval.listApprovalEventsForCourse(
+      organizationId,
+      req.params.courseId,
+      deps.db
+    )
+    // One lookup per *distinct* approver, not per event: a course approved,
+    // revoked and approved again by the same administrator asks once.
+    const approverEmails = new Map<string, string | null>()
+    const resolveApproverEmail = (accountId: string): string | null => {
+      const cached = approverEmails.get(accountId)
+      if (cached !== undefined) return cached
+      const email = accounts.getAccountById(accountId, deps.db)?.email ?? null
+      approverEmails.set(accountId, email)
+      return email
+    }
+    const approvalEvents: AdminCourseApprovalEvent[] = approvalEventRows.map(
+      (event) => ({
+        id: event.id,
+        action: event.action,
+        accountId: event.accountId,
+        accountEmail:
+          event.accountId === null
+            ? null
+            : resolveApproverEmail(event.accountId),
+        createdAt: event.createdAt,
+      })
+    )
+
+    // ADMIN-9 — the course's own usage, and the people enrolled in it (never
+    // their transcript — this router's own module comment on the boundary).
+    const courseUsage = costLedger.getCourseUsageSummary(
+      organizationId,
+      req.params.courseId,
+      deps.db
+    )
+    const activePeople = enrolments.listPeopleForCourse(
+      organizationId,
+      req.params.courseId,
+      deps.db
+    )
+    const enrolmentRows = enrolments.listEnrolmentsForCourse(
+      organizationId,
+      req.params.courseId,
+      deps.db
+    )
+    const enroledAtByPersonId = new Map(
+      enrolmentRows
+        .filter((row) => row.endedAt === null)
+        .map((row) => [row.personId, row.createdAt])
+    )
+    const personIds = activePeople.map((person) => person.id)
+    const webIdentities = people.listWebIdentitiesForPeople(
+      organizationId,
+      personIds,
+      deps.db
+    )
+    const accountIdByPersonId = new Map(
+      webIdentities.map((row) => [row.personId, row.accountId])
+    )
+    const personUsageRows = costLedger.getCoursePersonUsage(
+      organizationId,
+      req.params.courseId,
+      deps.db
+    )
+    const usageByPersonId = new Map(
+      personUsageRows.map((row) => [row.personId, row])
+    )
+    const coursePeople: AdminCoursePerson[] = activePeople.map((person) => ({
+      personId: person.id,
+      displayName: person.displayName,
+      email: person.email,
+      enroledAt: enroledAtByPersonId.get(person.id) ?? person.createdAt,
+      connectedAt: person.connectedAt,
+      accountId: accountIdByPersonId.get(person.id) ?? null,
+      totalCostMicros: usageByPersonId.get(person.id)?.costMicros ?? 0,
+      callCount: usageByPersonId.get(person.id)?.callCount ?? 0,
+    }))
+
     const body: AdminCourseDetail = {
       courseId: course.id,
       courseTitle: course.title,
@@ -437,6 +933,13 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       aiApprovedByAccountId: course.aiApprovedByAccountId,
       aiApprovedByEmail,
       aiApprovalDecidedAt: course.aiApprovalDecidedAt,
+      approvalEvents,
+      usage: {
+        totalCostMicros: courseUsage.totalCostMicros,
+        callCount: courseUsage.callCount,
+        bySurface: courseUsage.bySurface,
+      },
+      people: coursePeople,
     }
     res.status(200).json(body)
   })
@@ -736,6 +1239,106 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         .catch(next)
     }
   )
+
+  /**
+   * ADMIN-10: every account on the platform, newest first — `accounts.listAccounts`
+   * for the identity and organization-count columns, `costLedger.listAccountTotals`
+   * joined in for the cost column, the same "each repo's own reasoning stays
+   * in that repo" split `GET /organizations` above already keeps between
+   * `costLedger.listOrganizationTotals` and `checkPlatformHealth`. Filtering
+   * by name or email (ADMIN-12) is the browser's own job, not this route's —
+   * the whole list is returned every time.
+   */
+  router.get('/accounts', (req, res) => {
+    if (!req.session) {
+      res.status(401).json({ error: 'not_signed_in' })
+      return
+    }
+    if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+      res.status(403).json({ error: 'not_platform_administrator' })
+      return
+    }
+
+    const accountRows = accounts.listAccounts(deps.db)
+    const totals = costLedger.listAccountTotals(deps.db)
+    const totalCostMicrosByAccountId = new Map(
+      totals.map((total) => [total.accountId, total.totalCostMicros])
+    )
+
+    const body: AdminAccountsResponse = {
+      accounts: accountRows.map((row) => ({
+        accountId: row.id,
+        email: row.email,
+        displayName: row.displayName,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        createdAt: row.createdAt,
+        disabledAt: row.disabledAt,
+        // AUTH-4's own allowlist, read live — the same check every other
+        // route in this router already re-runs on every request, applied
+        // here to *name* which rows are administrators rather than to
+        // authorize the caller (`isRequestFromPlatformAdministrator`, above,
+        // already did that).
+        isPlatformAdministrator: isPlatformAdministrator(row.email),
+        organizationCount: row.organizationCount,
+        totalCostMicros: totalCostMicrosByAccountId.get(row.id) ?? 0,
+      })),
+    }
+    res.status(200).json(body)
+  })
+
+  /**
+   * ADMIN-11: an account's own console screen — its identity, its
+   * organizations (membership and merely-connected alike), the people
+   * records connected to it (PPL-1) with every identity proven on each
+   * (PPL-2), the courses its own people are enrolled in, and its usage.
+   * Never a transcript (this router's own module comment on the boundary).
+   */
+  router.get<{ accountId: string }>('/accounts/:accountId', (req, res) => {
+    if (!req.session) {
+      res.status(401).json({ error: 'not_signed_in' })
+      return
+    }
+    if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+      res.status(403).json({ error: 'not_platform_administrator' })
+      return
+    }
+
+    const account = accounts.getAccountById(req.params.accountId, deps.db)
+    if (!account) {
+      res.status(404).json({ error: 'account_not_found' })
+      return
+    }
+
+    const membershipRows =
+      memberships.listMembershipsForAccountWithOrganizations(
+        account.id,
+        deps.db
+      )
+    const connectedOrganizations =
+      people.listConnectedOrganizationsWithNamesForAccount(account.id, deps.db)
+    const peopleRecords = people.listPeopleForAccount(account.id, deps.db)
+    const personIds = peopleRecords.map((person) => person.personId)
+    const enrolmentRows = enrolments.listEnrolmentsForPeople(personIds, deps.db)
+    const usage = costLedger.getAccountUsageSummary(account.id, deps.db)
+
+    const body: AdminAccountDetail = {
+      accountId: account.id,
+      email: account.email,
+      displayName: account.displayName,
+      firstName: account.firstName,
+      lastName: account.lastName,
+      createdAt: account.createdAt,
+      disabledAt: account.disabledAt,
+      isPlatformAdministrator: isPlatformAdministrator(account.email),
+      memberships: membershipRows,
+      connectedOrganizations,
+      people: peopleRecords,
+      enrolments: enrolmentRows,
+      usage,
+    }
+    res.status(200).json(body)
+  })
 
   /** ADMIN-5's own audit trail, read back. */
   router.get('/tenant-deletions', (req, res) => {

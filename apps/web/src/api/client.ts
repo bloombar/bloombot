@@ -23,9 +23,13 @@
  */
 
 import type {
+  AdminAccountDetail,
+  AdminAccountsResponse,
   AdminCourseDetail,
   AdminCoursesResponse,
+  AdminOrganizationDetail,
   AdminOrganizationsResponse,
+  AdminProjectDetail,
   ApiErrorBody,
   ChatAnswerResult,
   ChatCourse,
@@ -1276,9 +1280,37 @@ export function fetchAdminCourses(): Promise<AdminCoursesResponse> {
   return request<AdminCoursesResponse>('/admin/courses')
 }
 
-/** ADMIN-6: one course's settings, read-only — `apps/api`'s own `routes/admin.ts#GET /courses/:courseId`. Throws `ApiError` (404, `course_not_found`) for an unknown id, the same shape `fetchDeletionPreview` throws for an unknown organization. */
+/** ADMIN-9: one course's full console overview — settings, approval history, usage and the people enrolled in it — `apps/api`'s own `routes/admin.ts#GET /courses/:courseId`. Throws `ApiError` (404, `course_not_found`) for an unknown id, the same shape `fetchDeletionPreview` throws for an unknown organization. */
 export function fetchAdminCourse(courseId: string): Promise<AdminCourseDetail> {
   return request<AdminCourseDetail>(`/admin/courses/${courseId}`)
+}
+
+/** ADMIN-7: one organization's own console screen — `apps/api`'s own `routes/admin.ts#GET /organizations/:organizationId`. Throws `ApiError` (404, `organization_not_found`) for an unknown id. */
+export function fetchAdminOrganization(
+  organizationId: string
+): Promise<AdminOrganizationDetail> {
+  return request<AdminOrganizationDetail>(
+    `/admin/organizations/${organizationId}`
+  )
+}
+
+/** ADMIN-8: one project's own console screen — `apps/api`'s own `routes/admin.ts#GET /projects/:projectId`. Throws `ApiError` (404, `project_not_found`) for an unknown id. */
+export function fetchAdminProject(
+  projectId: string
+): Promise<AdminProjectDetail> {
+  return request<AdminProjectDetail>(`/admin/projects/${projectId}`)
+}
+
+/** ADMIN-10: every account on the platform, newest first — `apps/api`'s own `routes/admin.ts#GET /accounts`. Filtering by name or email (ADMIN-12) is this app's own job, not the server's — the whole list comes back every time. */
+export function fetchAdminAccounts(): Promise<AdminAccountsResponse> {
+  return request<AdminAccountsResponse>('/admin/accounts')
+}
+
+/** ADMIN-11: one account's own console screen — `apps/api`'s own `routes/admin.ts#GET /accounts/:accountId`. Throws `ApiError` (404, `account_not_found`) for an unknown id. */
+export function fetchAdminAccount(
+  accountId: string
+): Promise<AdminAccountDetail> {
+  return request<AdminAccountDetail>(`/admin/accounts/${accountId}`)
 }
 
 /** WEB-53's Approve button. Idempotent — approving an already-approved course succeeds without a second audit event (`routes/admin.ts`'s own doc comment). */

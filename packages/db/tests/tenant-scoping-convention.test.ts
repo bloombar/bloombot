@@ -152,14 +152,41 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    organization id to scope anything else by (that function's own doc
 //    comment); there is no `organizationId` to take as a first parameter
 //    without it being the very thing this function exists to produce.
+//  - accounts.ts#listAccounts: ADMIN-10 — the console's Users screen, every
+//    account on the platform, the same class `organizations.ts#listTenantDeletions`
+//    already is.
+//  - cost-ledger.ts#listAccountTotals/#getAccountUsageSummary: ADMIN-10/
+//    ADMIN-11, one level up from `listOrganizationTotals` — an account's own
+//    usage, resolved through `person_identities` rather than an
+//    organization id, since an account can hold a distinct `web` person in
+//    more than one organization.
+//  - projects.ts#findProjectOrganizationId: ADMIN-8, the same class
+//    `course-approval.ts#findCourseOrganizationId` already is, one table up
+//    — the admin console's own project screen reaches a project directly by
+//    id, with no organization already in hand.
+//  - memberships.ts#listMembershipsForAccountWithOrganizations: ADMIN-11,
+//    the same class `listMembershipsForAccount` already is — an account's
+//    own memberships are not scoped to one organization.
+//  - people.ts#listConnectedOrganizationsWithNamesForAccount/#listPeopleForAccount:
+//    ADMIN-11, the same class `listConnectedOrganizationsForAccount` already
+//    is — an account's connected organizations and people are not scoped to
+//    one organization until either call names them.
+//  - enrolments.ts#listEnrolmentsForPeople: ADMIN-11, the same "account, not
+//    organization" class one level up from this file's own organization-
+//    scoped functions.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': [
     'getAccountByEmail',
     'getAccountById',
     'disableAccount',
     'setAccountNames',
+    'listAccounts',
   ],
-  'cost-ledger.ts': ['listOrganizationTotals'],
+  'cost-ledger.ts': [
+    'listOrganizationTotals',
+    'listAccountTotals',
+    'getAccountUsageSummary',
+  ],
   'course-approval.ts': ['listCoursesForApproval', 'findCourseOrganizationId'],
   'discord-handled-messages.ts': [
     'recordHandledMessage',
@@ -208,8 +235,17 @@ const ALLOWLIST: Record<string, string[]> = {
     'deleteExpiredAccessTokens',
   ],
   'membership-invitations.ts': ['redeemMembershipInvitation'],
-  'memberships.ts': ['listMembershipsForAccount'],
-  'people.ts': ['listConnectedOrganizationsForAccount'],
+  'memberships.ts': [
+    'listMembershipsForAccount',
+    'listMembershipsForAccountWithOrganizations',
+  ],
+  'people.ts': [
+    'listConnectedOrganizationsForAccount',
+    'listConnectedOrganizationsWithNamesForAccount',
+    'listPeopleForAccount',
+  ],
+  'projects.ts': ['findProjectOrganizationId'],
+  'enrolments.ts': ['listEnrolmentsForPeople'],
   'person-link-challenges.ts': [
     'createChallenge',
     'consumeChallenge',

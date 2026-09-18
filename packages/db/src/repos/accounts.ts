@@ -9,7 +9,7 @@
  * how sign-in decides whether this is a returning account or a new one.
  */
 
-import { and, eq } from 'drizzle-orm'
+import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 
 import type { Database, Executor, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
@@ -194,6 +194,57 @@ export function setAccountNames(
       .returning()
       .get()
   })
+}
+
+/**
+ * ADMIN-10 — one row of `listAccounts`, below: the account itself, plus how
+ * many organizations it currently belongs to (an *active* membership — the
+ * same "revoked is absent" reading `memberships.getMembership`'s own module
+ * comment already establishes for every other caller in this platform).
+ * `totalCostMicros` is not computed here — `routes/admin.ts` joins it in
+ * from `costLedger.listAccountTotals`, a cost-ledger read this file has no
+ * reason to duplicate.
+ */
+export interface AccountWithOrganizationCount extends Account {
+  organizationCount: number
+}
+
+/**
+ * ADMIN-10: every account on the platform, newest-first — the console's
+ * Users screen. TEN-2 exception, the same class `organizations.ts#listTenantDeletions`/
+ * `cost-ledger.ts#listOrganizationTotals` already are: a platform
+ * administrator's own read, spanning every account by definition, allowlisted
+ * in `tests/tenant-scoping-convention.test.ts` accordingly.
+ *
+ * The organization count is batched in one grouped query over `memberships`
+ * rather than one count per account row — the same "batch the fan-out" style
+ * `course-approval.ts#listCoursesForApproval` already uses for its own
+ * owner-email lookup.
+ */
+export function listAccounts(db: Database): AccountWithOrganizationCount[] {
+  const accountRows = db
+    .select()
+    .from(accounts)
+    .orderBy(desc(accounts.createdAt))
+    .all()
+
+  const membershipCounts = db
+    .select({
+      accountId: memberships.accountId,
+      count: sql<number>`count(*)`,
+    })
+    .from(memberships)
+    .where(isNull(memberships.revokedAt))
+    .groupBy(memberships.accountId)
+    .all()
+  const countByAccountId = new Map(
+    membershipCounts.map((row) => [row.accountId, Number(row.count)])
+  )
+
+  return accountRows.map((row) => ({
+    ...row,
+    organizationCount: countByAccountId.get(row.id) ?? 0,
+  }))
 }
 
 /**

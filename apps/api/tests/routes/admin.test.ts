@@ -124,7 +124,11 @@ function seedTenantWithTranscript(db: import('@bloombot/db').Database) {
     db
   )
   if (!courseResult.ok) throw new Error('seed course creation failed')
-  return { organizationId, courseId: courseResult.course.id }
+  return {
+    organizationId,
+    courseId: courseResult.course.id,
+    projectId: project.id,
+  }
 }
 
 /**
@@ -740,10 +744,12 @@ describe('WEB-53 — a platform administrator approves and unapproves courses', 
     ).toBeNull()
   })
 
-  it('lists pending and approved courses, never a person, a conversation or a message', async () => {
+  it('lists pending and approved courses, with a project id and owner ids for the console to link to, never a person, a conversation or a message', async () => {
     testDb = createTestDatabase()
     const admin = seedPlatformAdministrator(testDb.db)
-    const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
+    const { organizationId, courseId, projectId } = seedTenantWithTranscript(
+      testDb.db
+    )
     const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
@@ -752,13 +758,25 @@ describe('WEB-53 — a platform administrator approves and unapproves courses', 
       .set('Origin', TEST_PUBLIC_APP_URL)
 
     expect(response.status).toBe(200)
-    const body = response.body as { courses: { courseId: string }[] }
+    const body = response.body as {
+      courses: {
+        courseId: string
+        projectId: string
+        owners: { accountId: string; email: string }[]
+      }[]
+    }
     const row = body.courses.find((course) => course.courseId === courseId)
     expect(row).toMatchObject({
       courseId,
       courseTitle: 'Web Design',
+      // ADMIN-12/ADMIN-7 — a project id, not only its name, so the
+      // console's Courses row can link to it (`CoursesView.tsx`).
+      projectId,
       organizationId,
       organizationName: 'A Real Tenant',
+      // No owner account seeded here — a course whose organization has no
+      // owners yet.
+      owners: [],
       aiApprovedAt: null,
       aiApprovedByAccountId: null,
       aiApprovedByEmail: null,

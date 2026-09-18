@@ -514,10 +514,11 @@ describe('Admin — WEB-53’s Courses screen', () => {
   const PENDING_COURSE = {
     courseId: 'course-1',
     courseTitle: 'Web Design',
+    projectId: 'proj-1',
     projectName: 'Fall 2026',
     organizationId: 'org-1',
     organizationName: 'A Real Tenant',
-    ownerEmails: ['owner@example.edu'],
+    owners: [{ accountId: 'account-1', email: 'owner@example.edu' }],
     createdAt: Date.now(),
     aiApprovedAt: null,
     aiApprovedByAccountId: null,
@@ -526,10 +527,11 @@ describe('Admin — WEB-53’s Courses screen', () => {
   const APPROVED_COURSE = {
     courseId: 'course-2',
     courseTitle: 'Intro to Bloom',
+    projectId: 'proj-2',
     projectName: 'Spring 2027',
     organizationId: 'org-2',
     organizationName: 'Another Tenant',
-    ownerEmails: ['other-owner@example.edu'],
+    owners: [{ accountId: 'account-2', email: 'other-owner@example.edu' }],
     createdAt: Date.now(),
     aiApprovedAt: Date.now(),
     aiApprovedByAccountId: 'admin-1',
@@ -564,6 +566,24 @@ describe('Admin — WEB-53’s Courses screen', () => {
     // WEB-53: "recorded with who acted and when" — the approver shows on
     // the approved row.
     expect(approved).toHaveTextContent('admin@bloombot.example')
+  })
+
+  // ADMIN-12/ADMIN-7: the last gap two reviews flagged — a row's own
+  // project and owner emails were plain text; now every entity this row
+  // names is a real link, the same treatment the title and organization
+  // already got.
+  it('links a row’s project and each owner email to their own console screens', async () => {
+    fetchAdminCourses.mockResolvedValue({ courses: [PENDING_COURSE] })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+
+    const pending = await screen.findByTestId('admin-courses-pending')
+    expect(
+      within(pending).getByRole('link', { name: 'Fall 2026' })
+    ).toHaveAttribute('href', '/platform-admin/projects/proj-1')
+    expect(
+      within(pending).getByRole('link', { name: 'owner@example.edu' })
+    ).toHaveAttribute('href', '/platform-admin/users/account-1')
   })
 
   it('reached from the organizations list’s own Courses button', async () => {
@@ -1614,10 +1634,11 @@ describe('Admin — ADMIN-12’s console search', () => {
         {
           courseId: 'course-1',
           courseTitle: 'Web Design',
+          projectId: 'proj-1',
           projectName: 'Fall 2026',
           organizationId: 'org-1',
           organizationName: 'A Real Tenant',
-          ownerEmails: ['owner@example.edu'],
+          owners: [{ accountId: 'account-1', email: 'owner@example.edu' }],
           createdAt: Date.now(),
           aiApprovedAt: null,
           aiApprovedByAccountId: null,
@@ -1626,10 +1647,11 @@ describe('Admin — ADMIN-12’s console search', () => {
         {
           courseId: 'course-2',
           courseTitle: 'History 101',
+          projectId: 'proj-2',
           projectName: 'Winter 2026',
           organizationId: 'org-2',
           organizationName: 'Zeta Org',
-          ownerEmails: ['zeta-owner@example.edu'],
+          owners: [{ accountId: 'account-2', email: 'zeta-owner@example.edu' }],
           createdAt: Date.now(),
           aiApprovedAt: null,
           aiApprovedByAccountId: null,
@@ -1638,10 +1660,11 @@ describe('Admin — ADMIN-12’s console search', () => {
         {
           courseId: 'course-3',
           courseTitle: 'Intro to Bloom',
+          projectId: 'proj-3',
           projectName: 'Spring 2027',
           organizationId: 'org-1',
           organizationName: 'A Real Tenant',
-          ownerEmails: ['owner@example.edu'],
+          owners: [{ accountId: 'account-1', email: 'owner@example.edu' }],
           createdAt: Date.now(),
           aiApprovedAt: Date.now(),
           aiApprovedByAccountId: 'admin-1',
@@ -1650,10 +1673,11 @@ describe('Admin — ADMIN-12’s console search', () => {
         {
           courseId: 'course-4',
           courseTitle: 'Chemistry',
+          projectId: 'proj-4',
           projectName: 'Fall 2025',
           organizationId: 'org-2',
           organizationName: 'Zeta Org',
-          ownerEmails: ['zeta-owner@example.edu'],
+          owners: [{ accountId: 'account-2', email: 'zeta-owner@example.edu' }],
           createdAt: Date.now(),
           aiApprovedAt: Date.now(),
           aiApprovedByAccountId: 'admin-1',
@@ -1705,10 +1729,11 @@ describe('Admin — ADMIN-12’s console search', () => {
         {
           courseId: 'course-1',
           courseTitle: 'Web Design',
+          projectId: 'proj-1',
           projectName: 'Fall 2026',
           organizationId: 'org-1',
           organizationName: 'A Real Tenant',
-          ownerEmails: [],
+          owners: [],
           createdAt: Date.now(),
           aiApprovedAt: null,
           aiApprovedByAccountId: null,

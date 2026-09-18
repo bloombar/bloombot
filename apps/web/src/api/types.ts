@@ -749,10 +749,12 @@ export interface AdminOrganizationsResponse {
 export interface AdminCourseSummary {
   courseId: string
   courseTitle: string
+  projectId: string
   projectName: string
   organizationId: string
   organizationName: string
-  ownerEmails: string[]
+  /** Each active owner's account id and email (ADMIN-12/ADMIN-7) — the id lets `CoursesView.tsx` link each owner to its own `'admin-account'` screen, mirroring `@bloombot/db`'s `courseApproval.CourseForApproval.owners` by hand. */
+  owners: { accountId: string; email: string }[]
   createdAt: number
   aiApprovedAt: number | null
   aiApprovedByAccountId: string | null

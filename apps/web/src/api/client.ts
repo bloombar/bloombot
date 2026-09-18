@@ -191,6 +191,20 @@ export function signOut(): Promise<void> {
 }
 
 /**
+ * WEB-72/DATA-7 — delete the signed-in account itself: reversible for the
+ * deployment's retention window, then permanent. Unscoped, like `signOut`
+ * above (`routes/account.ts`'s own module comment on why this is not
+ * `organizations.softDelete` reached through `dispatchAction` — an account
+ * is not organization-scoped data). Ends every session belonging to this
+ * account server-side, the same as `signOut`, so the caller is signed out
+ * the moment this resolves — `pages/Account.tsx`'s own handler is what
+ * actually navigates away.
+ */
+export function deleteAccount(): Promise<void> {
+  return request<void>('/account/delete', { method: 'POST' })
+}
+
+/**
  * ENRL-8: redeem a course join link, bound to the caller's own signed-in
  * session — `apps/api`'s own `routes/join-links.ts` never accepts anything
  * beyond the secret itself in the request body. Throws `ApiError` (404,
@@ -398,6 +412,13 @@ export function leaveOrganization(
   return dispatchAction(organizationId, 'memberships.leave', {})
 }
 
+/** WEB-72/DATA-7: delete the caller's own organization — reversible for the deployment's retention window, then permanent. Only an existing owner may call this. */
+export function softDeleteOrganization(
+  organizationId: string
+): Promise<{ id: string; name: string }> {
+  return dispatchAction(organizationId, 'organizations.softDelete', {})
+}
+
 /**
  * WEB-7: the project actions — `projects.list/create/archive/unarchive/rename/duplicate`
  * (PROJ-1, PROJ-2, PROJ-4, PROJ-5, PROJ-6) — each a thin, typed wrapper over
@@ -466,6 +487,32 @@ export function deleteProject(
     'projects.delete',
     { projectId }
   )
+}
+
+/**
+ * WEB-72/DATA-7: delete a project — reversible for the deployment's
+ * retention window, then permanent. Only an existing owner of the
+ * organization may call this. Distinct from `deleteProject` above (PROJ-9's
+ * own permanent wipe).
+ *
+ * **No caller yet (cheap-fix, review).** WEB-72's own Danger-zone list names
+ * an account, an organization, a course and — through the console — a
+ * course, a project and an account again; it names no owner-facing screen
+ * for a *single* project the way `pages/CourseEditor.tsx` is one for a
+ * course. `projects.softDelete` (`@bloombot/actions`) is registered and
+ * tested at the action layer (`packages/actions/tests/soft-delete.test.ts`)
+ * regardless — the repo/action pair this slice's own brief asked for exists
+ * whether or not a screen calls it yet — this wrapper is kept alongside it
+ * so a future single-project screen has an existing, already-tested call to
+ * reach for rather than reinventing the same `dispatchAction` plumbing.
+ */
+export function softDeleteProject(
+  organizationId: string,
+  projectId: string
+): Promise<Project> {
+  return dispatchAction<Project>(organizationId, 'projects.softDelete', {
+    projectId,
+  })
 }
 
 /** PROJ-6/WEB-26: rename a project — the same thin wrapper shape as `archiveProject`/`duplicateProject` above, over `projects.rename`. */
@@ -608,6 +655,25 @@ export function deleteCourse(
       courseId,
     }
   )
+}
+
+/**
+ * WEB-72/DATA-7: delete a course — reversible for the deployment's
+ * retention window, then permanent. Only an existing owner of the
+ * organization may call this. Distinct from `deleteCourse` above (PROJ-8's
+ * own permanent wipe). Typed narrower than `Course` above (`courses.get`'s
+ * own shape, with categories) — `courses.softDelete`'s own action hands
+ * back the plain deleted row (`@bloombot/db`'s `courses.ts#softDeleteCourse`),
+ * never re-reading its categories, and no caller of this function needs
+ * them: the panel navigates away once the delete succeeds.
+ */
+export function softDeleteCourse(
+  organizationId: string,
+  courseId: string
+): Promise<{ id: string }> {
+  return dispatchAction<{ id: string }>(organizationId, 'courses.softDelete', {
+    courseId,
+  })
 }
 
 /**
@@ -1186,6 +1252,24 @@ export function postChatMessage(
 }
 
 /**
+ * WEB-73/DATA-7 — delete the signed-in account's own conversation history in
+ * one course: no other person's, no other course's, and nothing about the
+ * course itself. Reversible for the deployment's retention window, then
+ * permanent. Not an ordinary action (`routes/chat.ts`'s own module comment
+ * on why this router is not mounted under the generic dispatcher) —
+ * `DELETE`, the same route `getChatMessages`/`postChatMessage` above share.
+ */
+export function deleteChatHistory(
+  organizationId: string,
+  courseId: string
+): Promise<{ deletedConversations: number }> {
+  return request<{ deletedConversations: number }>(
+    `/organizations/${organizationId}/chat/courses/${courseId}/messages`,
+    { method: 'DELETE' }
+  )
+}
+
+/**
  * ADMIN-1..3 — the transcript screen's own reads and writes, each a thin
  * wrapper over `dispatchAction`, the same generic action route every
  * other screen in this app already reaches through (no new route, no new
@@ -1380,4 +1464,54 @@ export function fetchTenantDeletions(): Promise<TenantDeletion[]> {
   return request<{ deletions: TenantDeletion[] }>(
     '/admin/tenant-deletions'
   ).then((response) => response.deletions)
+}
+
+/**
+ * WEB-72/DATA-7 — a platform administrator deletes a course from the
+ * console: reversible for the deployment's retention window, then
+ * permanent. `confirmName` must equal the course's own title exactly
+ * (checked server-side, the same discipline `deleteTenant` above already
+ * holds itself to). Throws `ApiError` (409, `confirmation_name_mismatch`)
+ * on a mismatch. Distinct from `deleteTenant` above (ADMIN-5's permanent
+ * tenant wipe) and from `deleteCourse` (PROJ-8's permanent course wipe) —
+ * neither is reachable from this console screen.
+ */
+export function deleteAdminCourse(
+  courseId: string,
+  confirmName: string
+): Promise<{ deleted: true }> {
+  return request(`/admin/courses/${courseId}/delete`, {
+    method: 'POST',
+    body: { confirmName },
+  })
+}
+
+/**
+ * WEB-72/DATA-7 — a platform administrator deletes a project from the
+ * console, the same shape `deleteAdminCourse` above takes, `confirmName`
+ * checked against the project's own name.
+ */
+export function deleteAdminProject(
+  projectId: string,
+  confirmName: string
+): Promise<{ deleted: true }> {
+  return request(`/admin/projects/${projectId}/delete`, {
+    method: 'POST',
+    body: { confirmName },
+  })
+}
+
+/**
+ * WEB-72/DATA-7 — a platform administrator deletes an account from the
+ * console, the same shape `deleteAdminCourse`/`deleteAdminProject` above
+ * take, `confirmName` checked against the account's own `displayName`.
+ */
+export function deleteAdminAccount(
+  accountId: string,
+  confirmName: string
+): Promise<{ deleted: true }> {
+  return request(`/admin/accounts/${accountId}/delete`, {
+    method: 'POST',
+    body: { confirmName },
+  })
 }

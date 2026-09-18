@@ -73,6 +73,7 @@ import {
   people,
   projects,
   rosterImportAcknowledgements,
+  sessions,
   transcriptExports,
   type AttachmentStorage,
   type Database,
@@ -725,6 +726,86 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
   })
 
   /**
+   * WEB-72/DATA-7 — `confirmName` must equal the entity's own name exactly;
+   * a mismatch refuses with `409` before anything is touched, the same
+   * server-side enforcement `POST /organizations/:organizationId/delete`
+   * (ADMIN-5, below) already holds itself to. Shared by every soft-delete
+   * route in this router — a course, a project and an account each read
+   * `parsed.data.confirmName` against their own name below.
+   */
+  const softDeleteInputSchema = z.object({ confirmName: z.string().min(1) })
+
+  /**
+   * WEB-72/DATA-7: a platform administrator deletes a project from the
+   * console — reversible for the deployment's retention window, then
+   * permanent, the same `@bloombot/db`'s `projects.ts#softDeleteProject`
+   * every other caller of this slice's own soft-delete reaches. The
+   * confirmation is enforced here, server-side, the same discipline
+   * `POST /courses/:courseId/delete` above and
+   * `POST /organizations/:organizationId/delete` (ADMIN-5, below) already
+   * hold themselves to.
+   *
+   * Distinct from `@bloombot/actions`' own `projects.delete` (PROJ-9's
+   * permanent wipe) — that action is never reached from this console.
+   */
+  router.post<{ projectId: string }>(
+    '/projects/:projectId/delete',
+    (req, res) => {
+      if (!req.session) {
+        res.status(401).json({ error: 'not_signed_in' })
+        return
+      }
+      if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+        res.status(403).json({ error: 'not_platform_administrator' })
+        return
+      }
+
+      const parsed = softDeleteInputSchema.safeParse(req.body)
+      if (!parsed.success) {
+        res
+          .status(400)
+          .json({ error: 'invalid_request', issues: parsed.error.issues })
+        return
+      }
+
+      const projectId = req.params.projectId
+      const organizationId = projects.findProjectOrganizationId(
+        projectId,
+        deps.db
+      )
+      if (!organizationId) {
+        res.status(404).json({ error: 'project_not_found' })
+        return
+      }
+      const project = projects.getProject(organizationId, projectId, deps.db)
+      if (!project) {
+        // Unreachable in practice — `organizationId` was just resolved from
+        // this project's own row, above — but guarded rather than assumed,
+        // the same TEN-2 race every other route in this router already
+        // guards against.
+        res.status(404).json({ error: 'project_not_found' })
+        return
+      }
+      if (parsed.data.confirmName !== project.name) {
+        res.status(409).json({ error: 'confirmation_name_mismatch' })
+        return
+      }
+
+      const deleted = projects.softDeleteProject(
+        organizationId,
+        projectId,
+        req.session.accountId,
+        deps.db
+      )
+      if (!deleted) {
+        res.status(404).json({ error: 'project_not_found' })
+        return
+      }
+      res.status(200).json({ deleted: true })
+    }
+  )
+
+  /**
    * WEB-53: every pending and approved course, across every organization —
    * `courseApproval.listCoursesForApproval`'s own documented TEN-2
    * exception (this router's own module comment already names
@@ -1001,6 +1082,78 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       rosterAcknowledgements,
     }
     res.status(200).json(body)
+  })
+
+  /**
+   * WEB-72/DATA-7: a platform administrator deletes a course from the
+   * console — reversible for the deployment's retention window, then
+   * permanent, the same `@bloombot/db`'s `courses.ts#softDeleteCourse`
+   * every other caller of this slice's own soft-delete reaches. The
+   * confirmation is enforced here, server-side, not merely by the panel's
+   * own modal — the same discipline `POST /organizations/:organizationId/delete`
+   * (ADMIN-5, below) already holds itself to for the identical reason: a
+   * destructive control that only *appears* confirmed is not a
+   * confirmation at all.
+   *
+   * Distinct from that ADMIN-5 route — this marks, it does not remove — and
+   * from `@bloombot/actions`' own `courses.delete` (PROJ-8's permanent
+   * wipe): neither is reachable from this console at all.
+   */
+  router.post<{ courseId: string }>('/courses/:courseId/delete', (req, res) => {
+    if (!req.session) {
+      res.status(401).json({ error: 'not_signed_in' })
+      return
+    }
+    if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+      res.status(403).json({ error: 'not_platform_administrator' })
+      return
+    }
+
+    const parsed = softDeleteInputSchema.safeParse(req.body)
+    if (!parsed.success) {
+      res
+        .status(400)
+        .json({ error: 'invalid_request', issues: parsed.error.issues })
+      return
+    }
+
+    const organizationId = courseApproval.findCourseOrganizationId(
+      req.params.courseId,
+      deps.db
+    )
+    if (!organizationId) {
+      res.status(404).json({ error: 'course_not_found' })
+      return
+    }
+    const course = courses.getCourse(
+      organizationId,
+      req.params.courseId,
+      deps.db
+    )
+    if (!course) {
+      // Unreachable in practice — `organizationId` was just resolved from
+      // this course's own row, above — but guarded rather than assumed,
+      // the same TEN-2 race every other route in this router already
+      // guards against.
+      res.status(404).json({ error: 'course_not_found' })
+      return
+    }
+    if (parsed.data.confirmName !== course.title) {
+      res.status(409).json({ error: 'confirmation_name_mismatch' })
+      return
+    }
+
+    const deleted = courses.softDeleteCourse(
+      organizationId,
+      req.params.courseId,
+      req.session.accountId,
+      deps.db
+    )
+    if (!deleted) {
+      res.status(404).json({ error: 'course_not_found' })
+      return
+    }
+    res.status(200).json({ deleted: true })
   })
 
   /**
@@ -1418,6 +1571,67 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
     }
     res.status(200).json(body)
   })
+
+  /**
+   * WEB-72/DATA-7: a platform administrator deletes an account from the
+   * console — reversible for the deployment's retention window, then
+   * permanent, the same `@bloombot/db`'s `accounts.ts#softDeleteAccount`
+   * every other caller of this slice's own soft-delete reaches. The
+   * confirmation is server-side enforced, the same `softDeleteInputSchema`
+   * (above) `POST /courses/:courseId/delete`/`POST /projects/:projectId/delete`
+   * already use, matched against the account's own `displayName` — never
+   * `null` (`components/Team.tsx`'s own module comment, `apps/web`, on why
+   * an account's `displayName` always exists, unlike a student person's).
+   *
+   * Ends every session belonging to this account, the same
+   * `revokeAllSessionsForAccount` call `disableAccount`
+   * (`@bloombot/db`) already makes for the identical reason — a deleted
+   * account must not answer as still signed in anywhere, including a
+   * browser that had it open at the moment this ran.
+   */
+  router.post<{ accountId: string }>(
+    '/accounts/:accountId/delete',
+    (req, res) => {
+      if (!req.session) {
+        res.status(401).json({ error: 'not_signed_in' })
+        return
+      }
+      if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+        res.status(403).json({ error: 'not_platform_administrator' })
+        return
+      }
+
+      const parsed = softDeleteInputSchema.safeParse(req.body)
+      if (!parsed.success) {
+        res
+          .status(400)
+          .json({ error: 'invalid_request', issues: parsed.error.issues })
+        return
+      }
+
+      const account = accounts.getAccountById(req.params.accountId, deps.db)
+      if (!account) {
+        res.status(404).json({ error: 'account_not_found' })
+        return
+      }
+      if (parsed.data.confirmName !== account.displayName) {
+        res.status(409).json({ error: 'confirmation_name_mismatch' })
+        return
+      }
+
+      const deleted = accounts.softDeleteAccount(
+        account.id,
+        req.session.accountId,
+        deps.db
+      )
+      if (!deleted) {
+        res.status(404).json({ error: 'account_not_found' })
+        return
+      }
+      sessions.revokeAllSessionsForAccount(account.id, deps.db)
+      res.status(200).json({ deleted: true })
+    }
+  )
 
   /** ADMIN-5's own audit trail, read back. */
   router.get('/tenant-deletions', (req, res) => {

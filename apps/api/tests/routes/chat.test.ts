@@ -1636,3 +1636,343 @@ describe('routes/chat.ts (WEB-10)', () => {
     expect((read.body as { error: string }).error).toBe('chat_not_connected')
   })
 })
+
+// WEB-73/DATA-7: `DELETE .../messages` deletes the caller's own
+// conversation history in one course — no other person's, no other
+// course's, and nothing about the course itself. Soft-deleted, so a
+// second read of the same transcript comes back empty (DATA-9).
+describe('routes/chat.ts — DELETE .../messages (WEB-73/DATA-7)', () => {
+  it('a signed-out caller reaches none of it', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+    // `Origin` set — `DELETE`, unlike `GET`, is not exempt from
+    // `middleware/origin.ts`'s own check (`routes/chat.ts`'s sibling `POST`
+    // tests, above, already need this for the identical reason); this test
+    // is about the session guard specifically, not the origin one.
+    const response = await request(app)
+      .delete('/organizations/some-org/chat/courses/some-course/messages')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(response.status).toBe(401)
+    expect((response.body as { error: string }).error).toBe('not_signed_in')
+  })
+
+  it('an unconnected caller is refused as not-connected, and nothing is deleted', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId } = seedEnrolledCourse(testDb.db, caller)
+
+    const app = await buildTestApp(testDb.db)
+    const response = await request(app)
+      .delete(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(404)
+    expect((response.body as { error: string }).error).toBe(
+      'chat_not_connected'
+    )
+  })
+
+  // ENRL-2/TEN-5 — a course this connected person is not enrolled in
+  // refuses the identical not-found shape the `GET`/`POST` handlers above
+  // already give it, never disclosing whether the course itself exists.
+  it('a course this connected person is not enrolled in is refused as not found, the same shape a foreign course is', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
+    const { courseId, discordPersonId } = seedEnrolledCourse(
+      testDb.db,
+      caller,
+      { enrol: false, answerUnenrolled: false }
+    )
+    connectCallerTo(testDb.db, caller, discordPersonId)
+
+    const app = await buildTestApp(testDb.db)
+    const response = await request(app)
+      .delete(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(404)
+    expect((response.body as { error: string }).error).toBe(
+      'chat_course_not_found'
+    )
+  })
+
+  it("deletes exactly the caller's own conversation in the course, and a second read comes back empty", async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('Sure thing.')
+
+    const app = await buildTestApp(testDb.db, { model })
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'What is on the syllabus?' })
+
+    const del = await request(app)
+      .delete(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(del.status).toBe(200)
+    expect(
+      (del.body as { deletedConversations: number }).deletedConversations
+    ).toBe(1)
+
+    const get = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(get.status).toBe(200)
+    expect((get.body as { messages: unknown[] }).messages).toEqual([])
+  })
+
+  it("another person's own conversation in the same course survives", async () => {
+    testDb = createTestDatabase()
+    const owner = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, owner)
+    connectCallerTo(testDb.db, owner, discordPersonId)
+
+    // A second account, connected to a *different* person, also enrolled
+    // in this same course — the same "two members must not be
+    // interchangeable" discipline `seedSecondCallerInOrganization`'s own
+    // doc comment states, applied here to two students' own history
+    // instead of two staff accounts.
+    const second = seedSecondCallerInOrganization(
+      testDb.db,
+      owner.organizationId
+    )
+    const secondPerson = people.resolvePersonByIdentity(
+      owner.organizationId,
+      { surface: 'discord', externalId: `discord-user-${randomUUID()}` },
+      testDb.db
+    )
+    enrolments.enrolViaRoster(
+      owner.organizationId,
+      { courseId, personId: secondPerson.id },
+      testDb.db
+    )
+    connectCallerTo(testDb.db, second, secondPerson.id)
+
+    const model = new FakeModelClient('Sure thing.')
+    const app = await buildTestApp(testDb.db, { model })
+
+    await request(app)
+      .post(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', owner.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: "Owner's own question" })
+    await request(app)
+      .post(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', second.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: "Second caller's own question" })
+
+    const del = await request(app)
+      .delete(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', owner.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(del.status).toBe(200)
+
+    const ownerGet = await request(app)
+      .get(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', owner.cookieHeader)
+    expect((ownerGet.body as { messages: unknown[] }).messages).toEqual([])
+
+    const secondGet = await request(app)
+      .get(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', second.cookieHeader)
+    const secondTranscript = (
+      secondGet.body as { messages: { text: string }[] }
+    ).messages
+    expect(secondTranscript.length).toBeGreaterThan(0)
+    expect(secondTranscript[0]?.text).toBe("Second caller's own question")
+  })
+
+  it("the same person's own conversation in a different course survives", async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const first = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, first.discordPersonId)
+
+    // A second course, the identical person enrolled in it too (not a
+    // second `connectIdentity` — `connectCallerTo` already merged this
+    // account onto `first.discordPersonId` in this organization above;
+    // `people.connectIdentity`'s own uniqueness on `(organizationId,
+    // 'web', accountId)` refuses a second, different person for the same
+    // account, so this proves the "different course" half of the claim by
+    // enrolling the same person a second time, not by fabricating a
+    // second identity connectIdentity would refuse anyway). Deliberately
+    // `enrol: false` — `seedEnrolledCourse` would otherwise admit its own
+    // fresh discord person, unused here.
+    const second = seedEnrolledCourse(testDb.db, caller, { enrol: false })
+    enrolments.enrolViaRoster(
+      caller.organizationId,
+      { courseId: second.courseId, personId: first.discordPersonId },
+      testDb.db
+    )
+
+    const model = new FakeModelClient('Sure thing.')
+    const app = await buildTestApp(testDb.db, { model })
+
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${first.courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Question in the first course' })
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${second.courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Question in the second course' })
+
+    const del = await request(app)
+      .delete(
+        `/organizations/${caller.organizationId}/chat/courses/${first.courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(del.status).toBe(200)
+
+    const firstGet = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${first.courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect((firstGet.body as { messages: unknown[] }).messages).toEqual([])
+
+    const secondGet = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${second.courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    const secondTranscript = (
+      secondGet.body as { messages: { text: string }[] }
+    ).messages
+    expect(secondTranscript.length).toBeGreaterThan(0)
+    expect(secondTranscript[0]?.text).toBe('Question in the second course')
+  })
+
+  it('deleting twice in a row is a harmless no-op the second time', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('Sure thing.')
+
+    const app = await buildTestApp(testDb.db, { model })
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'What is on the syllabus?' })
+
+    const first = await request(app)
+      .delete(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(first.status).toBe(200)
+    expect(
+      (first.body as { deletedConversations: number }).deletedConversations
+    ).toBe(1)
+
+    // D-138 — this second call resolves the identical, still-live person
+    // (`resolveIdentity`, not `resolvePersonByIdentity`; this course-scoped
+    // delete never soft-deletes the person row itself, only its
+    // conversations), so it is an ordinary second call against a person
+    // with nothing left to delete, not a refusal.
+    const second = await request(app)
+      .delete(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(second.status).toBe(200)
+    expect(
+      (second.body as { deletedConversations: number }).deletedConversations
+    ).toBe(0)
+  })
+
+  // D-138 — the index fix that closed the "tombstone still occupying its
+  // own unique index" limitation means a follow-up question after a
+  // history delete opens a *new* conversation rather than being blocked at
+  // the database level; the Delete history control naturally reappears
+  // once there is something new to delete.
+  it('a follow-up question after deleting history is answered, on a fresh conversation, by the same person', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('Sure thing.')
+
+    const app = await buildTestApp(testDb.db, { model })
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'First question' })
+
+    await request(app)
+      .delete(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    const post = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Second question, after deleting' })
+    expect(post.status).toBe(200)
+    expect((post.body as { result: { kind: string } }).result.kind).toBe(
+      'answered'
+    )
+
+    const get = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    const transcript = (get.body as { messages: { text: string }[] }).messages
+    // Only the fresh conversation's own messages — the deleted one answers
+    // nothing (DATA-9).
+    expect(transcript.some((m) => m.text === 'First question')).toBe(false)
+    expect(
+      transcript.some((m) => m.text === 'Second question, after deleting')
+    ).toBe(true)
+  })
+})

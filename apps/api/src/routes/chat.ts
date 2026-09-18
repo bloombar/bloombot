@@ -521,5 +521,63 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
     }
   )
 
+  /**
+   * WEB-73/DATA-7: delete the caller's own conversation history in one
+   * course — no other person's, no other course's, and nothing about the
+   * course itself. Soft-deleted (`@bloombot/db`'s
+   * `conversations.ts#softDeleteConversationsForPerson`'s own doc comment):
+   * reversible within the deployment's retention window, permanent once
+   * DATA-8's sweep runs.
+   *
+   * Authorized the identical way the `GET`/`POST` handlers above are —
+   * `resolveConnectedCallerPerson` then `resolveChatAdmission` — so a course
+   * this caller could not otherwise reach refuses the identical way (TEN-5,
+   * `404 chat_course_not_found`), never disclosing whether it exists.
+   * Deleting is scoped to exactly `(organizationId, courseId, person.id)`,
+   * the same three values every other handler in this file already resolves
+   * before touching anything — there is no way to reach another person's
+   * history, or this same person's history in a different course, through
+   * this route.
+   */
+  router.delete<{ organizationId: string; courseId: string }>(
+    '/courses/:courseId/messages',
+    (req, res) => {
+      const { organizationId, courseId } = req.params
+      const accountId = requireAccountId(req)
+      if (!accountId) {
+        res.status(401).json({ error: 'not_signed_in' })
+        return
+      }
+      const person = resolveConnectedCallerPerson(
+        organizationId,
+        accountId,
+        deps.db
+      )
+      if (!person) {
+        sendNotConnected(res)
+        return
+      }
+      const admission = enrolments.resolveChatAdmission(
+        organizationId,
+        courseId,
+        { personId: person.id, accountId },
+        deps.db
+      )
+      if (admission.kind === 'refused') {
+        res.status(404).json({ error: 'chat_course_not_found' })
+        return
+      }
+
+      const deleted = conversations.softDeleteConversationsForPerson(
+        organizationId,
+        courseId,
+        person.id,
+        accountId,
+        deps.db
+      )
+      res.status(200).json({ deletedConversations: deleted.length })
+    }
+  )
+
   return router
 }

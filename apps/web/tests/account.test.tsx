@@ -12,12 +12,27 @@
  * for `onSwitchOrganization`.
  */
 
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '../src/api/client.js'
 import type { AccountSummary } from '../src/api/types.js'
 import { Account } from '../src/pages/Account.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
+
+// WEB-72/DATA-7 — the Danger zone's own delete, mocked the same way every
+// other screen's destructive action already is (`tests/projects.test.tsx`'s
+// own module comment on this convention). `vi.hoisted` — `vi.mock`'s own
+// factory below is hoisted above an ordinary top-level `const`, which would
+// otherwise throw "Cannot access 'deleteAccount' before initialization".
+const { deleteAccount } = vi.hoisted(() => ({ deleteAccount: vi.fn() }))
+
+vi.mock('../src/api/client.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/api/client.js')>(
+    '../src/api/client.js'
+  )
+  return { ...actual, deleteAccount }
+})
 
 const ACCOUNT: AccountSummary = {
   id: 'account-1',
@@ -45,6 +60,7 @@ describe('Account (WEB-30)', () => {
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
         refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
       />
     )
     expect(screen.getByText('instructor@example.edu')).toBeInTheDocument()
@@ -59,6 +75,7 @@ describe('Account (WEB-30)', () => {
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
         refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
       />
     )
     // WEB-41 rework (finding 2, coordinator review) — scoped from the
@@ -88,6 +105,7 @@ describe('Account (WEB-30)', () => {
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
         refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
       />
     )
     const activeRow = screen.getByText(/Org One/).closest('li')
@@ -113,6 +131,7 @@ describe('Account (WEB-30)', () => {
         onSwitchOrganization={onSwitchOrganization}
         navigate={vi.fn()}
         refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
       />
     )
     const inactiveRow = screen.getByText(/Org Two/).closest('li')
@@ -129,6 +148,7 @@ describe('Account (WEB-30)', () => {
         onSwitchOrganization={onSwitchOrganization}
         navigate={vi.fn()}
         refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
       />
     )
     const connectedRow = screen.getByText(/A University/).closest('li')
@@ -146,6 +166,7 @@ describe('Account (WEB-30)', () => {
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
         refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
       />
     )
     // A real `href`, built the same way `buildPath` builds every other
@@ -177,6 +198,7 @@ describe('Account (WEB-30)', () => {
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
         refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
       />
     )
     expect(screen.getByRole('link', { name: 'A University' })).toHaveAttribute(
@@ -194,6 +216,7 @@ describe('Account (WEB-30)', () => {
         onSwitchOrganization={vi.fn()}
         navigate={navigate}
         refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
       />
     )
     const link = screen.getByRole('link', { name: 'Org Two' })
@@ -224,6 +247,7 @@ describe('Account (WEB-30)', () => {
           onSwitchOrganization={vi.fn()}
           navigate={navigate}
           refreshAccount={vi.fn().mockResolvedValue(undefined)}
+          onSignedOut={vi.fn()}
         />
       )
       const link = screen.getByRole('link', { name: 'Org Two' })
@@ -235,4 +259,101 @@ describe('Account (WEB-30)', () => {
       expect(navigate).not.toHaveBeenCalled()
     }
   )
+})
+
+// WEB-72/DATA-7 — the Danger zone, last on the screen, holding this
+// account's own delete and nothing else.
+describe('Account — Danger zone (WEB-72/DATA-7)', () => {
+  it('renders the Danger zone last on the screen', () => {
+    renderWithModal(
+      <Account
+        account={ACCOUNT}
+        activeOrganizationId="org-1"
+        onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
+      />
+    )
+    const sections = screen.getAllByRole('region')
+    expect(sections.at(-1)).toHaveAccessibleName('Danger zone')
+  })
+
+  it('cancelling the confirmation sends nothing', async () => {
+    renderWithModal(
+      <Account
+        account={ACCOUNT}
+        activeOrganizationId="org-1"
+        onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(deleteAccount).not.toHaveBeenCalled()
+  })
+
+  it('typing the wrong email keeps the delete button inert and sends nothing; the exact email proceeds and signs out', async () => {
+    deleteAccount.mockResolvedValue(undefined)
+    const onSignedOut = vi.fn()
+    renderWithModal(
+      <Account
+        account={ACCOUNT}
+        activeOrganizationId="org-1"
+        onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={onSignedOut}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const field = within(dialog).getByLabelText('Email')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete account',
+    })
+    expect(confirmButton).toBeDisabled()
+    fireEvent.change(field, { target: { value: 'wrong@example.edu' } })
+    expect(confirmButton).toBeDisabled()
+    expect(deleteAccount).not.toHaveBeenCalled()
+
+    fireEvent.change(field, { target: { value: ACCOUNT.email } })
+    expect(confirmButton).not.toBeDisabled()
+    fireEvent.click(confirmButton)
+
+    await waitFor(() => expect(deleteAccount).toHaveBeenCalled())
+    await waitFor(() => expect(onSignedOut).toHaveBeenCalled())
+  })
+
+  it('a failed delete is reported and the account is not signed out', async () => {
+    deleteAccount.mockRejectedValue(
+      new ApiError(403, { error: 'not_authorized' })
+    )
+    const onSignedOut = vi.fn()
+    renderWithModal(
+      <Account
+        account={ACCOUNT}
+        activeOrganizationId="org-1"
+        onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onSignedOut={onSignedOut}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: ACCOUNT.email },
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Delete account' })
+    )
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(onSignedOut).not.toHaveBeenCalled()
+  })
 })

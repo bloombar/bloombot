@@ -56,6 +56,9 @@ const {
   fetchAdminProject,
   fetchAdminAccounts,
   fetchAdminAccount,
+  deleteAdminCourse,
+  deleteAdminProject,
+  deleteAdminAccount,
 } = vi.hoisted(() => ({
   fetchAdminOrganizations: vi.fn(),
   fetchDeletionPreview: vi.fn(),
@@ -70,6 +73,10 @@ const {
   fetchAdminProject: vi.fn(),
   fetchAdminAccounts: vi.fn(),
   fetchAdminAccount: vi.fn(),
+  // WEB-72/DATA-7 — the three console Danger zones' own soft-deletes.
+  deleteAdminCourse: vi.fn(),
+  deleteAdminProject: vi.fn(),
+  deleteAdminAccount: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -90,6 +97,9 @@ vi.mock('../src/api/client.js', async () => {
     fetchAdminProject,
     fetchAdminAccounts,
     fetchAdminAccount,
+    deleteAdminCourse,
+    deleteAdminProject,
+    deleteAdminAccount,
   }
 })
 
@@ -1235,6 +1245,58 @@ describe('Admin — ADMIN-6’s read-only course settings screen', () => {
     expect(acknowledgements).toHaveTextContent('roster.csv')
     expect(acknowledgements).toHaveTextContent('instructor@bloombot.example')
   })
+
+  // WEB-72/DATA-7 — the console's own Danger zone for a course.
+  it('renders a Danger zone last on the screen, gated on typing the course title, and deletes on confirmation', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+    fetchAdminCourses.mockResolvedValue({ courses: [] })
+    deleteAdminCourse.mockResolvedValue({ deleted: true })
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+    const detail = await screen.findByTestId('admin-course-detail-course-1')
+
+    const sections = within(detail).getAllByRole('region')
+    expect(sections.at(-1)).toHaveAccessibleName('Danger zone')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete course' }))
+    const dialog = await screen.findByRole('dialog')
+    const field = within(dialog).getByLabelText('Name')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    expect(confirmButton).toBeDisabled()
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    expect(confirmButton).toBeDisabled()
+    expect(deleteAdminCourse).not.toHaveBeenCalled()
+
+    fireEvent.change(field, { target: { value: COURSE_DETAIL.courseTitle } })
+    expect(confirmButton).not.toBeDisabled()
+    fireEvent.click(confirmButton)
+
+    await waitFor(() =>
+      expect(deleteAdminCourse).toHaveBeenCalledWith(
+        'course-1',
+        COURSE_DETAIL.courseTitle
+      )
+    )
+    // WEB-33 — the deleted course's own address no longer names anything
+    // real; the console goes back to the Courses list, the same "go back
+    // to the list" reasoning ADMIN-5's own `handleDelete` already holds
+    // itself to for an organization.
+    await waitFor(() => expect(fetchAdminCourses).toHaveBeenCalled())
+  })
+
+  it('cancelling the course delete sends nothing', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+    await screen.findByTestId('admin-course-detail-course-1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete course' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(deleteAdminCourse).not.toHaveBeenCalled()
+  })
 })
 
 // ADMIN-7 — the organization screen's own richer read: usage, owners,
@@ -1388,6 +1450,52 @@ describe('Admin — ADMIN-8’s project console screen', () => {
     renderAdmin({ route: { kind: 'admin-project', projectId: 'missing' } })
 
     expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
+  })
+
+  // WEB-72/DATA-7 — the console's own Danger zone for a project.
+  it('renders a Danger zone last on the screen, gated on typing the project name, and deletes on confirmation', async () => {
+    fetchAdminProject.mockResolvedValue(PROJECT_DETAIL)
+    deleteAdminProject.mockResolvedValue({ deleted: true })
+
+    renderAdmin({ route: { kind: 'admin-project', projectId: 'proj-1' } })
+    const detail = await screen.findByTestId('admin-project-detail-proj-1')
+
+    const sections = within(detail).getAllByRole('region')
+    expect(sections.at(-1)).toHaveAccessibleName('Danger zone')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+    const dialog = await screen.findByRole('dialog')
+    const field = within(dialog).getByLabelText('Name')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    expect(confirmButton).toBeDisabled()
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    expect(confirmButton).toBeDisabled()
+    expect(deleteAdminProject).not.toHaveBeenCalled()
+
+    fireEvent.change(field, { target: { value: PROJECT_DETAIL.name } })
+    expect(confirmButton).not.toBeDisabled()
+    fireEvent.click(confirmButton)
+
+    await waitFor(() =>
+      expect(deleteAdminProject).toHaveBeenCalledWith(
+        'proj-1',
+        PROJECT_DETAIL.name
+      )
+    )
+  })
+
+  it('cancelling the project delete sends nothing', async () => {
+    fetchAdminProject.mockResolvedValue(PROJECT_DETAIL)
+
+    renderAdmin({ route: { kind: 'admin-project', projectId: 'proj-1' } })
+    await screen.findByTestId('admin-project-detail-proj-1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(deleteAdminProject).not.toHaveBeenCalled()
   })
 })
 
@@ -1604,6 +1712,59 @@ describe('Admin — ADMIN-11’s account console screen', () => {
     expect(
       within(acknowledgements).getByRole('link', { name: 'Web Design' })
     ).toHaveAttribute('href', '/platform-admin/courses/course-1')
+  })
+
+  // WEB-72/DATA-7 — the console's own Danger zone for an account.
+  it('renders a Danger zone last on the screen, gated on typing the account name, and deletes on confirmation', async () => {
+    fetchAdminAccount.mockResolvedValue(ACCOUNT_DETAIL)
+    fetchAdminAccounts.mockResolvedValue({ accounts: [] })
+    deleteAdminAccount.mockResolvedValue({ deleted: true })
+
+    renderAdmin({
+      route: { kind: 'admin-account', accountId: 'account-1' },
+    })
+    const detail = await screen.findByTestId('admin-account-detail-account-1')
+
+    const sections = within(detail).getAllByRole('region')
+    expect(sections.at(-1)).toHaveAccessibleName('Danger zone')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
+    const dialog = await screen.findByRole('dialog')
+    const field = within(dialog).getByLabelText('Name')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    expect(confirmButton).toBeDisabled()
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    expect(confirmButton).toBeDisabled()
+    expect(deleteAdminAccount).not.toHaveBeenCalled()
+
+    fireEvent.change(field, {
+      target: { value: ACCOUNT_DETAIL.displayName },
+    })
+    expect(confirmButton).not.toBeDisabled()
+    fireEvent.click(confirmButton)
+
+    await waitFor(() =>
+      expect(deleteAdminAccount).toHaveBeenCalledWith(
+        'account-1',
+        ACCOUNT_DETAIL.displayName
+      )
+    )
+  })
+
+  it('cancelling the account delete sends nothing', async () => {
+    fetchAdminAccount.mockResolvedValue(ACCOUNT_DETAIL)
+
+    renderAdmin({
+      route: { kind: 'admin-account', accountId: 'account-1' },
+    })
+    await screen.findByTestId('admin-account-detail-account-1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(deleteAdminAccount).not.toHaveBeenCalled()
   })
 })
 

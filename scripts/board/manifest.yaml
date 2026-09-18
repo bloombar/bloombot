@@ -4882,6 +4882,23 @@
   phase: 44
   status: Done
   review: false
+- id: PROJ-11
+  title: The irreversible delete is no less guarded than the reversible one
+  full: "PROJ-8 and PROJ-9's permanent deletion of a course or a project — reached
+    from the row menu on the organization and project screens — checks no role
+    at all: any staff member of the organization can destroy a course outright,
+    while DATA-7's reversible delete of the same course is owner-only. The more
+    destructive of the two is the less protected, which is backwards. The
+    permanent path takes the same owner check the reversible one has. And
+    because two controls both labelled \"Delete\", on the same object, with
+    opposite consequences, is a trap no dialog wording fully closes, the
+    permanent path is retired in favour of the reversible one wherever the
+    reversible one can do the job: a course or…"
+  section: §49 Deleting, Reversibly, Then Permanently
+  family: PROJ
+  phase: 44
+  status: Backlog
+  review: false
 - id: TEN-10
   title: A tenant's deletion covers everything that belongs to the tenant
   full: ADMIN-5's deletion walks a hand-written list of tables, and the list has

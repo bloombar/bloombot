@@ -348,6 +348,18 @@ function ShellInner({
       membership.organizationId === activeOrganizationId &&
       membership.role === 'owner'
   )
+  // WEB-72/DATA-7 — the active organization's own name, for `Team.tsx`'s
+  // Danger zone typed-name gate: `account.memberships` already carries it
+  // (`api/types.ts#MembershipSummary`), so nothing new is fetched. `''`
+  // when this account holds no membership here at all (a connected-only
+  // relationship, LINK-10) — `Team.tsx` is never reached on that path
+  // (ENRL-5's own screen requires a membership), so this never actually
+  // renders empty in practice; guarded rather than assumed regardless, the
+  // same discipline `isOwner`/`isMember` above already hold themselves to.
+  const activeOrganizationName =
+    account.memberships.find(
+      (membership) => membership.organizationId === activeOrganizationId
+    )?.organizationName ?? ''
   // Chat is the only screen a connected-but-not-a-member account can reach
   // in this organization — forced here, rather than merely left out of
   // `navGroups` below, so a stale `activeTab` (this shell's own state,
@@ -692,6 +704,15 @@ function ShellInner({
           organizationId={activeOrganizationId}
           isOwner={isOwner}
           viewerAccountId={account.id}
+          // WEB-72/DATA-7 — `Team.tsx`'s own Danger zone: the organization's
+          // own name for the typed-name gate, and the same `navigate`/
+          // `refreshAccount` `pages/Account.tsx`'s own organization list
+          // already threads, needed here so deleting the organization
+          // currently active can move this shell off it (`Team.tsx`'s own
+          // module comment has the full reasoning).
+          organizationName={activeOrganizationName}
+          navigate={(route) => guardedNavigate(() => navigate(route))}
+          refreshAccount={refreshAccount}
         />
       ) : effectiveTab === 'jobs' ? (
         // JOB-2 — the same `key={activeOrganizationId}` reasoning every
@@ -734,6 +755,11 @@ function ShellInner({
           }
           navigate={(route) => guardedNavigate(() => navigate(route))}
           refreshAccount={refreshAccount}
+          // WEB-72/DATA-7 — `Account.tsx`'s own Danger zone deletes this
+          // very account; the caller is signed out the moment that
+          // succeeds, the same `onSignedOut` `SignedInChrome`'s own sign-out
+          // button already triggers (this file's own identical prop, above).
+          onSignedOut={onSignedOut}
         />
       ) : isProjectsRoute(route) ? (
         // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a

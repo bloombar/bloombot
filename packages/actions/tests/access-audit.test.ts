@@ -33,6 +33,12 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // PROJ-6: resolves the project being renamed, the same `resolveOwnProject`
   // shape `projects.archive`/`projects.unarchive` already use above.
   'projects.rename': { resource: 'project', access: 'write' },
+  // WEB-72/DATA-7: same `resolveOwnProject` resource as every other write in
+  // this table — *who* may call this (an existing owner, never any
+  // membership) is `execute`'s own check, not the policy's, the same split
+  // `organizations.rename`'s own row (below) documents for the identical
+  // reason (a policy cannot see the caller's own account id).
+  'projects.softDelete': { resource: 'project', access: 'write' },
   // PROJ-5: no existing project to resolve on a list either — the same
   // "organization" resource `projects.create` resolves, read rather than
   // written.
@@ -67,6 +73,12 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // PROJ-8: same access as `courses.disable` above — deleting is not a step
   // up in privilege from disabling.
   'courses.delete': { resource: 'course', access: 'write' },
+  // WEB-72/DATA-7: resolves the course itself, the same `resolveOwnCourse`
+  // shape `courses.delete` above uses — *who* may call this (an existing
+  // owner of the organization, never any staff role) is `execute`'s own
+  // check, not the policy's, the same split `organizations.rename`'s own
+  // row (below) documents for the identical reason.
+  'courses.softDelete': { resource: 'course', access: 'write' },
   // PROJ-5: resolves the project a course list is scoped to, read.
   'courses.list': { resource: 'project', access: 'read' },
   // PROJ-5: resolves the course itself, read.
@@ -301,6 +313,12 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // owner) is `execute`'s own check, not the policy's, the same reason
   // `memberships.grant`'s own row gives.
   'organizations.rename': { resource: 'organization', access: 'write' },
+  // WEB-72/DATA-7: no existing record to resolve *against* — the record
+  // being reached *is* the organization, the same shape `organizations.rename`
+  // above uses. *Who* may call this (an existing owner) is `execute`'s own
+  // check, not the policy's, the same reason `organizations.rename`'s own
+  // row gives.
+  'organizations.softDelete': { resource: 'organization', access: 'write' },
 }
 
 describe('ACT-5 — access audit index', () => {

@@ -31,6 +31,7 @@ const {
   listCourseWebSources,
   listCourseEnrolments,
   listDiscordServers,
+  softDeleteCourse,
 } = vi.hoisted(() => ({
   getCourse: vi.fn(),
   saveCourse: vi.fn(),
@@ -42,6 +43,8 @@ const {
   listCourseWebSources: vi.fn(),
   listCourseEnrolments: vi.fn(),
   listDiscordServers: vi.fn(),
+  // WEB-72/DATA-7 — the General tab's own Danger zone delete.
+  softDeleteCourse: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -60,6 +63,7 @@ vi.mock('../src/api/client.js', async () => {
     listCourseWebSources,
     listCourseEnrolments,
     listDiscordServers,
+    softDeleteCourse,
   }
 })
 
@@ -3330,5 +3334,152 @@ describe('CourseEditor — Chat button (WEB-62)', () => {
     expect(
       screen.queryByRole('button', { name: /^Chat/ })
     ).not.toBeInTheDocument()
+  })
+})
+
+// WEB-72/DATA-7 — the General tab's own Danger zone: last on the tab,
+// owner-gated, typed-name confirmed, reversible-worded (never "cannot be
+// undone" — that phrase belongs to `courses.delete`, PROJ-8's permanent
+// wipe, not this soft delete).
+describe('CourseEditor — Danger zone (WEB-72/DATA-7)', () => {
+  it('renders the Danger zone last on the General tab for an owner', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        isOwner={true}
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    const panel = screen.getByRole('tabpanel', { name: 'General' })
+    const sections = within(panel).getAllByRole('region')
+    expect(sections.at(-1)).toHaveAccessibleName('Danger zone')
+  })
+
+  it('offers no Danger zone at all when the caller is not an owner', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(
+      screen.queryByRole('button', { name: 'Delete course' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('cancelling the confirmation sends nothing', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        isOwner={true}
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete course' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(softDeleteCourse).not.toHaveBeenCalled()
+  })
+
+  it('typing the wrong title keeps the delete button inert and sends nothing; the exact title proceeds and closes the editor', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    softDeleteCourse.mockResolvedValue({ id: 'course-1' })
+    const onCancel = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        isOwner={true}
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete course' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const field = within(dialog).getByLabelText('Course title')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete course',
+    })
+    expect(confirmButton).toBeDisabled()
+    fireEvent.change(field, { target: { value: 'the wrong title' } })
+    expect(confirmButton).toBeDisabled()
+    expect(softDeleteCourse).not.toHaveBeenCalled()
+
+    fireEvent.change(field, { target: { value: 'Web Design' } })
+    expect(confirmButton).not.toBeDisabled()
+    fireEvent.click(confirmButton)
+
+    await waitFor(() =>
+      expect(softDeleteCourse).toHaveBeenCalledWith('org-1', 'course-1')
+    )
+    await waitFor(() => expect(onCancel).toHaveBeenCalled())
+  })
+
+  it('a failed delete is reported and the editor stays open', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    softDeleteCourse.mockRejectedValue(
+      new ApiError(403, { error: 'not_authorized' })
+    )
+    const onCancel = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        isOwner={true}
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete course' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Course title'), {
+      target: { value: 'Web Design' },
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Delete course' })
+    )
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(onCancel).not.toHaveBeenCalled()
   })
 })

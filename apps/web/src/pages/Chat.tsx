@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   ApiError,
+  deleteChatHistory,
   getChatMessages,
   listChatCourses,
   postChatMessage,
@@ -29,8 +30,9 @@ import type {
 import { Button } from '../components/Button.js'
 import { ChatMessage } from '../components/ChatMessage.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { useModal } from '../components/modal/ModalProvider.js'
 import { LoadingStatus, Skeleton } from '../components/Skeleton.js'
-import { SendIcon, SuccessIcon } from '../icons.js'
+import { DeleteIcon, SendIcon, SuccessIcon } from '../icons.js'
 import { NotFound } from './NotFound.js'
 
 export interface ChatProps {
@@ -151,6 +153,16 @@ export function Chat({
   const [notice, setNotice] = useState<string | undefined>(undefined)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  // WEB-73/DATA-7 — Delete history's own busy/error state, separate from
+  // `messagesError` above (that state is what the thread's own fetch
+  // reports; this one is this control's own async write, the same split
+  // `pages/Usage.tsx`/`components/Team.tsx` already hold between a read's
+  // own error and a write's own).
+  const [deletingHistory, setDeletingHistory] = useState(false)
+  const [deleteHistoryError, setDeleteHistoryError] = useState<
+    ApiError | undefined
+  >(undefined)
+  const { confirm } = useModal()
   // WEB-24: the thread's own scroll container — `scrollThreadToBottom`
   // below sets its `scrollTop` directly, rather than the previous
   // `scrollIntoView`, which (the reported defect) moved the whole page
@@ -365,6 +377,45 @@ export function Chat({
     }
   }
 
+  /**
+   * WEB-73/DATA-7 — delete this account's own conversation history in the
+   * course on screen: no other person's, no other course's, and nothing
+   * about the course itself. Confirms first, naming the course
+   * (`courseTitle`, resolved from `courses` — the same list this screen's
+   * own selector already reads titles from). Reversible for the
+   * deployment's retention window, then permanent — worded that way here,
+   * not "cannot be undone", the same distinction the Danger zones' own
+   * dialogs (`components/CourseRows.tsx`, `components/Team.tsx`) draw
+   * between this slice's soft delete and PROJ-8/PROJ-9's permanent one.
+   * Clears the thread on screen directly on success — the delete just
+   * proved there is nothing left to fetch, so a second round trip to learn
+   * that would be wasted.
+   */
+  const handleDeleteHistory = async (courseTitle: string) => {
+    if (!selectedCourseId) return
+    const confirmed = await confirm({
+      title: `Delete your history in ${courseTitle}?`,
+      description:
+        'This deletes your own conversations in this course. It is reversible ' +
+        'for a while, and permanent after that.',
+      confirmLabel: 'Delete history',
+      destructive: true,
+    })
+    if (!confirmed) return
+
+    setDeleteHistoryError(undefined)
+    setDeletingHistory(true)
+    try {
+      await deleteChatHistory(organizationId, selectedCourseId)
+      setMessages([])
+    } catch (caught) {
+      if (caught instanceof ApiError) setDeleteHistoryError(caught)
+      else throw caught
+    } finally {
+      setDeletingHistory(false)
+    }
+  }
+
   // WEB-10 rework — `chat_not_connected` is not an error to alarm anyone
   // with: it is the same "invited to connect" outcome LINK-1 gives an
   // unconnected identity on any other surface (`routes/chat.ts`'s own
@@ -450,6 +501,19 @@ export function Chat({
     ? courses.find((course) => course.id === courseId)?.title
     : undefined
 
+  // WEB-73 — this account's own current course, by title, for the Delete
+  // history control's confirmation; and whether it has asked this course
+  // anything yet (`role === 'student'`, not merely a non-empty transcript —
+  // defended, not assumed, the same discipline this file's own module
+  // comment already holds every "unreachable in practice" case to). A
+  // person who has asked nothing is offered nothing to delete.
+  const selectedCourseTitle = courses.find(
+    (course) => course.id === selectedCourseId
+  )?.title
+  const hasOwnHistory =
+    messages !== undefined &&
+    messages.some((message) => message.role === 'student')
+
   return (
     <section
       aria-label="Chat"
@@ -473,9 +537,38 @@ export function Chat({
       // leaving the composer hidden underneath it.
       className="flex h-[calc(100dvh-var(--spacing-header)-var(--spacing-footer)-3rem)] flex-col gap-4 overflow-hidden"
     >
-      <h1 className="shrink-0 text-page-title font-semibold text-neutral-900">
-        Chat
-      </h1>
+      {/* WEB-73 — the heading row: `shrink-0`, the same treatment WEB-24
+          gives everything outside the thread (this file's own module
+          comment on the outer `<section>`, below) so this row keeps its
+          natural height rather than the flex column squeezing it — a
+          `<h1>` and, to its right, Delete history, offered only once this
+          account has asked the course on screen something. */}
+      <div className="flex shrink-0 items-center justify-between gap-2">
+        <h1 className="text-page-title font-semibold text-neutral-900">Chat</h1>
+        {hasOwnHistory && (
+          <Button
+            variant="destructive"
+            icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+            onClick={() =>
+              void handleDeleteHistory(selectedCourseTitle ?? 'this course')
+            }
+            disabled={deletingHistory}
+          >
+            {deletingHistory ? 'Deleting…' : 'Delete history'}
+          </Button>
+        )}
+      </div>
+      {deleteHistoryError && (
+        // WEB-24: `shrink-0` — this banner, like every other element
+        // outside the thread itself, keeps its natural height rather than
+        // being squeezed by the flex column's fixed total (the outer
+        // `<section>`'s own module comment, below); `ErrorMessage`'s own
+        // root carries no `shrink-0` of its own, unlike the `joinConfirmation`
+        // banner above, which is a plain element this file already owns.
+        <div className="shrink-0">
+          <ErrorMessage error={deleteHistoryError} />
+        </div>
+      )}
 
       {joinConfirmation && (
         // WEB-25: `role="status"` — an `aria-live` region, so a screen

@@ -64,6 +64,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   approveAdminCourse,
+  deleteAdminAccount,
+  deleteAdminCourse,
+  deleteAdminProject,
   deleteTenant,
   fetchAdminAccount,
   fetchAdminAccounts,
@@ -478,6 +481,65 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     }
   }
 
+  /**
+   * WEB-72/DATA-7 — a platform administrator's own soft-delete, shared
+   * shape for a course, a project and an account: name what is deleted,
+   * gate on typing that entity's own name exactly (`confirmName`, enforced
+   * again server-side — `api/client.ts#deleteAdminCourse`'s own doc
+   * comment), then delete and navigate back to the list the deleted entity
+   * used to appear in — the same "go back to the list" reasoning
+   * `handleDelete` (ADMIN-5, above) already gives for an organization.
+   * Reversible for the deployment's retention window, then permanent —
+   * unlike `handleDelete` above, never worded "cannot be undone".
+   */
+  const handleSoftDelete = async (
+    id: string,
+    name: string,
+    deleteFn: (id: string, confirmName: string) => Promise<{ deleted: true }>,
+    onDeleted: () => void
+  ) => {
+    const typed = await prompt({
+      title: `Delete ${name}?`,
+      description:
+        `This deletes ${name}. It is reversible for a while, and permanent ` +
+        `after that. Type its name to confirm.`,
+      label: 'Name',
+      placeholder: name,
+      confirmLabel: 'Delete',
+      destructive: true,
+      validate: (value) =>
+        value === name ? undefined : 'Type the name exactly to confirm.',
+    })
+    if (typed === undefined) return
+
+    setError(undefined)
+    setDeletingId(id)
+    try {
+      await deleteFn(id, typed)
+      onDeleted()
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught)
+      else throw caught
+    } finally {
+      setDeletingId(undefined)
+    }
+  }
+
+  const handleDeleteCourse = (courseId: string, courseTitle: string) =>
+    handleSoftDelete(courseId, courseTitle, deleteAdminCourse, () => {
+      navigate({ kind: 'admin-courses' }, { replace: true })
+    })
+
+  const handleDeleteProject = (projectId: string, projectName: string) =>
+    handleSoftDelete(projectId, projectName, deleteAdminProject, () => {
+      navigate({ kind: 'admin-organizations' }, { replace: true })
+    })
+
+  const handleDeleteAccount = (accountId: string, displayName: string) =>
+    handleSoftDelete(accountId, displayName, deleteAdminAccount, () => {
+      navigate({ kind: 'admin-accounts' }, { replace: true })
+    })
+
   // ADMIN-6 — Approve/Unapprove refresh whichever of the two screens
   // (`'admin-courses'`'s own list, `'admin-course'`'s own detail) is
   // actually current, rather than always the list: a decision made from
@@ -587,7 +649,9 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           project={projectDetail}
           notFound={projectNotFound}
           failed={error !== undefined}
+          deletingId={deletingId}
           navigate={navigate}
+          onDelete={handleDeleteProject}
           onBack={() => navigate({ kind: 'admin-organizations' })}
         />
       ) : route.kind === 'admin-deletions' ? (
@@ -613,9 +677,11 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           notFound={courseNotFound}
           failed={error !== undefined}
           decidingCourseId={decidingCourseId}
+          deletingId={deletingId}
           navigate={navigate}
           onApprove={handleApprove}
           onUnapprove={handleUnapprove}
+          onDelete={handleDeleteCourse}
           onBack={() => navigate({ kind: 'admin-courses' })}
         />
       ) : route.kind === 'admin-accounts' ? (
@@ -631,7 +697,9 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           account={accountDetail}
           notFound={accountNotFound}
           failed={error !== undefined}
+          deletingId={deletingId}
           navigate={navigate}
+          onDelete={handleDeleteAccount}
           onBack={() => navigate({ kind: 'admin-accounts' })}
         />
       ) : (

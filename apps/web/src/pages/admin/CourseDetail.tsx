@@ -23,6 +23,12 @@
  * screen refreshes this screen (`refreshCurrentCourseScreen`), not only the
  * list an operator would otherwise have to navigate back to to see it take
  * effect.
+ *
+ * WEB-72/DATA-7 — a Danger zone, last on the screen: a platform
+ * administrator's own soft-delete, reversible for the deployment's
+ * retention window, then permanent. `Admin.tsx#handleSoftDelete` gates it
+ * on typing the course's own title, the same typed-name discipline
+ * `Admin.tsx#handleDelete` (ADMIN-5) already applies to an organization.
  */
 
 import type { AdminCourseDetail } from '../../api/types.js'
@@ -34,6 +40,7 @@ import {
   SkeletonLine,
   SkeletonRow,
 } from '../../components/Skeleton.js'
+import { DeleteIcon } from '../../icons.js'
 import type { Route } from '../../routing/route.js'
 import { NotFound } from '../NotFound.js'
 import { formatBySurface, formatMicros, ReadOnlyField } from './shared.js'
@@ -44,9 +51,11 @@ export function CourseDetailView({
   notFound,
   failed,
   decidingCourseId,
+  deletingId,
   navigate,
   onApprove,
   onUnapprove,
+  onDelete,
   onBack,
 }: {
   courseId: string
@@ -55,11 +64,14 @@ export function CourseDetailView({
   notFound: boolean
   failed: boolean
   decidingCourseId: string | undefined
+  /** WEB-72/DATA-7 — the course id currently mid-delete, the same `deletingId` shape `admin/OrganizationDetail.tsx` already uses for ADMIN-5. */
+  deletingId: string | undefined
   navigate: (route: Route, options?: { replace?: boolean }) => void
   // ADMIN-13 — the whole course, not only its id, the same shape
   // `CoursesView`'s own `onApprove` takes.
   onApprove: (course: { courseId: string; courseTitle: string }) => void
   onUnapprove: (course: { courseId: string; courseTitle: string }) => void
+  onDelete: (courseId: string, courseTitle: string) => void
   onBack: () => void
 }) {
   if (notFound) {
@@ -408,6 +420,25 @@ export function CourseDetailView({
             </table>
           </div>
         )}
+      </section>
+
+      {/* WEB-72 — the last section on the screen, visibly separated,
+          holding this course's own delete and nothing else. */}
+      <section
+        aria-label="Danger zone"
+        className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
+      >
+        <h3 className="text-section-title font-semibold text-danger-700">
+          Danger zone
+        </h3>
+        <Button
+          variant="destructive"
+          icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+          onClick={() => onDelete(course.courseId, course.courseTitle)}
+          disabled={deletingId === course.courseId}
+        >
+          {deletingId === course.courseId ? 'Deleting…' : 'Delete course'}
+        </Button>
       </section>
     </div>
   )

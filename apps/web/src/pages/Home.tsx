@@ -58,6 +58,31 @@ const PRIVACY_SUMMARY: readonly string[] = [
   'We cannot yet delete an individual student’s data on request, and this service does not promise that it can.',
 ]
 
+/**
+ * The kinds of information a student should keep out of a question, named
+ * concretely rather than as "sensitive information" — which nobody can act
+ * on. These are the categories US student-privacy law treats as protected:
+ * the education-record fields FERPA covers (grades, discipline, financial
+ * aid, student identifiers), and the categories state student-data laws name
+ * outright — California's higher-education statute, for one, forbids an
+ * operator to retain information about a student's health, immigration
+ * status, precise location, or sexual orientation or gender identity at all.
+ *
+ * This service stores what it is told, indefinitely, and cannot yet forget
+ * one student's part of it, so the only reliable protection is not typing it
+ * in the first place. Saying that plainly is worth more than a policy
+ * paragraph nobody reads.
+ */
+const DO_NOT_SHARE: readonly string[] = [
+  'Grades, transcripts, disciplinary records, financial aid, or anything else from a student record',
+  'Student ID numbers, Social Security numbers, or other government identifiers',
+  'Health or medical information, including mental health, disability and accommodations',
+  'Immigration or citizenship status',
+  'Sexual orientation or gender identity',
+  'Home address or precise location',
+  'Anything about another student',
+]
+
 export interface HomeProps {
   /** Passed through to the embedded sign-in form. */
   onSignedIn: () => void
@@ -137,6 +162,30 @@ export function Home({ onSignedIn, googleClientId }: HomeProps) {
               <li key={point}>{point}</li>
             ))}
           </ul>
+          <div className="mt-6 rounded-md border border-warning-600 bg-warning-50 p-4">
+            <h3 className="text-sm font-semibold text-neutral-900">
+              Please don’t tell the bot anything private
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-neutral-700">
+              Ask it about the course. Everything you type is stored, kept, and
+              sent to an AI provider as written, and we have no way yet to
+              delete one student’s part of it — so the only thing that reliably
+              keeps information private here is not typing it. Please keep the
+              following out of your questions, for your own sake and for anyone
+              you might mention:
+            </p>
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-neutral-700">
+              {DO_NOT_SHARE.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+            <p className="mt-3 text-sm leading-6 text-neutral-700">
+              Much of this is protected under FERPA and under state student-data
+              laws, and some of it is information this service is not built to
+              hold at all. If you need to discuss any of it, speak to your
+              instructor or your institution directly rather than here.
+            </p>
+          </div>
           <p className="mt-4 text-sm leading-6 text-neutral-700">
             This is a summary and nothing more. The{' '}
             <a href="/privacy" className="text-brand-600 underline">

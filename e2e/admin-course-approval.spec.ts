@@ -155,6 +155,15 @@ test('a platform administrator approves a pending course, it answers, then unapp
     const pendingRow = adminPage.getByTestId(`admin-course-${courseId}`)
     await expect(pendingRow).toBeVisible()
     await expect(pendingRow).toContainText(courseTitle)
+
+    // ADMIN-12/ADMIN-7 — the row's own project name is now a real link into
+    // its own console screen (`CoursesView.tsx`'s own module comment on the
+    // gap this closes), not merely plain text.
+    await pendingRow.getByRole('link', { name: projectName }).click()
+    await expect(adminPage.getByText(projectName)).toBeVisible()
+    await adminPage.goBack()
+    await expect(pendingRow).toBeVisible()
+
     // `exact: true` — a plain `{ name: 'Approve' }` matches "Unapprove" too
     // (a case-insensitive substring by default, and "Unapprove" contains
     // "approve"), the same trap this file's own `projectName, exact: true`

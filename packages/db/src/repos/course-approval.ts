@@ -294,11 +294,19 @@ export function listActiveOwnerEmails(
 export interface CourseForApproval {
   courseId: string
   courseTitle: string
+  projectId: string
   projectName: string
   organizationName: string
   organizationId: string
-  /** Every active owner's email, ADMIN-4's own "who to ask" for a course a platform administrator is deciding on. */
-  ownerEmails: string[]
+  /**
+   * Every active owner's account id and email, ADMIN-4's own "who to ask"
+   * for a course a platform administrator is deciding on — the id, not
+   * only the email (ADMIN-12/ADMIN-7's "every project, course and account
+   * named on this screen is a link"), so `apps/web`'s Courses row can link
+   * each owner to its own `'admin-account'` screen rather than name it as
+   * plain text.
+   */
+  owners: { accountId: string; email: string }[]
   createdAt: number
   aiApprovedAt: number | null
   /**
@@ -342,6 +350,7 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
       courseTitle: courses.title,
       organizationId: courses.organizationId,
       organizationName: organizations.name,
+      projectId: projects.id,
       projectName: projects.name,
       createdAt: courses.createdAt,
       aiApprovedAt: courses.aiApprovedAt,
@@ -383,6 +392,7 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
   const ownerRows = db
     .select({
       organizationId: memberships.organizationId,
+      accountId: memberships.accountId,
       email: accounts.email,
       disabledAt: accounts.disabledAt,
     })
@@ -391,14 +401,18 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
     .where(eq(memberships.role, 'owner'))
     .all()
 
-  const ownerEmailsByOrganizationId = new Map<string, string[]>()
+  const ownersByOrganizationId = new Map<
+    string,
+    { accountId: string; email: string }[]
+  >()
   for (const owner of ownerRows) {
     if (owner.disabledAt !== null) continue
-    const existing = ownerEmailsByOrganizationId.get(owner.organizationId)
+    const entry = { accountId: owner.accountId, email: owner.email }
+    const existing = ownersByOrganizationId.get(owner.organizationId)
     if (existing) {
-      existing.push(owner.email)
+      existing.push(entry)
     } else {
-      ownerEmailsByOrganizationId.set(owner.organizationId, [owner.email])
+      ownersByOrganizationId.set(owner.organizationId, [entry])
     }
   }
 
@@ -407,8 +421,9 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
     courseTitle: row.courseTitle,
     organizationId: row.organizationId,
     organizationName: row.organizationName,
+    projectId: row.projectId,
     projectName: row.projectName,
-    ownerEmails: ownerEmailsByOrganizationId.get(row.organizationId) ?? [],
+    owners: ownersByOrganizationId.get(row.organizationId) ?? [],
     createdAt: row.createdAt,
     aiApprovedAt: row.aiApprovedAt,
     aiApprovalDecidedAt: row.aiApprovalDecidedAt,

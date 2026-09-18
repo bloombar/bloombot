@@ -13493,3 +13493,34 @@ emails themselves rather than a boolean. Added next to it in `course-approval.ts
 `listCoursesForApproval`'s own batched owner-email map, which answers the identical question for every
 course on the platform at once — paying for that whole scan to discard every row but one course's would be
 exactly the class of fan-out D-126 already declined for a single-course read.
+
+## D-130 — `packages/db`/`apps/api`/`apps/web`: ADMIN-12/ADMIN-7 — the Courses row's project and owners become links, closing the gap D-128 left
+
+**`CourseForApproval.ownerEmails: string[]` became `owners: { accountId: string; email: string }[]`, and a
+`projectId` was added alongside the existing `projectName`.** D-128 left the project as plain text because
+`listCoursesForApproval` had no `projectId` to link to, and every owner was named by email alone with no
+account id either — the same gap, one field short in each direction. Both are one more selected/joined
+column on a query `listCoursesForApproval` already runs (`courses`/`projects` are already joined for
+`projectName`; `memberships`/`accounts` are already joined, batched by organization, for the owner list) —
+no new join, no per-row fan-out. `ownerEmails` was replaced outright rather than kept alongside `owners`:
+every caller of `CourseForApproval` in this codebase is `apps/api`'s `AdminCourseSummary` re-export and
+`apps/web`'s hand-mirrored copy, both updated in this same slice, so there is no external consumer a
+second, redundant field would need to keep serving.
+
+**The owner batch stayed one query, keyed by organization id, not one query per course.** The shape
+`listCoursesForApproval` already used for `ownerEmailsByOrganizationId` — a `Map<organizationId, T[]>` built
+from a single cross-organization `memberships`/`accounts` join — carries over unchanged for `owners`; only
+the projected columns and the map's value type grew an `accountId` field. Turning this into a per-course
+lookup to fetch owner ids would have been the exact "watch N+1" trade this file's own module comment and
+D-126 already warn against for this route.
+
+**`apps/api/src/routes/admin.ts`'s `AdminCourseSummary` needed no change beyond the type it re-exports** —
+`export type AdminCourseSummary = courseApproval.CourseForApproval` passes the new shape through untouched,
+confirming that type's own doc comment ("no reshaping: this router's job is authorization and audit, not a
+second copy of what counts as the course's identifying detail").
+
+**The project link points at `'admin-project'`, resolved from `course.projectId` directly** — no lookup
+through `organizationId` plus a name match, which is exactly the ambiguity D-128 already declined to guess
+around for an organization with two similarly-named projects. Each owner links to `'admin-account'` by its
+own `accountId`, the same "id first, name for display" shape `CourseRowDetail`'s existing organization link
+already uses.

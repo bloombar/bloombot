@@ -84,12 +84,15 @@ export function validateSession(
         eq(sessions.tokenHash, tokenHash),
         isNull(sessions.revokedAt),
         gt(sessions.expiresAt, now),
+        // DATA-9 — a soft-deleted account's session stops validating the
+        // same moment a disabled account's already does (this function's
+        // own doc comment on that check).
         inArray(
           sessions.accountId,
           db
             .select({ id: accounts.id })
             .from(accounts)
-            .where(isNull(accounts.disabledAt))
+            .where(and(isNull(accounts.disabledAt), isNull(accounts.deletedAt)))
         )
       )
     )

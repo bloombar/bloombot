@@ -25,6 +25,16 @@
  * gathered *inside* the same transaction the delete itself runs in — see
  * that type's own doc comment for why a caller reading the same ids
  * separately, before calling either function, is a race this rework closed.
+ *
+ * DATA-9 — every exported function here is named in
+ * `tests/soft-delete-convention.test.ts`'s own allowlist, deliberately: this
+ * whole file is PROJ-8/PROJ-9's own *permanent*, irreversible wipe, and it
+ * has to remove a soft-deleted (DATA-7) row exactly as readily as a live
+ * one, not undercount or skip it because DATA-9's read filter was built to
+ * hide it from the product, not from the operation that erases it outright.
+ * This file does not connect to DATA-7 at all — DATA-8's later sweep is what
+ * is expected to eventually call something shaped like this for what has
+ * passed its retention window.
  */
 
 import { and, eq, inArray, sql } from 'drizzle-orm'
@@ -111,6 +121,11 @@ export interface CourseByteRemoval {
  * this from inside its own transaction, counting exactly what it is about to
  * delete before any of it is gone; `previewProjectDeletion` below calls it
  * the same way, once per course, to total PROJ-9's own project-wide preview.
+ *
+ * DATA-9 exception, named in `tests/soft-delete-convention.test.ts`'s own
+ * allowlist, the same reason `organizations.ts#previewOrganizationDeletion`
+ * is: this is PROJ-8's own *permanent* wipe, which removes a soft-deleted
+ * course exactly as readily as a live one.
  */
 export interface CourseDeletionPreview {
   organizationId: string

@@ -17,7 +17,7 @@
  * organization (`people.ts`'s own module comment on that mapping).
  */
 
-import { and, eq, inArray, sql, sum } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql, sum } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import {
@@ -87,13 +87,17 @@ export function recordCostLedgerEntry(
   entry: NewCostLedgerEntry,
   db: Database
 ): CostLedgerEntry | undefined {
+  // DATA-9 — a soft-deleted course or person cannot be billed against
+  // either, the same "cannot be attributed" refusal a foreign id already
+  // gets.
   const course = db
     .select({ id: courses.id })
     .from(courses)
     .where(
       and(
         eq(courses.id, entry.courseId),
-        eq(courses.organizationId, organizationId)
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
       )
     )
     .get()
@@ -105,7 +109,8 @@ export function recordCostLedgerEntry(
     .where(
       and(
         eq(people.id, entry.personId),
-        eq(people.organizationId, organizationId)
+        eq(people.organizationId, organizationId),
+        isNull(people.deletedAt)
       )
     )
     .get()
@@ -172,10 +177,14 @@ export function hasReachedSpendingCap(
   organizationId: string,
   db: Database
 ): boolean | undefined {
+  // DATA-9 — a soft-deleted organization "cannot tell you" the same as one
+  // that does not exist.
   const organization = db
     .select({ spendingCapMicros: organizations.spendingCapMicros })
     .from(organizations)
-    .where(eq(organizations.id, organizationId))
+    .where(
+      and(eq(organizations.id, organizationId), isNull(organizations.deletedAt))
+    )
     .get()
   if (!organization) return undefined
   if (organization.spendingCapMicros === null) return false
@@ -273,16 +282,22 @@ export function getOrganizationUsageSummary(
   organizationId: string,
   db: Database
 ): OrganizationUsageSummary {
+  // DATA-9 — a soft-deleted organization or course does not appear in its
+  // own usage summary.
   const organization = db
     .select({ spendingCapMicros: organizations.spendingCapMicros })
     .from(organizations)
-    .where(eq(organizations.id, organizationId))
+    .where(
+      and(eq(organizations.id, organizationId), isNull(organizations.deletedAt))
+    )
     .get()
 
   const courseRows = db
     .select({ id: courses.id, title: courses.title })
     .from(courses)
-    .where(eq(courses.organizationId, organizationId))
+    .where(
+      and(eq(courses.organizationId, organizationId), isNull(courses.deletedAt))
+    )
     .all()
 
   // COST-7 — grouped by course *and* surface in the one query, the same
@@ -466,9 +481,12 @@ export function listOrganizationTotals(db: Database): OrganizationTotal[] {
     totalsByOrganizationId.set(row.organizationId, organizationTotals)
   }
 
+  // DATA-9 — a soft-deleted organization does not appear in the
+  // platform-wide totals either.
   const organizationRows = db
     .select({ id: organizations.id, name: organizations.name })
     .from(organizations)
+    .where(isNull(organizations.deletedAt))
     .all()
 
   return organizationRows.map((row) => {

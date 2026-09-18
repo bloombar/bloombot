@@ -3254,3 +3254,43 @@ in a dialog that names the organization before anything happens. Leaving revokes
 it deletes no transcript, ends no enrolment, and touches nothing the account owns. An owner is offered
 no Leave — stepping down is ENRL-11's own revoke, a separate operation — and the account's own personal
 organization can never be left.
+
+### 43. Reaching Things Where They Already Are
+
+#### WEB-59 A platform administrator reaches the console from the navigation drawer
+
+The drawer offers a platform administrator an **Admin** link to the console (`/platform-admin`), in its own
+section below the existing groups and divided from them the way the organization group already is. The link
+is shown only to an account the platform-administrator allowlist actually names (AUTH-4), never to anyone
+else, and the console's own routes refuse a non-administrator regardless.
+
+#### WEB-60 Clicking away from the drawer closes it
+
+A click anywhere outside the navigation drawer closes it, the same as `Escape` already does. Nothing else
+about the drawer changes: a click on one of its own links still navigates and closes, and the closing
+animation is unaffected.
+
+#### WEB-61 A project's own screen carries the same menu its row does
+
+The project screen (`/o/:organizationId/projects/:projectId`) shows the same kebab menu the project's row
+shows on the organization screen — Archive or Restore, Duplicate, Import, Rename and Delete — with the same
+behaviour and the same confirmations. It sits in the row that holds **New course**, immediately to its left.
+
+#### WEB-62 A course's own screen offers a way into its chat
+
+The course screen carries a **Chat** button in the row holding the course title, at its trailing edge,
+styled as the Chat buttons on the project and organization screens are and opening the same chat for that
+course.
+
+#### WEB-63 A course's own screen shows what it has spent
+
+The course screen has a **Usage** tab showing that one course's usage — the same figures the organization's
+Usage screen reports for it, including spend and the students approaching their daily limit — laid out for a
+tab rather than for a list of every course in the organization.
+
+#### WEB-64 A course's own screen shows its transcripts
+
+The course screen has a **Transcripts** tab showing what the organization's Transcripts screen shows for this
+course, with the project and course already chosen: no project or course selector, since the screen the tab
+sits on names both, but the student and date-range filters and the export are all present and work as they
+do there.

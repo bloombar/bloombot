@@ -193,6 +193,19 @@ describe('/privacy and /terms (published legal documents)', () => {
       expect(body).toMatch(/including the copies held by the AI provider/i)
     })
 
+    // D-142: the sweep cannot remove the `people` row of anyone who has ever
+    // asked a question, because the usage record that question created holds a
+    // non-null reference to it. Their conversations and messages *are* swept.
+    // Saying only the first half would make this page false in exactly the way
+    // the pre-phase-44 text was, so the page says both — and this pins it.
+    it('names the limit on erasing a person who has asked a question', () => {
+      const body = flat(privacyDocument.body)
+      expect(body).toMatch(
+        /Their conversations and messages are erased on the schedule above/i
+      )
+      expect(body).toMatch(/that naming record is not/i)
+    })
+
     it('says which records survive a deletion, and why', () => {
       const body = flat(privacyDocument.body)
       expect(body).toMatch(/accounts of \*?events\*? rather than content/i)

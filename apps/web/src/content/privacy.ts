@@ -19,6 +19,14 @@
  * statute; it describes behaviour and leaves the legal conclusion to the reader,
  * for the reasons `terms.ts`'s own module comment sets out about FERPA.
  *
+ * It also names the sweep's own known limit (D-142): `cost_ledger_entries.personId`
+ * is `NOT NULL` and one row is written per model call, so a person who has ever
+ * asked a question cannot have their `people` row or `person_identities` removed
+ * without six columns becoming nullable first. Their conversations and messages
+ * *are* swept on schedule. Saying only the first half would have made this page
+ * false in the same way the pre-phase-44 text was — so it says both. When that
+ * slice lands, this paragraph goes.
+ *
  * **The platform-administrator console is described as it actually is, and
  * nothing is promised about where it will stop.** An earlier version of this
  * text said that console "does not display any course, student or message",
@@ -216,6 +224,15 @@ and the files behind them, including the copies held by the AI provider, and the
 cannot be recovered by us or by anyone else. Deleting a thing deletes what belongs
 to it: deleting a course deletes its conversations, its attached material and its
 knowledge files.
+
+One limit is worth stating rather than leaving you to discover it. Where a person
+has ever asked the service a question, the record naming them — their name, and
+the Discord or email address they were recognised by — is tied to the usage and
+cost record that question created, which is one of the event records described
+below. **Their conversations and messages are erased on the schedule above**; that
+naming record is not, and stays until we can remove it without destroying the
+accounting it is attached to. We would rather say so than let "deleted" mean two
+different things on one page.
 
 **What survives a deletion, and why.** A few records are accounts of *events*
 rather than content, and those are kept: that a tenant's data was deleted, that a

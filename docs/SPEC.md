@@ -3599,3 +3599,17 @@ A person who has asked nothing in the course is offered nothing to delete.
 The Discord server chooser in a course's settings lists each of the organization's connected servers by the
 name WEB-68 records, falling back to the id for a server connected before that name was captured. A course
 is assigned to a server by choosing a name an instructor recognises rather than by matching a snowflake.
+
+#### PROJ-11 The irreversible delete is no less guarded than the reversible one
+
+PROJ-8 and PROJ-9's permanent deletion of a course or a project — reached from the row menu on the
+organization and project screens — checks no role at all: any staff member of the organization can destroy a
+course outright, while DATA-7's reversible delete of the same course is owner-only. The more destructive of
+the two is the less protected, which is backwards.
+
+The permanent path takes the same owner check the reversible one has. And because two controls both labelled
+"Delete", on the same object, with opposite consequences, is a trap no dialog wording fully closes, the
+permanent path is retired in favour of the reversible one wherever the reversible one can do the job: a course
+or project deleted from anywhere in the product is soft-deleted, and the sweep is what makes it permanent.
+What remains of PROJ-8/PROJ-9 is the preview — an administrator still sees what a deletion will take with it
+before confirming.

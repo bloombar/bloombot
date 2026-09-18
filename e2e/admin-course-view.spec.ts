@@ -155,8 +155,12 @@ test('a platform administrator opens a pending course from the list, reads its s
     const detail = adminPage.getByTestId(`admin-course-detail-${courseId}`)
     await expect(detail.getByRole('region', { name: 'General' })).toBeVisible()
     await expect(detail.getByRole('region', { name: 'AI' })).toBeVisible()
+    // ROST-20: `exact` — "Roster acknowledgements" (below, on this same
+    // screen) contains "acknowledge" contains "knowledge" as a literal
+    // substring, so Playwright's default substring role-name match resolves
+    // this locator to two regions without it.
     await expect(
-      detail.getByRole('region', { name: 'Knowledge' })
+      detail.getByRole('region', { name: 'Knowledge', exact: true })
     ).toBeVisible()
     await expect(detail).toContainText(`admins-${suffix}`)
     await expect(detail).toContainText(`students-${suffix}`)

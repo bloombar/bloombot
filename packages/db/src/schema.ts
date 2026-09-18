@@ -2081,3 +2081,64 @@ export const discordGatewayStatus = sqliteTable('discord_gateway_status', {
   id: text('id').primaryKey(),
   lastKnownConnectedAt: integer('last_known_connected_at').notNull(),
 })
+
+// ROST-20 — one row per roster import, recording that ROST-19's
+// acknowledgement was shown and agreed to: who agreed, when, which course
+// and organization it was for, the file they imported, the import job it
+// started, and `acknowledgementVersion` — an identifier for the wording
+// shown that day (`apps/web/src/components/RosterImport.tsx`'s own
+// `ROSTER_ACKNOWLEDGEMENT_VERSION`), so a later edit to that wording can
+// never be mistaken for what an earlier instructor agreed to. Append-only —
+// `repos/roster-import-acknowledgements.ts` exposes no update or delete, the
+// same "an account of something that happened, not a setting" discipline
+// `courseApprovalEvents` above already holds itself to.
+//
+// "Never deleted and never edited" describes what an ordinary operation can
+// reach, not what outlives the course, organization or job it is about — the
+// same distinction `courseApprovalEvents`' own comment draws for COST-8.
+// This table's four foreign keys are all `ON DELETE no action`
+// (`foreign_keys = ON` on every connection, `client.ts`'s own module
+// comment, actually enforces that), so `repos/deletions.ts#emptyCourse` and
+// `repos/organizations.ts#deleteOrganizationData` both empty it ahead of
+// `courses`/`organizations`/`jobs` — an acknowledgement does not outlive the
+// course it is about, exactly the ADMIN-5/PROJ-8 rework finding
+// `docs/DECISIONS.md` D-136 records.
+export const rosterImportAcknowledgements = sqliteTable(
+  'roster_import_acknowledgements',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    // A display value only, the same "never part of a path" caveat
+    // `courseAttachments.filename` already carries — this column exists so
+    // the record names which upload it accompanied, not to locate any bytes
+    // by it.
+    filename: text('filename').notNull(),
+    // The `roster.import` job this acknowledgement accompanied
+    // (`repos/jobs.ts`) — written in the same transaction as the enqueue
+    // (`repos/roster-import-acknowledgements.ts`'s own module comment), so
+    // this always names a job that really started.
+    jobId: text('job_id')
+      .notNull()
+      .references(() => jobs.id),
+    // ROST-20's own point: an identifier for the acknowledgement wording as
+    // it stood the day this was recorded — never inferred from `createdAt`,
+    // since a version and the day it shipped are two different facts.
+    acknowledgementVersion: text('acknowledgement_version').notNull(),
+    acknowledgedAt: integer('acknowledged_at').notNull(),
+  },
+  (table) => [
+    index('roster_import_acknowledgements_course_id_idx').on(table.courseId),
+    index('roster_import_acknowledgements_organization_id_idx').on(
+      table.organizationId
+    ),
+    index('roster_import_acknowledgements_account_id_idx').on(table.accountId),
+  ]
+)

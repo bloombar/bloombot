@@ -117,6 +117,15 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // names is what a write grant against `'course'` already protects
   // everywhere else in this table.
   'roster.import': { resource: 'course', access: 'write' },
+  // ROST-20: read access to a course's own roster-import acknowledgements,
+  // gated behind the identical write descriptor `roster.import` above
+  // declares — this file's own module comment on "reuse the existing
+  // permission" (nothing new is granted here beyond what already lets an
+  // instructor import a roster in the first place).
+  'rosterAcknowledgements.listForCourse': {
+    resource: 'course',
+    access: 'write',
+  },
   // FILE-1: resolves the course a file is attached to, write — `execute`
   // writes the bytes to disk and enqueues the provider upload; it never
   // reaches Discord or a person, the same "the course it names is what a

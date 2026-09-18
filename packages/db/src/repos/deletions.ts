@@ -48,6 +48,7 @@ import {
   messages,
   projects,
   rosterChannelAssignments,
+  rosterImportAcknowledgements,
   transcriptAccessLog,
   transcriptExports,
   usageCounters,
@@ -386,6 +387,21 @@ function emptyCourse(
       and(
         eq(courseApprovalEvents.organizationId, organizationId),
         eq(courseApprovalEvents.courseId, courseId)
+      )
+    )
+    .run()
+  // ROST-20 rework finding: `roster_import_acknowledgements` is a real
+  // foreign key to `courses.id` (`schema.ts`'s own comment on why it does
+  // not outlive the course), so any course that ever had a roster imported
+  // threw `FOREIGN KEY constraint failed` on the `courses` delete below
+  // without this — the same COST-8 "does not outlive the course, must not
+  // block the delete" carve-out `courseApprovalEvents` just above already
+  // gets.
+  tx.delete(rosterImportAcknowledgements)
+    .where(
+      and(
+        eq(rosterImportAcknowledgements.organizationId, organizationId),
+        eq(rosterImportAcknowledgements.courseId, courseId)
       )
     )
     .run()

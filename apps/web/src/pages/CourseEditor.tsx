@@ -231,6 +231,14 @@ export interface CourseEditorProps {
    * otherwise have to wait out the real default for no reason.
    */
   savedClearAfterMs?: number
+  /**
+   * Rework finding (cheap-fix) — threaded straight to the Roster tab's own
+   * `RosterImport` (that component's own doc comment on why: the D-54 gap
+   * that keeps a roster acknowledgement's own `accountId` unresolved to an
+   * email or display name). Optional, defaulting to `undefined` — most of
+   * this file's own tests do not care.
+   */
+  viewerAccountId?: string
 }
 
 /** WEB-35 — a label for each of `routing/route.ts#COURSE_EDITOR_TABS`'s own ids — the tab bar's own concern, not the routing module's, so it stays here rather than growing that array into something UI-shaped. */
@@ -480,6 +488,7 @@ export function CourseEditor({
   onSaved,
   onCancel,
   savedClearAfterMs = DEFAULT_SAVED_CLEAR_AFTER_MS,
+  viewerAccountId,
 }: CourseEditorProps) {
   // WEB-35 — local UI state, not part of `form`/`baseline`: which tab is
   // rendered is not part of the record being edited. Seeded from the `tab`
@@ -2235,6 +2244,9 @@ export function CourseEditor({
                     organizationId={organizationId}
                     courseId={courseId}
                     courseTitle={form.title}
+                    {...(viewerAccountId !== undefined
+                      ? { viewerAccountId }
+                      : {})}
                   />
                 </section>
               </>

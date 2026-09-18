@@ -309,6 +309,29 @@ export function CourseDetailView({
         )}
       </section>
 
+      {/* ROST-20 — the course's own roster-import acknowledgements, alongside the approval history above. */}
+      <section
+        aria-label="Roster acknowledgements"
+        className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"
+      >
+        <h3 className="text-section-title font-semibold text-neutral-900">
+          Roster acknowledgements
+        </h3>
+        {course.rosterAcknowledgements.length === 0 ? (
+          <p className="text-sm text-neutral-500">No roster imported yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {course.rosterAcknowledgements.map((entry) => (
+              <li key={entry.id} className="text-sm text-neutral-700">
+                {entry.filename} —{' '}
+                {new Date(entry.acknowledgedAt).toLocaleString()}
+                {entry.accountEmail ? ` by ${entry.accountEmail}` : ''}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       {/* ADMIN-9 — this course's own usage. */}
       <section
         aria-label="Usage"

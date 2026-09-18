@@ -174,6 +174,10 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //  - enrolments.ts#listEnrolmentsForPeople: ADMIN-11, the same "account, not
 //    organization" class one level up from this file's own organization-
 //    scoped functions.
+//  - roster-import-acknowledgements.ts#listAcknowledgementsForAccount:
+//    ROST-20/ADMIN-11, the same class `enrolments.ts#listEnrolmentsForPeople`
+//    already is — an account's own acknowledgements are not scoped to one
+//    organization until this call names them.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': [
     'getAccountByEmail',
@@ -246,6 +250,7 @@ const ALLOWLIST: Record<string, string[]> = {
   ],
   'projects.ts': ['findProjectOrganizationId'],
   'enrolments.ts': ['listEnrolmentsForPeople'],
+  'roster-import-acknowledgements.ts': ['listAcknowledgementsForAccount'],
   'person-link-challenges.ts': [
     'createChallenge',
     'consumeChallenge',
@@ -337,7 +342,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the thirty repo files this test is written against', () => {
+  it('found the thirty-one repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -366,6 +371,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'person-link-challenges.ts',
         'projects.ts',
         'roster-channel-assignments.ts',
+        'roster-import-acknowledgements.ts',
         'self-enrolment.ts',
         'sessions.ts',
         'sign-in-tokens.ts',

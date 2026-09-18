@@ -261,6 +261,50 @@ export function AccountDetail({
         )}
       </section>
 
+      {/* ROST-20 — every roster import this account has ever acknowledged, across every course and organization, each course linking to its own console screen. */}
+      <section
+        aria-label="Roster acknowledgements"
+        className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"
+      >
+        <h3 className="text-section-title font-semibold text-neutral-900">
+          Roster acknowledgements
+        </h3>
+        {account.rosterAcknowledgements.length === 0 ? (
+          <p className="text-sm text-neutral-500">
+            No roster import acknowledged.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {account.rosterAcknowledgements.map((entry) => (
+              <li key={entry.id} className="text-sm">
+                <AppLink
+                  to={{ kind: 'admin-course', courseId: entry.courseId }}
+                  navigate={navigate}
+                  className="font-medium text-brand-700 underline-offset-2 hover:underline"
+                >
+                  {entry.courseTitle}
+                </AppLink>{' '}
+                <span className="text-neutral-500">
+                  ·{' '}
+                  <AppLink
+                    to={{
+                      kind: 'admin-organization',
+                      organizationId: entry.organizationId,
+                    }}
+                    navigate={navigate}
+                    className="text-brand-700 underline-offset-2 hover:underline"
+                  >
+                    {entry.organizationName}
+                  </AppLink>{' '}
+                  · {entry.filename} ·{' '}
+                  {new Date(entry.acknowledgedAt).toLocaleDateString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <section
         aria-label="Usage"
         className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"

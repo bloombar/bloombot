@@ -45,6 +45,8 @@ export interface ProjectsPanelProps {
   navigate: (route: Route, options?: { replace?: boolean }) => void
   /** WEB-28: threaded down to `pages/Courses.tsx`'s own Chat button — see `pages/Shell.tsx`'s own module comment for what actually happens once a course id reaches here. */
   onOpenChat: (courseId: string) => void
+  /** Rework finding (cheap-fix) — threaded straight to `CourseEditor`'s own Roster tab (that file's own doc comment on why). Optional, defaulting to `undefined` — most of this file's own tests do not care. */
+  viewerAccountId?: string
 }
 
 /** `useResolvedProject`'s own three shapes — mirrors `pages/Shell.tsx`'s own `DiscordBindingState` (TEN-8): `'loading'` must never be mistaken for "not found," and a failed lookup says so rather than guessing. */
@@ -61,6 +63,7 @@ export function ProjectsPanel({
   route,
   navigate,
   onOpenChat,
+  viewerAccountId,
 }: ProjectsPanelProps) {
   const [resolution, setResolution] = useState<ProjectResolution>({
     status: 'loading',
@@ -211,6 +214,7 @@ export function ProjectsPanel({
       project={project}
       supportContact={supportContact}
       isOwner={isOwner}
+      {...(viewerAccountId !== undefined ? { viewerAccountId } : {})}
       // WEB-36 — `CoursePeople`'s own transcript link, threaded straight
       // through (`CourseEditor`'s own module comment on why it takes this
       // at all).

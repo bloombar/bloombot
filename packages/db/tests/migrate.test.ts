@@ -94,6 +94,7 @@ describe('runMigrations', () => {
       'person_link_challenges',
       'projects',
       'roster_channel_assignments',
+      'roster_import_acknowledgements',
       'sessions',
       'sign_in_tokens',
       'tenant_deletions',
@@ -298,6 +299,17 @@ describe('runMigrations', () => {
       'last_seen_at',
       'revoked_at',
       'token_hash',
+    ])
+    // ROST-20 — added by this slice.
+    expect(schema.roster_import_acknowledgements).toEqual([
+      'account_id',
+      'acknowledged_at',
+      'acknowledgement_version',
+      'course_id',
+      'filename',
+      'id',
+      'job_id',
+      'organization_id',
     ])
   })
 

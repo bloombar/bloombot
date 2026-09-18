@@ -45,7 +45,7 @@
 
 import { and, asc, desc, eq, inArray, lt, lte, or, sql } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor } from '../client.js'
 import { jobs } from '../schema.js'
 
 export type Job = typeof jobs.$inferSelect
@@ -106,11 +106,22 @@ function assertPayloadProvided(payload: unknown): void {
   }
 }
 
-/** Serializes `payload` and inserts a fresh, unclaimed, pending job. */
+/**
+ * Serializes `payload` and inserts a fresh, unclaimed, pending job.
+ *
+ * `db` accepts `Executor`, not just `Database` — ROST-20's own
+ * `roster.import` widened this from a plain `Database` so it could enqueue
+ * the job and write the roster acknowledgement that accompanies it in the
+ * same `writeTransaction(...)`, the same "called from inside another
+ * transaction" widening `course-instruction-revisions.ts#createRevision`'s
+ * own doc comment already explains for the identical reason —
+ * `course-portability.ts`'s own module comment on why it could *not* do
+ * this (written before this widening) no longer applies to a fresh caller.
+ */
 export function enqueueJob(
   organizationId: string,
   input: NewJob,
-  db: Database
+  db: Executor
 ): Job {
   assertPayloadProvided(input.payload)
   const now = Date.now()

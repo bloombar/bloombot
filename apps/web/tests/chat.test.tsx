@@ -5,12 +5,13 @@
  * rework this file follows).
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { ChatAnswerResult } from '../src/api/types.js'
 import { Chat } from '../src/pages/Chat.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 // `ControlledChat` (a wrapper reproducing `pages/Shell.tsx`'s own
 // join-confirmation gating) used to live here; the test it served now runs
 // against `Shell` itself in `tests/shell.test.tsx`, so neither is needed.
@@ -20,19 +21,26 @@ import { Chat } from '../src/pages/Chat.js'
 // `listChatCourses`, since they never depend on when the (real, unmocked)
 // `getChatMessages` call resolves; the scroll tests do, so they get
 // deterministic control over it.
-const { listChatCourses, getChatMessages, postChatMessage } = vi.hoisted(
-  () => ({
+const { listChatCourses, getChatMessages, postChatMessage, deleteChatHistory } =
+  vi.hoisted(() => ({
     listChatCourses: vi.fn(),
     getChatMessages: vi.fn(),
     postChatMessage: vi.fn(),
-  })
-)
+    // WEB-73/DATA-7 — Delete history's own write.
+    deleteChatHistory: vi.fn(),
+  }))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, listChatCourses, getChatMessages, postChatMessage }
+  return {
+    ...actual,
+    listChatCourses,
+    getChatMessages,
+    postChatMessage,
+    deleteChatHistory,
+  }
 })
 
 // WEB-24 — `getChatMessages`/`postChatMessage` now being mocked (above)
@@ -63,7 +71,7 @@ describe('Chat (WEB-10)', () => {
       new ApiError(404, { error: 'chat_not_connected' })
     )
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -89,7 +97,7 @@ describe('Chat (WEB-10)', () => {
       writable: true,
     })
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -106,7 +114,7 @@ describe('Chat (WEB-10)', () => {
   it('a connected account with no enrolments sees the distinct "not enrolled" message, not the connect invitation', async () => {
     listChatCourses.mockResolvedValue([])
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -124,7 +132,7 @@ describe('Chat (WEB-10)', () => {
       { id: 'course-1', title: 'Intro to Testing' },
     ])
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -142,7 +150,7 @@ describe('Chat (WEB-10)', () => {
       new ApiError(500, { error: 'internal_error' })
     )
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -166,7 +174,7 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
       { id: 'course-2', title: 'Advanced Testing' },
     ])
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -204,7 +212,7 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
     ])
     const onClearCourse = vi.fn()
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         courseId="course-somebody-elses"
@@ -228,7 +236,7 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
       { id: 'course-1', title: 'Intro to Testing' },
     ])
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -252,7 +260,7 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
       { id: 'course-1', title: 'Intro to Testing' },
     ])
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -271,7 +279,7 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
       { id: 'course-1', title: 'Intro to Testing' },
     ])
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -310,7 +318,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
   it('sending a message scrolls the thread to its newest message — fails without the fix (no maximum height meant nothing needed scrolling)', async () => {
     getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -351,7 +359,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
         })
     )
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -400,7 +408,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
         })
     )
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -473,7 +481,7 @@ describe('Chat — declined-not-approved notice (COST-8/SURF-10)', () => {
         "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at support@bloombot.example.edu to request approval.",
     })
 
-    render(
+    renderWithModal(
       <Chat
         organizationId="org-1"
         onSelectCourse={vi.fn()}
@@ -490,5 +498,186 @@ describe('Chat — declined-not-approved notice (COST-8/SURF-10)', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(
       "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at support@bloombot.example.edu to request approval."
     )
+  })
+})
+
+// WEB-73/DATA-7 — the heading row's own Delete history control: absent when
+// this account has asked the course on screen nothing, present once it
+// has, confirms first naming the course, and clears the thread on success.
+describe('Chat — Delete history (WEB-73/DATA-7)', () => {
+  beforeEach(() => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+    ])
+  })
+
+  it('is not offered when this account has asked the course nothing', async () => {
+    getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
+
+    renderWithModal(
+      <Chat
+        organizationId="org-1"
+        onSelectCourse={vi.fn()}
+        onClearCourse={vi.fn()}
+      />
+    )
+    await screen.findByText('Intro to Testing')
+
+    expect(
+      screen.queryByRole('button', { name: 'Delete history' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('is offered once this account has asked the course something', async () => {
+    getChatMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'student',
+          text: 'When is the midterm?',
+          createdAt: Date.now(),
+          surface: 'web',
+          channelRef: null,
+          categoryRef: null,
+        },
+      ],
+      studentName: 'Jordan',
+    })
+
+    renderWithModal(
+      <Chat
+        organizationId="org-1"
+        onSelectCourse={vi.fn()}
+        onClearCourse={vi.fn()}
+      />
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Delete history' })
+    ).toBeInTheDocument()
+  })
+
+  it('cancelling the confirmation sends nothing', async () => {
+    getChatMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'student',
+          text: 'When is the midterm?',
+          createdAt: Date.now(),
+          surface: 'web',
+          channelRef: null,
+          categoryRef: null,
+        },
+      ],
+      studentName: 'Jordan',
+    })
+
+    renderWithModal(
+      <Chat
+        organizationId="org-1"
+        onSelectCourse={vi.fn()}
+        onClearCourse={vi.fn()}
+      />
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete history' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Intro to Testing')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(deleteChatHistory).not.toHaveBeenCalled()
+  })
+
+  it('confirming deletes this course’s own history and clears the thread', async () => {
+    getChatMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'student',
+          text: 'When is the midterm?',
+          createdAt: Date.now(),
+          surface: 'web',
+          channelRef: null,
+          categoryRef: null,
+        },
+        {
+          id: 'msg-2',
+          role: 'assistant',
+          text: 'It is in week 8.',
+          createdAt: Date.now(),
+          surface: 'web',
+          channelRef: null,
+          categoryRef: null,
+        },
+      ],
+      studentName: 'Jordan',
+    })
+    deleteChatHistory.mockResolvedValue({ deletedConversations: 1 })
+
+    renderWithModal(
+      <Chat
+        organizationId="org-1"
+        onSelectCourse={vi.fn()}
+        onClearCourse={vi.fn()}
+      />
+    )
+    await screen.findByText('When is the midterm?')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete history' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Delete history' })
+    )
+
+    await waitFor(() =>
+      expect(deleteChatHistory).toHaveBeenCalledWith('org-1', 'course-1')
+    )
+    await waitFor(() =>
+      expect(screen.queryByText('When is the midterm?')).not.toBeInTheDocument()
+    )
+    // The control itself is gone too — there is nothing left to delete.
+    expect(
+      screen.queryByRole('button', { name: 'Delete history' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('a failed delete is reported and the thread stays', async () => {
+    getChatMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'student',
+          text: 'When is the midterm?',
+          createdAt: Date.now(),
+          surface: 'web',
+          channelRef: null,
+          categoryRef: null,
+        },
+      ],
+      studentName: 'Jordan',
+    })
+    deleteChatHistory.mockRejectedValue(
+      new ApiError(403, { error: 'not_authorized' })
+    )
+
+    renderWithModal(
+      <Chat
+        organizationId="org-1"
+        onSelectCourse={vi.fn()}
+        onClearCourse={vi.fn()}
+      />
+    )
+    await screen.findByText('When is the midterm?')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete history' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Delete history' })
+    )
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.getByText('When is the midterm?')).toBeInTheDocument()
   })
 })

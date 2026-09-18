@@ -101,9 +101,11 @@ import {
   grantMembership,
   listMemberships,
   revokeMembership,
+  softDeleteOrganization,
 } from '../api/client.js'
-import type { OrganizationMembership } from '../api/types.js'
-import { AddIcon, DisableIcon } from '../icons.js'
+import type { AccountSummary, OrganizationMembership } from '../api/types.js'
+import { AddIcon, DeleteIcon, DisableIcon } from '../icons.js'
+import { routeForTab, type Route } from '../routing/route.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FormField } from './FormField.js'
@@ -117,6 +119,12 @@ export interface TeamProps {
   isOwner: boolean
   /** The caller's own account id (ENRL-11) — tells the viewer's own roster row apart from a peer's, which is what decides whether a revoke control is offered at all for an `'owner'` row (this file's own module comment). */
   viewerAccountId: string
+  /** WEB-72/DATA-7 — this organization's own name, for the Danger zone's typed-name gate (`pages/Shell.tsx`'s own `activeOrganizationName`, resolved from `account.memberships` — nothing new is fetched). */
+  organizationName: string
+  /** WEB-72/DATA-7 — `pages/Shell.tsx`'s own `navigate`, threaded through unchanged: deleting the organization this screen is showing moves the caller off it, the same way `components/OrganizationList.tsx#handleLeave` already moves a caller off an organization they just left. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
+  /** WEB-72/DATA-7 — `App.tsx`'s own `refreshAccount` adapter, threaded through `pages/Shell.tsx` unchanged: re-reads `GET /auth/me` after the delete, the same "resolve the fresh account, not the stale prop" discipline `OrganizationList.tsx#handleLeave` already holds itself to for its own fallback destination. */
+  refreshAccount: () => Promise<AccountSummary | undefined>
 }
 
 const ROLE_LABELS: Record<OrganizationMembership['role'], string> = {
@@ -131,7 +139,14 @@ const GRANTABLE_ROLES: OrganizationMembership['role'][] = [
   'owner',
 ]
 
-export function Team({ organizationId, isOwner, viewerAccountId }: TeamProps) {
+export function Team({
+  organizationId,
+  isOwner,
+  viewerAccountId,
+  organizationName,
+  navigate,
+  refreshAccount,
+}: TeamProps) {
   const [entries, setEntries] = useState<OrganizationMembership[] | undefined>(
     undefined
   )
@@ -156,7 +171,15 @@ export function Team({ organizationId, isOwner, viewerAccountId }: TeamProps) {
   const [statusMessage, setStatusMessage] = useState<string | undefined>(
     undefined
   )
-  const { confirm } = useModal()
+  // WEB-72/DATA-7 — the Danger zone's own delete-in-flight/error state,
+  // kept separate from `grantError`/`revokeError` above (each section's own
+  // async action reports through its own state, the same split this file
+  // already holds between the grant form and the roster list).
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<ApiError | undefined>(
+    undefined
+  )
+  const { confirm, prompt } = useModal()
 
   const refresh = useCallback(
     () =>
@@ -246,6 +269,81 @@ export function Team({ organizationId, isOwner, viewerAccountId }: TeamProps) {
       else throw caught
     } finally {
       setRevokingId(undefined)
+    }
+  }
+
+  // WEB-72/DATA-7 — deleting the organization currently on screen: asks
+  // first, naming the organization and what deleting it means, gated on
+  // typing its own name exactly (`organizationName` — the same typed-name
+  // discipline `components/CourseRows.tsx#handleDelete`/
+  // `hooks/useProjectMenu.tsx` already apply to a course/project).
+  // Reversible for the deployment's retention window, then permanent.
+  const handleDelete = async () => {
+    const typed = await prompt({
+      title: `Delete ${organizationName}?`,
+      description:
+        `This deletes ${organizationName} — its projects, courses, people ` +
+        'and conversations. It is reversible for a while, and permanent ' +
+        `after that. Type the organization's name to confirm.`,
+      label: 'Organization name',
+      placeholder: organizationName,
+      confirmLabel: 'Delete organization',
+      destructive: true,
+      validate: (value) =>
+        value === organizationName
+          ? undefined
+          : 'Type the name exactly to confirm.',
+    })
+    if (typed === undefined) return
+
+    setDeleteError(undefined)
+    setDeleting(true)
+    try {
+      await softDeleteOrganization(organizationId)
+      // The organization this screen was showing is now gone — the same
+      // "must not strand the caller on the thing they just deleted"
+      // reasoning `components/OrganizationList.tsx#handleLeave` already
+      // holds itself to for the identical case, one level up (leaving
+      // rather than deleting). Resolves the *fresh* account, not this
+      // component's own stale `viewerAccountId`/props, the same "resolve
+      // afterward, not from what was already in hand" discipline that
+      // function's own module comment gives (code review round 2,
+      // must-fix 1): a membership preferred over a connected-only
+      // relationship, `/account` when neither is left.
+      const freshAccount = await refreshAccount()
+      // Belt and braces (review finding) — `organizationId` (the one this
+      // screen just deleted) is excluded here regardless of what
+      // `refreshAccount` came back with. `/auth/me` (`routes/auth.ts`)
+      // already excludes a soft-deleted organization at the query (DATA-9),
+      // so this should never actually match anything by the time this
+      // runs — but this navigation must stay correct even against a stale
+      // or slow-to-propagate response, not only a fast one, the same
+      // "the server refuses regardless, this only decides what is offered"
+      // discipline this file's own module comment already holds `isOwner`
+      // to, applied here to where the caller lands rather than to what is
+      // shown.
+      const remainingMemberships =
+        freshAccount?.memberships.filter(
+          (membership) => membership.organizationId !== organizationId
+        ) ?? []
+      const remainingConnected =
+        freshAccount?.connectedOrganizations.filter(
+          (connection) => connection.organizationId !== organizationId
+        ) ?? []
+      const fallback = remainingMemberships[0] ?? remainingConnected[0]
+      navigate(
+        fallback
+          ? routeForTab(
+              'role' in fallback ? 'projects' : 'chat',
+              fallback.organizationId
+            )
+          : { kind: 'account' }
+      )
+    } catch (caught) {
+      if (caught instanceof ApiError) setDeleteError(caught)
+      else throw caught
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -396,6 +494,31 @@ export function Team({ organizationId, isOwner, viewerAccountId }: TeamProps) {
         <div className="border-t border-neutral-200 pt-4">
           <MembershipInvitations organizationId={organizationId} />
         </div>
+      )}
+
+      {/* WEB-72 — the last section on the screen, visibly separated,
+          holding this organization's own delete and nothing else.
+          Owner-gated — the server's own check (`organizations.softDelete`)
+          refuses a non-owner regardless, but offering the control at all to
+          someone it would always refuse teaches nothing but a click that
+          fails, the same reasoning this file's own module comment already
+          gives for `showRevoke`. */}
+      {isOwner && (
+        <section
+          aria-label="Danger zone"
+          className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
+        >
+          <h2 className="text-lg font-semibold text-danger-700">Danger zone</h2>
+          {deleteError && <ErrorMessage error={deleteError} />}
+          <Button
+            variant="destructive"
+            icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+            onClick={() => void handleDelete()}
+            disabled={deleting}
+          >
+            {deleting ? 'Deleting…' : 'Delete organization'}
+          </Button>
+        </section>
       )}
     </div>
   )

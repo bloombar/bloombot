@@ -47,6 +47,7 @@ import {
   ACTION_JSON_BODY_LIMIT_BYTES,
   buildActionsRouter,
 } from './routes/actions.js'
+import { buildAccountRouter } from './routes/account.js'
 import { buildAdminRouter } from './routes/admin.js'
 import { buildAuthRouter } from './routes/auth.js'
 import { buildChatRouter } from './routes/chat.js'
@@ -191,6 +192,9 @@ export function buildApp(deps: ServerDependencies): Express {
   // comment has why): a redeemer presents only the secret, not an
   // organization id.
   app.use('/join-links', buildJoinLinksRouter({ db: deps.db }))
+  // WEB-72/DATA-7 — unscoped, like `/join-links` above (`routes/account.ts`'s
+  // own module comment has why).
+  app.use('/account', buildAccountRouter({ db: deps.db }))
   // ENRL-10 — unscoped, for the identical reason `/join-links` is above
   // (`routes/membership-invitations.ts`'s own module comment).
   app.use(

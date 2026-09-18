@@ -6,6 +6,13 @@
  * Fetched with `fetchAdminProject(id)`; `NotFound` renders for
  * `project_not_found` (404), the same treatment `admin-organization` and
  * `admin-course` already give an unknown id.
+ *
+ * WEB-72/DATA-7 — a Danger zone, last on the screen: a platform
+ * administrator's own soft-delete, reversible for the deployment's
+ * retention window, then permanent. `Admin.tsx#handleSoftDelete` gates it
+ * on typing the project's own name, the same typed-name discipline
+ * `Admin.tsx#handleDelete` (ADMIN-5) already applies to an organization —
+ * this screen only renders the button and reports `deletingId`.
  */
 
 import type { AdminProjectDetail } from '../../api/types.js'
@@ -17,6 +24,7 @@ import {
   SkeletonLine,
   SkeletonRow,
 } from '../../components/Skeleton.js'
+import { DeleteIcon } from '../../icons.js'
 import type { Route } from '../../routing/route.js'
 import { NotFound } from '../NotFound.js'
 import { formatMicros, ReadOnlyField } from './shared.js'
@@ -26,7 +34,9 @@ export function ProjectDetail({
   project,
   notFound,
   failed,
+  deletingId,
   navigate,
+  onDelete,
   onBack,
 }: {
   projectId: string
@@ -34,7 +44,10 @@ export function ProjectDetail({
   /** ADMIN-8 — this project id 404'd, distinct from `failed`. */
   notFound: boolean
   failed: boolean
+  /** WEB-72/DATA-7 — the project id currently mid-delete, the same `deletingId` shape `admin/OrganizationDetail.tsx` already uses for ADMIN-5. */
+  deletingId: string | undefined
   navigate: (route: Route, options?: { replace?: boolean }) => void
+  onDelete: (projectId: string, name: string) => void
   onBack: () => void
 }) {
   if (notFound) {
@@ -160,6 +173,25 @@ export function ProjectDetail({
             </table>
           </div>
         )}
+      </section>
+
+      {/* WEB-72 — the last section on the screen, visibly separated,
+          holding this project's own delete and nothing else. */}
+      <section
+        aria-label="Danger zone"
+        className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
+      >
+        <h3 className="text-section-title font-semibold text-danger-700">
+          Danger zone
+        </h3>
+        <Button
+          variant="destructive"
+          icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+          onClick={() => onDelete(project.projectId, project.name)}
+          disabled={deletingId === project.projectId}
+        >
+          {deletingId === project.projectId ? 'Deleting…' : 'Delete project'}
+        </Button>
       </section>
     </div>
   )

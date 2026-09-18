@@ -15,6 +15,7 @@ import {
   deletions,
   discordServers,
   jobs,
+  memberships,
   projects,
   schema,
   type Database,
@@ -847,5 +848,68 @@ export const deleteCourseAction: Action<
     // would leave open against an attachment upload still in flight.
     enqueueRemoveDeletedContentBytes(organizationId, [result.byteRemoval], db)
     return result.preview
+  },
+}
+
+/**
+ * WEB-72/DATA-7 — soft-delete a course: marks it (and, with the same
+ * timestamp, every conversation it owns —
+ * `@bloombot/db`'s `courses.ts#softDeleteCourse`'s own doc comment) rather
+ * than removing it. Reversible within the deployment's retention window (a
+ * platform administrator's own restore, not built by this slice); permanent
+ * once DATA-8's sweep runs.
+ *
+ * Distinct from `courses.delete` (PROJ-8, above) — that action *permanently*
+ * wipes a course, no name confirmation past the panel's own dialog, no
+ * restore, ever; this one is CourseEditor's own Danger-zone delete, the
+ * ordinary reversible kind. The two are not connected, and this slice
+ * leaves `courses.delete` exactly as it was.
+ *
+ * **Only an existing owner of the organization may call this** — the same
+ * `callerMembership` check `organizations.ts#softDeleteOrganizationAction`
+ * holds itself to, for the identical reason (a policy cannot see the
+ * caller's own account id): course settings otherwise admit any staff role
+ * (`resolveOwnCourse`'s own callers, above), but deleting is a step up from
+ * every other course write, the same way it is for a project or an
+ * organization. A non-owner member is refused (`ActionRefusedError`, ACT-3)
+ * — TEN-5: the refusal reads as not-found.
+ */
+export const softDeleteCourseAction: Action<
+  'courses.softDelete',
+  CourseIdInput,
+  Course,
+  courses.Course
+> = {
+  name: 'courses.softDelete',
+  description:
+    "Delete a course (WEB-72/DATA-7): reversible for the deployment's retention window, then permanent. Only an existing owner of the organization may call this.",
+  inputSchema: courseIdInputSchema,
+  policy: {
+    descriptor: { resource: 'course', access: 'write' },
+    resolve: resolveOwnCourse,
+  },
+  execute: ({ organizationId, entity, accountId, db }) => {
+    if (!accountId) throw new ActionRefusedError()
+
+    const callerMembership = memberships.getMembership(
+      organizationId,
+      accountId,
+      db
+    )
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new ActionRefusedError()
+    }
+
+    const deleted = courses.softDeleteCourse(
+      organizationId,
+      entity.id,
+      accountId,
+      db
+    )
+    // Same TEN-2 race every other write in this file guards against, not
+    // asserted away — the policy already proved this course exists moments
+    // earlier.
+    if (!deleted) throw new ActionRefusedError()
+    return deleted
   },
 }

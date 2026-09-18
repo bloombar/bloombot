@@ -22,6 +22,7 @@ import {
   listProjectsAction,
   previewDeleteProjectAction,
   renameProjectAction,
+  softDeleteProjectAction,
   unarchiveProjectAction,
 } from './projects.js'
 import {
@@ -32,6 +33,7 @@ import {
   listCoursesAction,
   previewDeleteCourseAction,
   saveCourseAction,
+  softDeleteCourseAction,
   updateSettingsCourseAction,
 } from './courses.js'
 import { exportCourseAction, importCourseAction } from './course-portability.js'
@@ -88,7 +90,10 @@ import {
   listMembershipsAction,
   revokeMembershipAction,
 } from './memberships.js'
-import { renameOrganizationAction } from './organizations.js'
+import {
+  renameOrganizationAction,
+  softDeleteOrganizationAction,
+} from './organizations.js'
 import {
   createMembershipInvitationAction,
   listMembershipInvitationsAction,
@@ -110,6 +115,7 @@ export {
   listProjectsAction,
   previewDeleteProjectAction,
   renameProjectAction,
+  softDeleteProjectAction,
   unarchiveProjectAction,
 } from './projects.js'
 export {
@@ -122,6 +128,7 @@ export {
   listCoursesAction,
   previewDeleteCourseAction,
   saveCourseAction,
+  softDeleteCourseAction,
   updateSettingsCourseAction,
 } from './courses.js'
 export {
@@ -198,6 +205,7 @@ export {
 } from './memberships.js'
 export {
   renameOrganizationAction,
+  softDeleteOrganizationAction,
   MAX_ORGANIZATION_NAME_LENGTH,
 } from './organizations.js'
 export {
@@ -272,6 +280,7 @@ export function createPlatformRegistry(options?: {
   registry.register(unarchiveProjectAction)
   registry.register(previewDeleteProjectAction)
   registry.register(deleteProjectAction)
+  registry.register(softDeleteProjectAction)
   registry.register(renameProjectAction)
   registry.register(listProjectsAction)
   registry.register(duplicateProjectAction)
@@ -281,6 +290,7 @@ export function createPlatformRegistry(options?: {
   registry.register(disableCourseAction)
   registry.register(previewDeleteCourseAction)
   registry.register(deleteCourseAction)
+  registry.register(softDeleteCourseAction)
   registry.register(listCoursesAction)
   registry.register(getCourseAction)
   registry.register(exportCourseAction)
@@ -325,6 +335,7 @@ export function createPlatformRegistry(options?: {
   registry.register(revokeMembershipAction)
   registry.register(leaveMembershipAction)
   registry.register(renameOrganizationAction)
+  registry.register(softDeleteOrganizationAction)
   registry.register(createMembershipInvitationAction)
   registry.register(listMembershipInvitationsAction)
   registry.register(revokeMembershipInvitationAction)

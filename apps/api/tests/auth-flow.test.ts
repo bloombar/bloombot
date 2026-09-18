@@ -492,6 +492,74 @@ describe('GET /auth/me — connectedOrganizations (LINK-10)', () => {
   })
 })
 
+// WEB-72/DATA-7 rework (must-fix) — a soft-deleted organization must not
+// reach this response at all, on either list: a caller who lands on it
+// through `OrganizationSwitcher`'s own membership list, or through its
+// connected-organizations list, gets a screen that 404s on every scoped
+// read. `routes/auth.ts`'s own module comment on `/me` has the full
+// reasoning; this proves both halves directly against the real database.
+describe('GET /auth/me — a soft-deleted organization is never reported (DATA-9)', () => {
+  it('omits a soft-deleted organization from memberships', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    organizations.softDeleteOrganization(
+      caller.organizationId,
+      caller.accountId,
+      testDb.db
+    )
+
+    const me = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    expect(me.status).toBe(200)
+    const account = (
+      me.body as {
+        account: { memberships: unknown[] } | null
+      }
+    ).account
+    expect(account).not.toBeNull()
+    expect(account!.memberships).toEqual([])
+  })
+
+  it('omits a soft-deleted organization from connectedOrganizations', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const institutionOrganizationId = randomUUID()
+    organizations.createOrganization(
+      institutionOrganizationId,
+      { name: 'A University', isPersonal: false },
+      testDb.db
+    )
+    const person = people.createPerson(institutionOrganizationId, {}, testDb.db)
+    people.connectIdentity(
+      institutionOrganizationId,
+      person.id,
+      { surface: 'web', externalId: caller.accountId },
+      testDb.db
+    )
+    organizations.softDeleteOrganization(
+      institutionOrganizationId,
+      caller.accountId,
+      testDb.db
+    )
+
+    const me = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    expect(me.status).toBe(200)
+    const account = (
+      me.body as {
+        account: { connectedOrganizations: unknown[] } | null
+      }
+    ).account
+    expect(account!.connectedOrganizations).toEqual([])
+  })
+})
+
 // AUTH-6: a sign-in link's own `destination` — the same-origin path to
 // return to once redeemed, carried on the token itself so it survives to
 // whichever browsing context actually redeems it (`packages/auth`'s

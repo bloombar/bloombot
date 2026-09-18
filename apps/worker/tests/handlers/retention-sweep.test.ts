@@ -171,6 +171,110 @@ describe('runRetentionSweep', () => {
     expect(testDb.db.select().from(schema.projects).all()).toHaveLength(1)
   })
 
+  // DATA-8 rework, must-fix 1/2 — reproduces the review's own finding:
+  // before the fix, this org's rows were removed (`organizationsRemoved: 1`)
+  // but the byte-removal job's own enqueue threw `SQLITE_CONSTRAINT_FOREIGNKEY`
+  // (`jobs.organizationId` cannot name an organization already gone),
+  // counted as `failures: 1` *for the same organization already removed*,
+  // and queued zero byte-removal jobs — a permanent, unreachable leak of
+  // the attachment this test seeds. A second, surviving organization is
+  // what a real deployment always has (its own platform administrator's
+  // personal organization, if nothing else) — seeded here for exactly that
+  // reason, so the byte-removal job has somewhere valid to attach to.
+  it('removes an organization past its window, and durably queues its course’s byte removal against a surviving organization — never removed rows with unqueued bytes', () => {
+    testDb = createTestDatabase()
+    const { organizationId, owner } = seedOrganization(testDb.db)
+    // A second, surviving organization — `jobs.organizationId`'s own
+    // foreign key needs one that is not the organization being deleted.
+    seedOrganization(testDb.db)
+    const now = Date.now()
+
+    const project = projects.createProject(
+      organizationId,
+      { name: 'Fall 2026' },
+      testDb.db
+    )
+    const courseResult = courses.createCourse(
+      organizationId,
+      {
+        projectId: project.id,
+        title: 'Web Design',
+        enabled: true,
+        adminsRole: 'admins-wd',
+        studentsRole: 'students-wd',
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!courseResult.ok) throw new Error('seed course creation failed')
+    const courseId = courseResult.course.id
+
+    testDb.db
+      .insert(schema.courseAttachments)
+      .values({
+        id: randomUUID(),
+        organizationId,
+        courseId,
+        filename: 'syllabus.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1,
+        status: 'ready',
+        providerFileId: 'file_org_abc123',
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run()
+
+    organizations.softDeleteOrganization(organizationId, owner.id, testDb.db)
+    testDb.db
+      .update(schema.organizations)
+      .set({ deletedAt: now - WINDOW_MS - 1_000 })
+      .where(eq(schema.organizations.id, organizationId))
+      .run()
+
+    const logger = createFakeLogger()
+    const report = runRetentionSweep(RETENTION_DAYS, now, testDb.db, logger)
+
+    // The organization is genuinely gone, and counted as removed — not as
+    // a failure alongside it.
+    expect(report.organizationsRemoved).toBe(1)
+    expect(report.failures).toBe(0)
+    expect(
+      testDb.db
+        .select()
+        .from(schema.organizations)
+        .where(eq(schema.organizations.id, organizationId))
+        .all()
+    ).toHaveLength(0)
+
+    // The byte-removal job is durably queued, naming the removed
+    // organization's own course and its attachment's provider file id —
+    // attached to the *surviving* organization (`jobs.organizationId`),
+    // not the one just deleted.
+    const queued = testDb.db
+      .select()
+      .from(schema.jobs)
+      .where(eq(schema.jobs.kind, REMOVE_DELETED_CONTENT_BYTES_JOB_KIND))
+      .all()
+    expect(queued).toHaveLength(1)
+    expect(queued[0]?.organizationId).not.toBe(organizationId)
+    const payload = JSON.parse(queued[0]?.payload ?? '{}') as {
+      organizationId?: string
+      courses: {
+        courseId: string
+        attachments: { providerFileId: string | null }[]
+      }[]
+    }
+    // The payload names the organization whose bytes these actually are —
+    // the deleted one — separately from the job row's own organization.
+    expect(payload.organizationId).toBe(organizationId)
+    expect(payload.courses).toHaveLength(1)
+    expect(payload.courses[0]?.courseId).toBe(courseId)
+    expect(payload.courses[0]?.attachments[0]?.providerFileId).toBe(
+      'file_org_abc123'
+    )
+  })
+
   it('removes a course past its window and enqueues the content-deletion job with its own byte ids', () => {
     testDb = createTestDatabase()
     const { organizationId, owner } = seedOrganization(testDb.db)
@@ -426,7 +530,7 @@ describe('ensureRetentionSweepScheduled', () => {
     testDb = createTestDatabase()
     seedOrganization(testDb.db)
 
-    ensureRetentionSweepScheduled('', testDb.db, createFakeLogger())
+    ensureRetentionSweepScheduled('', Date.now(), testDb.db, createFakeLogger())
 
     const queued = testDb.db
       .select()
@@ -436,10 +540,32 @@ describe('ensureRetentionSweepScheduled', () => {
     expect(queued).toHaveLength(1)
   })
 
+  // DATA-8 rework, cheap-fix 4 — before it, the startup call always passed
+  // `now + RETENTION_SWEEP_INTERVAL_MS` (24h), the identical delay the
+  // self-reschedule uses; a deployment down for a month would then wait a
+  // further day past its own restart before the first sweep ran at all.
+  it('schedules the startup sweep to run promptly, not a day late', () => {
+    testDb = createTestDatabase()
+    seedOrganization(testDb.db)
+    const before = Date.now()
+
+    ensureRetentionSweepScheduled('', before, testDb.db, createFakeLogger())
+
+    const queued = testDb.db
+      .select()
+      .from(schema.jobs)
+      .where(eq(schema.jobs.kind, RETENTION_SWEEP_JOB_KIND))
+      .all()
+    expect(queued).toHaveLength(1)
+    // Comfortably under the 24h self-reschedule interval — this is "now",
+    // not "a day from now".
+    expect(queued[0]?.nextAttemptAt ?? Infinity).toBeLessThan(before + 60_000)
+  })
+
   it('does nothing when no organization exists yet — nothing to attach the job to, nothing to sweep', () => {
     testDb = createTestDatabase()
 
-    ensureRetentionSweepScheduled('', testDb.db, createFakeLogger())
+    ensureRetentionSweepScheduled('', Date.now(), testDb.db, createFakeLogger())
 
     expect(testDb.db.select().from(schema.jobs).all()).toHaveLength(0)
   })
@@ -448,8 +574,8 @@ describe('ensureRetentionSweepScheduled', () => {
     testDb = createTestDatabase()
     seedOrganization(testDb.db)
 
-    ensureRetentionSweepScheduled('', testDb.db, createFakeLogger())
-    ensureRetentionSweepScheduled('', testDb.db, createFakeLogger())
+    ensureRetentionSweepScheduled('', Date.now(), testDb.db, createFakeLogger())
+    ensureRetentionSweepScheduled('', Date.now(), testDb.db, createFakeLogger())
 
     const queued = testDb.db
       .select()

@@ -373,7 +373,10 @@ export function restoreAccount(
  * DATA-8 — every account whose `deletedAt` is at or before `cutoff` (an
  * epoch-millisecond boundary the retention sweep computes from
  * `DELETED_DATA_RETENTION_DAYS`), across the whole platform: the sweep's
- * own candidate list for `permanentlyDeleteAccount`, below.
+ * own candidate list for `permanentlyDeleteAccount`, below. `lte`, not
+ * `lt` — deliberate, the same boundary
+ * `organizations.ts#listOrganizationsDeletedBefore`'s own doc comment
+ * explains.
  *
  * TEN-2/DATA-9 exception, the same class `organizations.ts#listTenantDeletions`
  * already is: an account is not scoped to one organization (this file's own

@@ -659,9 +659,11 @@ export function restoreConversationsForPerson(
 /**
  * DATA-8 — every conversation whose `deletedAt` is at or before `cutoff`,
  * across every organization: the retention sweep's own candidate list for
- * `permanentlyDeleteConversation`, below. Unscoped by `organizationId` — the
- * same TEN-2/DATA-9 "the sweep" exception
- * `people.ts#listPeopleDeletedBefore`'s own doc comment already is.
+ * `permanentlyDeleteConversation`, below. `lte`, not `lt` — deliberate, the
+ * same boundary `organizations.ts#listOrganizationsDeletedBefore`'s own doc
+ * comment explains. Unscoped by `organizationId` — the same TEN-2/DATA-9
+ * "the sweep" exception `people.ts#listPeopleDeletedBefore`'s own doc
+ * comment already is.
  */
 export function listConversationsDeletedBefore(
   cutoff: number,

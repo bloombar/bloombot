@@ -8,9 +8,18 @@
  * even here: the id is simply the organization's own.
  */
 
-import { and, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm'
+import {
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  notInArray,
+  sql,
+} from 'drizzle-orm'
 
-import type { Database, Executor } from '../client.js'
+import type { Database, Executor, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
 // DATA-8 — `CourseByteRemoval` is `deletions.ts`'s own shape for "everything
 // a caller needs to remove one course's bytes"; `deleteOrganizationData`
@@ -325,8 +334,7 @@ export function previewOrganizationDeletion(
  *
  * DATA-8 — `byteRemovals` is what the retention sweep's own handler
  * (`apps/worker`'s `handlers/retention-sweep.ts`) enqueues
- * `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND` with, one job per organization
- * (`@bloombot/actions`' `enqueueRemoveDeletedContentBytes`), the same job
+ * `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND` with, the same job
  * `deletions.ts#deleteCourse`/`deleteProject` already enqueue it with — this
  * function did not gather it before DATA-8, since ADMIN-5's own route
  * (`apps/api/src/routes/admin.ts`) reads the same ids itself, separately,
@@ -336,6 +344,23 @@ export function previewOrganizationDeletion(
  * value is updated to unwrap `preview` (`git blame` this slice), not to
  * consume `byteRemovals` itself, so ADMIN-5's own bytes-cleanup path is
  * unchanged.
+ *
+ * DATA-8 rework, must-fix 1 — `db` accepts `TransactingExecutor`, not just
+ * `Database`, so a caller enqueueing that job can wrap *both* this call and
+ * the enqueue in one outer transaction (`writeTransaction`'s own doc
+ * comment: a nested call opens a savepoint, not a second `BEGIN`). This
+ * matters because `jobs.organizationId` is a real, `NOT NULL` foreign key to
+ * `organizations.id` — a job cannot be attached to `organizationId` itself,
+ * since by the time a worker could claim it this function has already
+ * deleted that row, and cannot be attached to it *after* this call returns
+ * either, for the identical reason one statement later. The organization
+ * whose bytes these are (for `AttachmentStorage`, keyed by organization id)
+ * and the organization a job row is attached to (for the FK alone) are
+ * therefore two different things once `organizationId` here is the one
+ * being removed — `handlers/retention-sweep.ts`'s own module comment has
+ * the full mechanism, and the caller is responsible for both halves; this
+ * function only guarantees the row is not gone before the caller's own
+ * transaction (which may include the enqueue) commits.
  *
  * This function does not touch `AttachmentStorage` — a course attachment's
  * or a transcript export's own bytes on disk are its caller's
@@ -353,7 +378,7 @@ export interface DeleteOrganizationDataResult {
 
 export function deleteOrganizationData(
   organizationId: string,
-  db: Database
+  db: TransactingExecutor
 ): DeleteOrganizationDataResult | undefined {
   return writeTransaction(db, (tx) => {
     // Read inside this same transaction, before anything below deletes a
@@ -755,9 +780,14 @@ export function restoreOrganization(
 /**
  * DATA-8 — every organization whose `deletedAt` is at or before `cutoff`:
  * the retention sweep's own candidate list for `deleteOrganizationData`,
- * above. Unscoped by `organizationId` (there is nothing to scope this list
- * *by* — it is the list of organizations themselves) — the same "the sweep
- * is platform-wide" TEN-2/DATA-9 exception
+ * above. `lte`, not `lt`, is deliberate — a record marked deleted at exactly
+ * the retention window's own boundary has already had the *whole* window to
+ * be restored in and is due, not merely close; every sibling `listXDeletedBefore`
+ * (`accounts.ts`, `people.ts`, `conversations.ts`, `courses.ts`, `projects.ts`)
+ * makes the identical choice, for the identical reason, rather than each
+ * restating it. Unscoped by `organizationId` (there is nothing to scope this
+ * list *by* — it is the list of organizations themselves) — the same "the
+ * sweep is platform-wide" TEN-2/DATA-9 exception
  * `listAccountsDeletedBefore`/`listPeopleDeletedBefore`/
  * `listConversationsDeletedBefore` already are, one level up.
  */
@@ -780,14 +810,33 @@ export function listOrganizationsDeletedBefore(
 /**
  * DATA-8 — an organization to attach a platform-wide job to: `jobs.organizationId`
  * is a real, `NOT NULL` foreign key (`schema.ts`), so a job that is not
- * about any one organization — the retention sweep itself — still has to
- * name one. Prefers a live organization (`deletedAt IS NULL`), oldest
- * first, so the sweep's own row essentially never rides on an organization
- * it is about to remove; falls back to *any* organization (including a
- * deleted one) rather than refuse outright if every organization on the
- * platform happens to be soft-deleted. `undefined` when there is no
- * organization at all — a fresh install with nobody signed up yet, which
- * also means there is nothing for a sweep to remove.
+ * about any one organization — the retention sweep itself, or the
+ * `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND` job a swept-away organization's
+ * own bytes still need (`deleteOrganizationData`'s own doc comment, DATA-8
+ * rework must-fix 1) — still has to name one. Prefers a live organization
+ * (`deletedAt IS NULL`), oldest first, so the row essentially never rides on
+ * an organization about to be removed in the same transaction; falls back
+ * to *any other* organization (including a deleted one) rather than refuse
+ * outright if every organization on the platform happens to be
+ * soft-deleted. `undefined` when there is no organization at all — a fresh
+ * install with nobody signed up yet, or (must-fix 1's own edge case) an
+ * organization that is the only one on the platform being swept, which
+ * `handlers/retention-sweep.ts`'s own doc comment records rather than
+ * works around.
+ *
+ * `excludeOrganizationIds` — DATA-8 rework must-fix 1 — leaves every
+ * organization named out of the candidate set entirely: the caller's own
+ * "these are all about to (or already did) go, so none of them is ever a
+ * valid target no matter how this function would otherwise rank it."
+ * `handlers/retention-sweep.ts`'s own organization pass excludes *every*
+ * organization this run's own candidate list names, not only the one the
+ * current call is about — a single organization's own current-being-deleted
+ * id is not enough: a second, already-soft-deleted organization in the same
+ * candidate list could still be picked (this function falls back to *any*
+ * organization when nothing live exists) and then removed later in the
+ * *same* run, taking the job just attached to it down with it
+ * (`organizations`'s own cascade deletes `jobs` for the organization it
+ * removes) before a worker ever claims it.
  *
  * If the organization a currently-running sweep is attached to is itself
  * swept away by that same run, `@bloombot/jobs`' own `runner.ts` already
@@ -796,10 +845,18 @@ export function listOrganizationsDeletedBefore(
  * organization" bias makes that rare, not impossible, and rare is enough:
  * see docs/DECISIONS.md.
  */
-export function pickReferenceOrganizationId(db: Database): string | undefined {
+export function pickReferenceOrganizationId(
+  db: Database,
+  excludeOrganizationIds: string[] = []
+): string | undefined {
   const row = db
     .select({ id: organizations.id })
     .from(organizations)
+    .where(
+      excludeOrganizationIds.length > 0
+        ? notInArray(organizations.id, excludeOrganizationIds)
+        : undefined
+    )
     .orderBy(
       sql`(${organizations.deletedAt} is null) desc`,
       organizations.createdAt

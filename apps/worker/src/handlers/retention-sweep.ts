@@ -23,15 +23,35 @@
  *
  * **Bytes go through the existing content-deletion job**
  * (`REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`,
- * `handlers/content-deletions.ts`), never a second implementation: an
- * organization's or a project's or a course's own removal gathers each
- * course's `deletions.CourseByteRemoval` *inside* the same transaction the
- * row removal runs in (`deleteOrganizationData`/`deleteProject`/
- * `deleteCourse` all already do this — see their own doc comments), and
- * this handler enqueues that job with them immediately after, the same
- * "rows in a transaction, bytes in a job" split
+ * `handlers/content-deletions.ts`), never a second implementation: a
+ * project's or a course's own removal gathers each course's
+ * `deletions.CourseByteRemoval` *inside* the same transaction the row
+ * removal runs in (`deleteProject`/`deleteCourse` already do this — see
+ * their own doc comments), and this handler enqueues that job with them
+ * immediately after, the same "rows in a transaction, bytes in a job" split
  * `@bloombot/actions`'s `enqueueRemoveDeletedContentBytes` already holds
- * itself to for an ordinary delete action.
+ * itself to for an ordinary delete action — their own organization
+ * survives the delete, so the job is attached to it directly, exactly as
+ * that action already does.
+ *
+ * **An organization's own removal cannot follow that same split — DATA-8
+ * rework, must-fix 1** — `jobs.organizationId` is a real, `NOT NULL`
+ * foreign key (`schema.ts`), so a byte-removal job enqueued *after*
+ * `deleteOrganizationData` commits, attached to the organization it just
+ * removed, throws `SQLITE_CONSTRAINT_FOREIGNKEY` (the row it would
+ * reference is already gone) — a first review round reproduced exactly
+ * this: rows removed, bytes silently unqueued and permanently unreachable.
+ * Fixed by widening `deleteOrganizationData` to accept `TransactingExecutor`
+ * and wrapping *both* the delete and the byte-removal enqueue in one outer
+ * transaction here: the job is attached to a *surviving* organization
+ * (`organizations.pickReferenceOrganizationId`, excluding every
+ * organization this same sweep run is about to remove, not only the one
+ * currently being processed), while the payload carries the organization
+ * the bytes actually belong to explicitly
+ * (`content-deletions.ts`'s own `ParsedPayload.organizationId`) — see
+ * docs/DECISIONS.md for the one case (the swept organization was the
+ * platform's only one) this still cannot close.
+ *
  * `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`/`enqueueContentBytesRemoval`
  * below are a deliberate duplicate of that file's own constant and
  * enqueue logic — this app does not depend on `@bloombot/actions` (no
@@ -50,13 +70,17 @@
  *
  * **Schedules its own successor**: `NewJob.availableAt` (the queue's own
  * "run later" primitive, `@bloombot/db`'s `repos/jobs.ts`) sets the next
- * run's `nextAttemptAt` — `RETENTION_SWEEP_INTERVAL_MS` below is this
- * slice's own judgment call, not something DATA-8's text names a config
- * knob for (see docs/DECISIONS.md). Guarded against accumulating
- * duplicates by `jobs.hasQueuedJobOfKind`, excluding this job's own,
- * still-`running` id. `apps/worker/src/index.ts` also enqueues one at
- * startup, the same guard, so a deployment that has been down does not
- * silently stop deleting.
+ * run's `nextAttemptAt`, passed into `ensureRetentionSweepScheduled` below
+ * explicitly by each of its two callers — `RETENTION_SWEEP_INTERVAL_MS`
+ * below is this slice's own judgment call, not something DATA-8's text
+ * names a config knob for (see docs/DECISIONS.md), and it is only the
+ * *self*-reschedule (below, from inside the handler) that uses it.
+ * `apps/worker/src/index.ts` also enqueues one at startup — DATA-8 rework,
+ * cheap-fix 4 — promptly (`Date.now()`, not `RETENTION_SWEEP_INTERVAL_MS`
+ * from now), so a deployment that has been down for a while sweeps again
+ * as soon as it restarts rather than waiting a further day past that
+ * restart. Guarded against accumulating duplicates by
+ * `jobs.hasQueuedJobOfKind`, excluding this job's own, still-`running` id.
  *
  * **`DELETED_DATA_RETENTION_DAYS=0` disables the sweep** (DATA-8's own
  * text: "a deliberate choice a deployment can make and not a default") —
@@ -73,7 +97,9 @@ import {
   organizations,
   people,
   projects,
+  writeTransaction,
   type Database,
+  type Executor,
 } from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
@@ -121,21 +147,38 @@ export interface RetentionSweepReport {
  * own module comment has why. Enqueues `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`
  * naming every course's own `CourseByteRemoval`, or nothing at all when none
  * of them has an attachment or an export to remove.
+ *
+ * DATA-8 rework, must-fix 1 — `jobOrganizationId` and `sourceOrganizationId`
+ * are the same for a project or a course (both still exist once this runs —
+ * `deletions.deleteProject`/`deleteCourse` already committed), and this
+ * still enqueues exactly the payload it always has, `{ courses }` alone, so
+ * `apps/worker/src/handlers/content-deletions.ts` falls back to
+ * `context.organizationId` exactly as before. They differ for an
+ * organization: `jobOrganizationId` is a *surviving* organization this job
+ * row is attached to purely to satisfy `jobs.organizationId`'s own foreign
+ * key (`organizations.ts#deleteOrganizationData`'s own doc comment), and
+ * `sourceOrganizationId` — the organization whose bytes these actually are,
+ * which is gone by the time a worker claims this — is carried explicitly in
+ * the payload instead (`content-deletions.ts`'s own `ParsedPayload`).
  */
 function enqueueContentBytesRemoval(
-  organizationId: string,
+  jobOrganizationId: string,
+  sourceOrganizationId: string,
   courseRemovals: deletions.CourseByteRemoval[],
-  db: Database
+  db: Executor
 ): void {
   const hasWork = courseRemovals.some(
     (removal) => removal.attachments.length > 0 || removal.exportIds.length > 0
   )
   if (!hasWork) return
   jobs.enqueueJob(
-    organizationId,
+    jobOrganizationId,
     {
       kind: REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
-      payload: { courses: courseRemovals },
+      payload:
+        jobOrganizationId === sourceOrganizationId
+          ? { courses: courseRemovals }
+          : { organizationId: sourceOrganizationId, courses: courseRemovals },
       maxAttempts: REMOVE_DELETED_CONTENT_BYTES_JOB_MAX_ATTEMPTS,
     },
     db
@@ -143,13 +186,22 @@ function enqueueContentBytesRemoval(
 }
 
 /**
- * DATA-8 — schedules `RETENTION_SWEEP_JOB_KIND`'s own next run,
- * `RETENTION_SWEEP_INTERVAL_MS` from now, unless one is already queued.
- * `excludeJobId` is this job's own id when called from inside the handler
- * (still `running`, not yet terminal — `jobs.hasQueuedJobOfKind`'s own doc
- * comment has why that exclusion matters) and `''` — never a real job id —
- * when called from `apps/worker/src/index.ts` at startup, where there is no
- * "self" to exclude.
+ * DATA-8 — schedules `RETENTION_SWEEP_JOB_KIND`'s own next run, at
+ * `availableAt`, unless one is already queued. `excludeJobId` is this job's
+ * own id when called from inside the handler (still `running`, not yet
+ * terminal — `jobs.hasQueuedJobOfKind`'s own doc comment has why that
+ * exclusion matters) and `''` — never a real job id — when called from
+ * `apps/worker/src/index.ts` at startup, where there is no "self" to
+ * exclude.
+ *
+ * `availableAt` — DATA-8 rework, cheap-fix 4 — is the caller's own choice,
+ * not a constant this function picks: the handler's own self-reschedule
+ * passes `now + RETENTION_SWEEP_INTERVAL_MS` (the ordinary daily cadence),
+ * while `apps/worker/src/index.ts`'s own startup call passes `now` —
+ * promptly, not a day late — so a deployment that has been down does not
+ * wait a further day past its own restart before the first sweep runs
+ * (SPEC §49's own "a deployment that has been down does not silently stop
+ * deleting").
  *
  * Silently does nothing when no organization exists at all
  * (`organizations.pickReferenceOrganizationId` returns `undefined`) — a
@@ -159,6 +211,7 @@ function enqueueContentBytesRemoval(
  */
 export function ensureRetentionSweepScheduled(
   excludeJobId: string,
+  availableAt: number,
   db: Database,
   logger: Logger
 ): void {
@@ -179,7 +232,7 @@ export function ensureRetentionSweepScheduled(
       kind: RETENTION_SWEEP_JOB_KIND,
       payload: {},
       maxAttempts: RETENTION_SWEEP_MAX_ATTEMPTS,
-      availableAt: Date.now() + RETENTION_SWEEP_INTERVAL_MS,
+      availableAt,
     },
     db
   )
@@ -222,15 +275,65 @@ export function runRetentionSweep(
     // own doc comments) — processing organizations, then projects, then
     // courses, then people, then conversations means nothing already
     // removed by a step above is found again by one below.
-    for (const organization of organizations.listOrganizationsDeletedBefore(
+    const organizationCandidates = organizations.listOrganizationsDeletedBefore(
       cutoff,
       db
-    )) {
+    )
+    // DATA-8 rework, must-fix 1 — every organization this run is about to
+    // remove, excluded as a whole from `pickReferenceOrganizationId`'s own
+    // candidate set below: a second, already-soft-deleted organization in
+    // this same list is exactly as unfit a target as the one currently
+    // being processed (that function's own doc comment has the full race).
+    const organizationCandidateIds = organizationCandidates.map(
+      (organization) => organization.id
+    )
+    for (const organization of organizationCandidates) {
       try {
-        const result = organizations.deleteOrganizationData(organization.id, db)
+        // Picked *before* the delete, and used *inside* the same
+        // transaction as the delete below — DATA-8 rework must-fix 1's own
+        // fix: `jobs.organizationId` cannot name the organization this call
+        // is about to remove (`deleteOrganizationData`'s own doc comment),
+        // so the byte-removal job for its courses is durably queued, in the
+        // same commit, against a *surviving* organization instead — never
+        // gone while its bytes are still unqueued.
+        const referenceOrganizationId =
+          organizations.pickReferenceOrganizationId(
+            db,
+            organizationCandidateIds
+          )
+        const result = writeTransaction(db, (tx) => {
+          const deleteResult = organizations.deleteOrganizationData(
+            organization.id,
+            tx
+          )
+          if (deleteResult && referenceOrganizationId) {
+            enqueueContentBytesRemoval(
+              referenceOrganizationId,
+              organization.id,
+              deleteResult.byteRemovals,
+              tx
+            )
+          }
+          return deleteResult
+        })
         if (result) {
           report.organizationsRemoved += 1
-          enqueueContentBytesRemoval(organization.id, result.byteRemovals, db)
+          if (!referenceOrganizationId) {
+            // DATA-8 rework must-fix 1's own named edge case: no surviving
+            // organization exists to attach the byte-removal job to (this
+            // organization was the platform's only one, or every other one
+            // is being removed in this same run too). The rows are
+            // genuinely gone — `organizationsRemoved` is correct — but any
+            // attachment/export bytes this organization owned are left on
+            // disk, unreachable, until a later organization exists; nothing
+            // is left marked to retry against, since there is no row left
+            // to mark. Recorded as a known limitation, not fixed here
+            // (docs/DECISIONS.md).
+            logger.warn(
+              { organizationId: organization.id },
+              'apps/worker: retention sweep removed an organization but could not queue its bytes for removal — no surviving organization to attach the job to'
+            )
+          }
         }
       } catch (error) {
         report.failures += 1
@@ -263,7 +366,11 @@ export function runRetentionSweep(
         )
         if (result) {
           report.projectsRemoved += 1
+          // The project's own organization survives this delete — the job
+          // row is attached to it directly, the same organization whose
+          // bytes these are.
           enqueueContentBytesRemoval(
+            project.organizationId,
             project.organizationId,
             result.byteRemovals,
             db
@@ -296,7 +403,11 @@ export function runRetentionSweep(
         )
         if (result) {
           report.coursesRemoved += 1
+          // The course's own organization survives this delete — the job
+          // row is attached to it directly, the same organization whose
+          // bytes these are.
           enqueueContentBytesRemoval(
+            course.organizationId,
             course.organizationId,
             [result.byteRemoval],
             db
@@ -390,7 +501,12 @@ export function createRetentionSweepHandler(
       context.db,
       deps.logger
     )
-    ensureRetentionSweepScheduled(context.jobId, context.db, deps.logger)
+    ensureRetentionSweepScheduled(
+      context.jobId,
+      Date.now() + RETENTION_SWEEP_INTERVAL_MS,
+      context.db,
+      deps.logger
+    )
     return report
   }
 }

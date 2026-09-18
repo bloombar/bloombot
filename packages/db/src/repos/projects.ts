@@ -564,10 +564,11 @@ export function restoreProject(
 /**
  * DATA-8 — every project whose `deletedAt` is at or before `cutoff`, across
  * every organization: the retention sweep's own candidate list for
- * `deletions.deleteProject`. Unscoped by `organizationId` — the same
- * "the sweep is platform-wide" TEN-2/DATA-9 exception
- * `organizations.ts#listOrganizationsDeletedBefore` already is, one level
- * down.
+ * `deletions.deleteProject`. `lte`, not `lt` — deliberate, the same
+ * "at exactly the boundary is due, not merely close" reasoning
+ * `organizations.ts#listOrganizationsDeletedBefore`'s own doc comment
+ * gives, one level up. Unscoped by `organizationId` — the same "the sweep
+ * is platform-wide" TEN-2/DATA-9 exception that function already is.
  */
 export function listProjectsDeletedBefore(
   cutoff: number,

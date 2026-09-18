@@ -55,6 +55,20 @@ describe('parseEnv', () => {
     ).toThrow(EnvValidationError)
   })
 
+  // DATA-8 rework, cheap-fix 3 — a blanked-out variable (`FOO=`, the same
+  // shape `env.example`'s own `ADMIN_EMAILS=`/`SUPPORT_CONTACT=` already
+  // invite) used to parse as `Number('') === 0`, which `min(0)` accepts
+  // silently — indistinguishable from a deployment's own deliberate
+  // "disable the sweep." Fails without `nonNegativeIntWithBlankDefault`
+  // (`env.ts`): the 30-day default must fire instead, the same as an
+  // altogether-absent variable.
+  it('treats a blank DELETED_DATA_RETENTION_DAYS the same as an absent one — the default fires, not 0', () => {
+    expect(
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '' })
+        .DELETED_DATA_RETENTION_DAYS
+    ).toBe(30)
+  })
+
   it('defaults every upstream base URL to the real service (QA-2)', () => {
     const env = parseEnv({ ...VALID })
 

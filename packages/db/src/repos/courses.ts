@@ -2349,9 +2349,11 @@ export function restoreCourse(
 /**
  * DATA-8 — every course whose `deletedAt` is at or before `cutoff`, across
  * every organization: the retention sweep's own candidate list for
- * `deletions.deleteCourse`. Unscoped by `organizationId` — the same
- * "the sweep is platform-wide" TEN-2/DATA-9 exception
- * `projects.ts#listProjectsDeletedBefore` already is, one level down.
+ * `deletions.deleteCourse`. `lte`, not `lt` — deliberate, the same boundary
+ * `organizations.ts#listOrganizationsDeletedBefore`'s own doc comment
+ * explains. Unscoped by `organizationId` — the same "the sweep is
+ * platform-wide" TEN-2/DATA-9 exception `projects.ts#listProjectsDeletedBefore`
+ * already is, one level down.
  */
 export function listCoursesDeletedBefore(
   cutoff: number,

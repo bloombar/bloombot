@@ -296,8 +296,11 @@ async function main(): Promise<void> {
   // DATA-8 — one sweep queued at startup, so a deployment that has been
   // down does not silently stop deleting (`ensureRetentionSweepScheduled`'s
   // own doc comment); `''` excludes nothing, since this call has no
-  // already-running job of its own to exclude.
-  ensureRetentionSweepScheduled('', db, logger)
+  // already-running job of its own to exclude. DATA-8 rework, cheap-fix 4 —
+  // `Date.now()`, not a day out: this is the "has been down" catch-up run
+  // itself, so it must not wait a further `RETENTION_SWEEP_INTERVAL_MS`
+  // past this restart before it runs.
+  ensureRetentionSweepScheduled('', Date.now(), db, logger)
 
   let shuttingDown = false
   // `workerHealthStatus` (finding 6 of this rework — `health.ts`'s own

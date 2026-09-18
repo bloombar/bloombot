@@ -38,6 +38,24 @@ export function stripTrailingSlashes(url: string): string {
 const port = (defaultValue: number) =>
   z.coerce.number().int().min(1).max(65535).default(defaultValue)
 
+/**
+ * DATA-8 rework, cheap-fix 3 — a non-negative integer whose default matters:
+ * `z.coerce.number()...default(defaultValue)` only ever applies its default
+ * to a genuinely *missing* (`undefined`) variable, and `Number('')` is `0`,
+ * not `NaN` — so `FOO=` (blank, the exact shape `ADMIN_EMAILS=`/
+ * `SUPPORT_CONTACT=` in `env.example` already invites for a *string*
+ * field, where blank is a legitimate value) silently parses to `0` here
+ * too, for a field whose `0` is a deliberate, deployment-chosen meaning
+ * distinct from "unset" (`DELETED_DATA_RETENTION_DAYS`'s own comment,
+ * below). Preprocessed so an empty string is treated exactly like an absent
+ * variable — the default fires — before `min`/`int` ever see it.
+ */
+const nonNegativeIntWithBlankDefault = (defaultValue: number) =>
+  z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.coerce.number().int().min(0).default(defaultValue)
+  )
+
 export const envSchema = z.object({
   // Which deployment this process believes it is. Deliberately required: a
   // wrong guess here changes logging, cookies and error detail, so it is
@@ -126,8 +144,11 @@ export const envSchema = z.object({
   // text), never a default — `apps/worker`'s own sweep handler reads this
   // once at startup, the same "packages never import @bloombot/config, the
   // value arrives as an argument" (D-29) discipline `SUPPORT_CONTACT`/
-  // `PUBLIC_APP_URL` above already follow.
-  DELETED_DATA_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
+  // `PUBLIC_APP_URL` above already follow. `nonNegativeIntWithBlankDefault`
+  // (DATA-8 rework, cheap-fix 3) is what keeps a blanked-out
+  // `DELETED_DATA_RETENTION_DAYS=` from silently becoming that same `0` by
+  // accident, rather than the 30-day default a missing variable gets.
+  DELETED_DATA_RETENTION_DAYS: nonNegativeIntWithBlankDefault(30),
 
   // JOB-2..3: the background queue's own policy. See docs/DECISIONS.md for
   // why these particular numbers. `@bloombot/jobs` takes every one of these

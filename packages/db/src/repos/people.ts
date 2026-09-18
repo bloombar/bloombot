@@ -1596,7 +1596,9 @@ export function restorePerson(
 /**
  * DATA-8 — every person whose `deletedAt` is at or before `cutoff`, across
  * every organization: the retention sweep's own candidate list for
- * `permanentlyDeletePerson`, below. Unscoped by `organizationId` — the same
+ * `permanentlyDeletePerson`, below. `lte`, not `lt` — deliberate, the same
+ * boundary `organizations.ts#listOrganizationsDeletedBefore`'s own doc
+ * comment explains. Unscoped by `organizationId` — the same
  * TEN-2/DATA-9 "the sweep" exception
  * `accounts.ts#listAccountsDeletedBefore`'s own doc comment already is —
  * the sweep itself resolves which organization each row belongs to from

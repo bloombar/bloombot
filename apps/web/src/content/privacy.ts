@@ -4,16 +4,28 @@
  * what leaves the box for the model provider, and what the cost ledger
  * records.
  *
- * **On what this deliberately does not promise.** It makes no commitment to
- * delete anything on request, to any retention window, or to honouring
- * statutory erasure rights, because the platform has no per-person deletion
- * path today: `packages/db`'s own schema carries a tenant-level deletion
- * (ADMIN-5) and nothing finer, transcripts are kept indefinitely, and no
- * scheduled sweep erases anything. A policy that promised otherwise would be
- * describing software nobody has written. Where a reader would expect such a
- * promise, this text says plainly that it cannot make one yet — that is the
- * honest version, and it is also the one that does not have to be walked back
- * later.
+ * **On retention and deletion.** An earlier version of this text said the
+ * platform had no deletion path below a whole tenant, no retention window and
+ * no scheduled erasure — which was true when it was written and stopped being
+ * true with phase 44 (DATA-7 to DATA-9, WEB-72, WEB-73). The section now
+ * describes what the software does: deletion offered on the screen of the thing
+ * being deleted, reversible for `DELETED_DATA_RETENTION_DAYS` (30), then swept
+ * permanently including the provider's own copies.
+ *
+ * Two things it still deliberately does **not** promise. It does not say live
+ * content expires on its own, because it does not — only *deleted* content is
+ * swept, and claiming an expiry the sweep does not perform would be the same
+ * mistake in the opposite direction. And it does not claim compliance with any
+ * statute; it describes behaviour and leaves the legal conclusion to the reader,
+ * for the reasons `terms.ts`'s own module comment sets out about FERPA.
+ *
+ * It also names the sweep's own known limit (D-142): `cost_ledger_entries.personId`
+ * is `NOT NULL` and one row is written per model call, so a person who has ever
+ * asked a question cannot have their `people` row or `person_identities` removed
+ * without six columns becoming nullable first. Their conversations and messages
+ * *are* swept on schedule. Saying only the first half would have made this page
+ * false in the same way the pre-phase-44 text was — so it says both. When that
+ * slice lands, this paragraph goes.
  *
  * **The platform-administrator console is described as it actually is, and
  * nothing is promised about where it will stop.** An earlier version of this
@@ -189,24 +201,52 @@ for this section — and it removes your Google account data along with
 everything else in the organization, at the cost of removing everything
 else in the organization too.
 
-## How long we keep it — and what we cannot yet offer
+## How long we keep it, and how it is deleted
 
-We keep conversations, accounts and usage records **for as long as the service
-runs**. There is no retention window, no expiry, and no scheduled deletion.
+**We keep what you give us until it is deleted.** Nothing expires on its own: a
+conversation, an account or a course stays until somebody deletes it, or until
+the service stops running. What changed is that deleting is now something you
+can actually do.
 
-**We do not currently offer a way to delete an individual student's data, and
-this policy does not promise one.** The platform can delete a whole
-organization's data, and an operator can do that on request; below that level
-— one student, one conversation, one message — no deletion path exists in the
-software today. We would rather say so than imply a right the service cannot
-honour.
+**What can be deleted, and by whom.** A person can delete their own conversation
+history in a course, from that course's chat screen. An account holder can delete
+their own account. An organization's owner can delete the organization, a project
+or a course. A platform administrator can delete any of these. Each is offered in
+a "Danger zone" on that thing's own screen, and each asks you to confirm before
+anything happens.
 
-Depending on where you live, you may have statutory rights of access,
-correction, portability or erasure. Those rights are not diminished by this
-paragraph, and we are not claiming otherwise — but you should know that
-satisfying an erasure request today would be a manual operation on a database,
-not a feature. Write to ${OPERATOR.contactEmail} and we will tell you honestly
-what we can and cannot do.
+**What deleting does, and when it becomes permanent.** Deleting removes the thing
+from the service immediately: it disappears from every screen, answers nothing,
+and is not readable by anyone — instructors and operators included. For a short
+window it is recoverable, so that a mis-click is not a catastrophe; that window is
+**30 days**. After it passes, a scheduled process permanently erases the records
+and the files behind them, including the copies held by the AI provider, and they
+cannot be recovered by us or by anyone else. Deleting a thing deletes what belongs
+to it: deleting a course deletes its conversations, its attached material and its
+knowledge files.
+
+One limit is worth stating rather than leaving you to discover it. Where a person
+has ever asked the service a question, the record naming them — their name, and
+the Discord or email address they were recognised by — is tied to the usage and
+cost record that question created, which is one of the event records described
+below. **Their conversations and messages are erased on the schedule above**; that
+naming record is not, and stays until we can remove it without destroying the
+accounting it is attached to. We would rather say so than let "deleted" mean two
+different things on one page.
+
+**What survives a deletion, and why.** A few records are accounts of *events*
+rather than content, and those are kept: that a tenant's data was deleted, that a
+course was deleted, that a transcript was read, that an instructor acknowledged
+what a roster upload means, and the totals in the usage and cost ledger. They name
+what happened and when. They are kept precisely because a record of an action
+cannot be erasable by the person who took it.
+
+**Asking us to delete something.** If what you need deleted is not something the
+screens let you delete yourself, write to ${OPERATOR.contactEmail} and say what it
+is. We will do it or tell you plainly why we cannot. Depending on where you live
+you may have statutory rights of access, correction, portability or erasure; those
+rights are not diminished by anything on this page, and this paragraph is not a
+substitute for them.
 
 If any of this is unacceptable for your course, the right time to decide that
 is before students start using the service. Nothing on this page, and nothing in

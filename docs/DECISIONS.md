@@ -13646,3 +13646,18 @@ themselves) and asserts every one of them resolves to a real title/detail, plus 
 fallback — catching a description that regresses to empty or throws, though not a kind newly registered in
 `apps/worker` that this module has not caught up with yet; the module's own comment names the file to check
 by hand when that happens.
+
+## D-135 — `apps/web`: ROST-19 — the reason text is keyed off "a file is chosen," not off the checkbox alone
+
+**`needsAcknowledgement` (the on-screen reason the Import button is disabled) requires `selectedFile` to be
+set, not just `!acknowledged`.** ROST-19's own text is "the acknowledgement is read at the moment it means
+something rather than before there is anything to acknowledge" — an unticked box with no file chosen yet is
+the ordinary starting state of the whole screen, not a problem to surface. Showing the reason text before a file exists would read as a
+warning about nothing — there is no control it would be explaining. The same condition also excludes `importing`
+and an unsettled `job`, so the reason never appears stacked underneath "Starting…" or "Queued…" — those
+states already explain themselves, and ROST-19 gates starting a fresh import, not one already underway.
+
+**The acknowledgement checkbox's own `disabled` mirrors the drop zone's, not the Import button's.** Both are
+locked while a run is in flight (`importing || (job !== undefined && !settled)`) so an instructor cannot
+untick and re-tick mid-import, but neither is gated on `acknowledged` itself — the box has to stay
+interactive precisely because it is what makes the button interactive.

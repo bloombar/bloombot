@@ -42,6 +42,19 @@
  * dispatch (`api/client.ts`'s own `importRoster`), never left for the
  * action's own default to fill in silently — see that function's own doc
  * comment.
+ *
+ * **ROST-19's acknowledgement, unticked by default — the opposite of
+ * `createStudentCategories` above.** A roster import is the one moment in
+ * this platform where an institution's own record of who its students are
+ * is handed to a third party, so this is read as a decision each time it is
+ * made, not nodded through once and forgotten: unlike the category
+ * checkbox, whose default exists to save an instructor a click on a choice
+ * most courses want anyway, this one starts unticked on every mount and
+ * stays that way across a remount — there is nothing here to save a click
+ * on. Only starting the import is gated on it; choosing a file stays
+ * possible while it is unticked, so the acknowledgement is read at the
+ * moment it means something (a file is already chosen) rather than before
+ * there is anything to acknowledge.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -75,6 +88,12 @@ const DEFAULT_POLL_INTERVAL_MS = 2_000
 /** A roster is small text (this app's own `roster.import` action's module comment) — generous for a large class list, well inside the raised body limit the actions route itself carries (`ACTION_JSON_BODY_LIMIT_BYTES`), and small enough that a truly wrong file (a spreadsheet exported as `.xlsx`, say) is refused here rather than uploaded and only then reported as unparseable. */
 const MAX_ROSTER_BYTES = 10 * 1024 * 1024
 
+// ROST-19: the id linking the Import button to the reason it is disabled,
+// for `aria-describedby` — a plain module constant, not a `useId`, since
+// only one `RosterImport` ever renders per course screen (the same
+// assumption `data-testid="roster-import"` above already makes).
+const ACK_REASON_ID = 'roster-import-acknowledgement-reason'
+
 function isRosterImportReport(value: unknown): value is RosterImportReport {
   return (
     typeof value === 'object' &&
@@ -105,6 +124,11 @@ export function RosterImport({
   const [studentCategoryBaseName, setStudentCategoryBaseName] = useState(
     () => `${courseTitle} - STUDENTS`
   )
+  // ROST-19: unticked on every mount, and never written anywhere it could be
+  // read back from on a later visit — see this component's own module
+  // comment for why this is the opposite default from
+  // `createStudentCategories` just above.
+  const [acknowledged, setAcknowledged] = useState(false)
 
   const settled = job?.status === 'succeeded' || job?.status === 'failed'
 
@@ -193,6 +217,16 @@ export function RosterImport({
       ? job.result
       : undefined
 
+  // ROST-19: "the acknowledgement is read at the moment it means
+  // something" — the reason text only appears once there is a file chosen
+  // and nothing else already explains the button's disabled state.
+  const needsAcknowledgement = Boolean(
+    selectedFile &&
+    !acknowledged &&
+    !importing &&
+    (job === undefined || settled)
+  )
+
   return (
     <div className="flex flex-col gap-3" data-testid="roster-import">
       <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-700">
@@ -225,6 +259,39 @@ export function RosterImport({
           Ada,Lovelace,ada@example.edu,adalovelace,adalovelace-gh
         </p>
       </div>
+
+      {/* ROST-19: above the drop zone, unticked on every mount — this
+          component's own module comment has the reasoning for why it does
+          not default to checked the way `createStudentCategories` below
+          does. Only the Import button reads `acknowledged`; the drop zone's
+          own `disabled` is unchanged, so choosing a file is still possible
+          before this is ticked. */}
+      <label className="flex items-start gap-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-700">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={acknowledged}
+          disabled={importing || (job !== undefined && !settled)}
+          onChange={(event) => setAcknowledged(event.target.checked)}
+        />
+        <span>
+          Uploading my students&apos; names, email addresses and other
+          information to this service may be a disclosure of education records
+          under FERPA, and may be governed by my state&apos;s student-data and
+          retention law. Whether this is permitted is my institution&apos;s
+          determination, not this service&apos;s. This service keeps what it is
+          given indefinitely, with no way to delete one student&apos;s part of
+          it. I have read the{' '}
+          <a href="/terms" className="text-brand-600 underline">
+            terms &amp; conditions
+          </a>{' '}
+          and the{' '}
+          <a href="/privacy" className="text-brand-600 underline">
+            privacy policy
+          </a>
+          .
+        </span>
+      </label>
 
       <FileDropZone
         label="Roster CSV"
@@ -275,11 +342,25 @@ export function RosterImport({
           icon={<ImportIcon aria-hidden="true" className="size-4" />}
           onClick={() => void handleImport()}
           disabled={
-            !selectedFile || importing || (job !== undefined && !settled)
+            !selectedFile ||
+            importing ||
+            (job !== undefined && !settled) ||
+            !acknowledged
           }
+          aria-describedby={needsAcknowledgement ? ACK_REASON_ID : undefined}
         >
           {importing ? 'Starting…' : 'Import roster'}
         </Button>
+        {/* ROST-19: the reason the button is disabled belongs on screen,
+            not left to be inferred from a dead control — shown only once
+            there is actually something to acknowledge (a file is already
+            chosen), and reachable from the button itself via
+            `aria-describedby` above. */}
+        {needsAcknowledgement && (
+          <p id={ACK_REASON_ID} className="mt-1 text-sm text-warning-700">
+            Tick the acknowledgement above to start the import.
+          </p>
+        )}
       </div>
 
       {job && (

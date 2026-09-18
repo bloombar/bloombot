@@ -47,16 +47,26 @@
  *    typed address.
  *  - `route.kind === 'organizations'` — WEB-55's own arrival list
  *    (`pages/Organizations.tsx`), reached at its own address and rendered
- *    the same way `NotFound` is (`renderOrganizationsList`, below): wrapped
- *    in `SignedInChrome`, acting in the account's own default organization
- *    for the header's sake, since this address itself names none.
- *    `resolveHomeRoute` (below) is what lands `/` here for an account with
- *    more than one organization and no other destination in play.
+ *    wrapped in `SignedInChrome` (`renderOrganizationsList`, below), acting
+ *    in the account's own default organization for the header's sake, since
+ *    this address itself names none. `resolveHomeRoute` (below) is what
+ *    lands `/` here for an account with more than one organization and no
+ *    other destination in play.
  *  - `route.kind === 'home'` — resolved, once the session is known, to the
  *    account's own canonical landing address and replaced (WEB-34) rather
  *    than rendered directly.
- *  - anything else, including a `ShellRoute` naming an organization this
- *    account cannot see — `pages/NotFound.tsx`, never an empty shell.
+ *  - a `ShellRoute` naming an organization this account cannot see at all,
+ *    or an address this panel does not recognise (`route.kind ===
+ *    'not-found'`) — WEB-67: taken home the same way `'home'` itself is,
+ *    replacing the history entry so Back does not return to the unusable
+ *    address, rather than shown `pages/NotFound.tsx`. The console
+ *    (`pages/Admin.tsx`'s own `isAdminRoute` branch, above) is deliberately
+ *    excluded — an id the API reports as absent there is a fact an
+ *    administrator needs told, not navigated away from — and so are
+ *    `ProjectsPanel.tsx`/`Chat.tsx`, which still render `NotFound` for a
+ *    project or course missing *inside* an organization this account can
+ *    reach; this branch only ever sees the organization itself unreachable,
+ *    or an address naming nothing this app parses at all.
  *  - none of the above, while the session itself is still being decided —
  *    the loading/unreachable screens, unchanged by this slice, decided by
  *    `GET /auth/me` (WEB-2: the session itself, never anything this app
@@ -88,7 +98,6 @@ import { Connected } from './pages/Connected.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { Invitation } from './pages/Invitation.js'
 import { JoinLink } from './pages/JoinLink.js'
-import { NotFound } from './pages/NotFound.js'
 import { Organizations } from './pages/Organizations.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
@@ -269,37 +278,28 @@ function resolveHomeRoute(
 }
 
 /**
- * LINK-11 — the signed-in `NotFound` render `App.tsx` itself owns (this
- * file's own module comment: a not-found screen this account reached, never
- * an empty shell) — wrapped in `SignedInChrome` like every other signed-in
- * page, acting in the account's own default organization
- * (`resolveDefaultOrganization`) since a not-found address names no
- * organization this account can actually act in.
+ * WEB-67 — the one-frame skeleton rendered while a signed-in account is
+ * carried home from an address it cannot use, identical to the skeleton the
+ * `route.kind === 'home'` branch (below) already renders while its own
+ * redirect effect runs, so nothing flashes: an unreachable `ShellRoute` and
+ * an unrecognised address are both resolved by the same effect (below) that
+ * resolves `'home'` itself, so all three render the same placeholder.
  */
-function renderSignedInNotFound(
-  account: AccountSummary,
-  navigate: (route: Route, options?: { replace?: boolean }) => void,
-  onSignedOut: () => void
-) {
-  const defaultOrganization = resolveDefaultOrganization(account)
+function renderHomeRedirectSkeleton() {
   return (
-    <SignedInChrome
-      account={account}
-      activeOrganizationId={defaultOrganization?.organizationId}
-      isMember={defaultOrganization?.isMember ?? false}
-      navigate={navigate}
-      onSignedOut={onSignedOut}
-    >
-      <NotFound onHome={() => navigate({ kind: 'home' }, { replace: true })} />
-    </SignedInChrome>
+    <div className="flex flex-col gap-3 p-6">
+      <Skeleton className="h-4 w-40" />
+      <Skeleton className="h-4 w-24" />
+      <LoadingStatus />
+    </div>
   )
 }
 
 /**
  * WEB-55 — `pages/Organizations.tsx`'s own arrival list, wrapped in
- * `SignedInChrome` the identical way `renderSignedInNotFound` (above) wraps
- * `NotFound`, but with **no** active organization — unlike every other
- * caller of `SignedInChrome`, this one deliberately does not resolve
+ * `SignedInChrome` the same way every other signed-in page is, but with
+ * **no** active organization — unlike every other caller of
+ * `SignedInChrome`, this one deliberately does not resolve
  * `resolveDefaultOrganization` and pass its result through.
  *
  * Code review, must-fix 2: it used to. Passing a guessed default organization
@@ -442,14 +442,41 @@ export function App() {
 
   // WEB-34: `/` itself is never rendered — once the session resolves, this
   // replaces it with the account's own canonical landing address
-  // (`resolveHomeRoute`, above). Guarded on `route.kind === 'home'` so this
-  // never fires again once the address has moved on to something else.
+  // (`resolveHomeRoute`, above).
+  //
+  // WEB-67 generalises the same redirect to an address a signed-in account
+  // cannot use: a `ShellRoute` naming an organization it has no membership
+  // in and no connected identity to (`isReachableShellRoute`, above — the
+  // identical check `returnToShell`'s own WEB-44 fallback already uses, so
+  // the two stay in agreement about what "cannot reach" means), or an
+  // address this panel does not recognise at all (`route.kind ===
+  // 'not-found'`). `isShellRoute`'s own narrowing keeps this from ever
+  // matching a signed-out-only route (`'connect'`, `'join-link'`, etc.)
+  // reached while signed in — none of those share a `route.kind` with
+  // `ShellRoute` or `'not-found'`, so this stays a no-op for them, handled
+  // by their own branches below instead. The console (`isAdminRoute`) and
+  // `'organizations'` are excluded the same way: neither is a `ShellRoute`
+  // or `'not-found'`, so this effect was never going to touch them, but see
+  // this file's own module comment for why they must not be — an id the API
+  // reports as absent in the console is a fact an administrator needs told,
+  // not navigated away from.
+  //
+  // A `navigate()` call from render itself (rather than this effect) is a
+  // React state update during render — the render bodies below (the
+  // `'home'` branch, the unreachable-`ShellRoute` branch, and the
+  // `'not-found'` fallthrough) render the identical one-frame skeleton
+  // (`renderHomeRedirectSkeleton`, above) while this effect runs, instead.
   useEffect(() => {
-    if (session.kind !== 'signed-in' || route.kind !== 'home') return
+    if (session.kind !== 'signed-in') return
+    const isUnusable =
+      route.kind === 'home' ||
+      route.kind === 'not-found' ||
+      (isShellRoute(route) && !isReachableShellRoute(route, session.account))
+    if (!isUnusable) return
     navigate(resolveHomeRoute(session.account, joinedCourse, justInstalled), {
       replace: true,
     })
-  }, [session, route.kind, joinedCourse, justInstalled, navigate])
+  }, [session, route, joinedCourse, justInstalled, navigate])
 
   // AUTH-6: a sign-in redemption (an emailed link, `RedeemLink`'s own
   // `onRedeemed`) used to always return to the shell unless a visitor who
@@ -770,28 +797,24 @@ export function App() {
     // WEB-34: `/` resolves and replaces before this ever renders anything
     // (the effect above) — this is only the one render in between.
     if (route.kind === 'home') {
-      return (
-        <div className="flex flex-col gap-3 p-6">
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="h-4 w-24" />
-          <LoadingStatus />
-        </div>
-      )
+      return renderHomeRedirectSkeleton()
     }
 
     if (isShellRoute(route)) {
-      // WEB-32 — an address naming an organization this account has no
+      // WEB-67 — an address naming an organization this account has no
       // relationship to at all (neither a membership nor a connected
-      // identity) is exactly the "anything else... names something this
-      // account cannot see" case the brief calls out: a not-found screen,
-      // never a leak of whether the organization even exists. This is for
-      // an address the person actually navigated to or typed — WEB-44's
-      // own pending-sign-in effect (above) is what keeps a stale sign-in
-      // destination from ever reaching this branch unresolved, so this
-      // check's only job stays "was this address reachable", the same
-      // `isReachableShellRoute` that effect already used.
+      // identity) is redirected home by the effect above, never a leak of
+      // whether the organization even exists (TEN-5 — a mistyped id and a
+      // real organization somebody else owns stay indistinguishable, since
+      // the fallback discloses no more than the not-found screen it
+      // replaces). This is for an address the person actually navigated to
+      // or typed — WEB-44's own pending-sign-in effect (above) is what
+      // keeps a stale sign-in destination from ever reaching this branch
+      // unresolved, so this check's only job stays "was this address
+      // reachable", the same `isReachableShellRoute` that effect already
+      // used.
       if (!isReachableShellRoute(route, session.account)) {
-        return renderSignedInNotFound(session.account, navigate, refreshSession)
+        return renderHomeRedirectSkeleton()
       }
       return (
         <Shell
@@ -811,12 +834,13 @@ export function App() {
       )
     }
 
-    // A truly unrecognised address (`routing/route.ts#parseRoute`'s own
-    // `'not-found'`), or one of the signed-out-only kinds above reached
+    // WEB-67 — a truly unrecognised address (`routing/route.ts#parseRoute`'s
+    // own `'not-found'`), or one of the signed-out-only kinds above reached
     // while signed in with no matching branch left to take (defended, not
-    // assumed — `pages/Chat.tsx`'s own `describeDeclineNotice` holds
-    // itself to the same discipline).
-    return renderSignedInNotFound(session.account, navigate, refreshSession)
+    // assumed — `pages/Chat.tsx`'s own `describeDeclineNotice` holds itself
+    // to the same discipline): redirected home by the effect above, the
+    // same skeleton as every other branch it drives.
+    return renderHomeRedirectSkeleton()
   }
 
   // WEB-34/AUTH-6 — a signed-out visitor who followed a bookmark or a

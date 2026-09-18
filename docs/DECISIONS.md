@@ -13581,3 +13581,37 @@ itself** — `InstallButton` does not need to know which servers exist, only whe
 binding does; `pages/Shell.tsx` already computes `installedServers.length > 0` for the row list above it, so
 passing the derived boolean keeps `InstallButton`'s own props to what it actually branches on, rather than
 handing it a list to re-derive the same count from.
+
+## D-133 — `apps/web`: WEB-71/ADMIN-15 — a row stays a flex row at every width, and the console's own footer buttons go
+
+**A project/course row is a flex row unconditionally now, not `flex-col` below `sm:`.** The pre-existing
+`flex-col gap-2 ... sm:flex-row` shape (`components/CourseRows.tsx`'s `<li>`, and `pages/Projects.tsx`'s own
+project header) read as intentional stacking, but the field reports (a kebab, or a Chat button and a kebab,
+wrapping onto their own line below the name) named exactly what that breakpoint produces below 640px — a
+phone never reaches `sm:`. The fix keeps the row a `flex` container throughout: the text column gets
+`min-w-0` (a flex child's default `min-width: auto` refuses to shrink below its own content's width, which
+is what was pushing the controls out in the first place) and the controls column gets `shrink-0`, so a long
+name wraps *within its own column* instead of the controls giving up their width — or their row — to make
+room for it. `items-start`, not `items-center`, on `CourseRows`' own `<li>`: once the metadata line wraps to
+two lines on a narrow phone, `items-center` would pull Chat/the kebab down to the row's vertical middle,
+off the title's own baseline.
+
+**No new shared row component.** `components/CourseRows.tsx` already existed (WEB-42) and is the one
+implementation both the organization screen (`pages/Projects.tsx`, beneath each project) and the project's
+own screen (`pages/Courses.tsx`) render, so fixing it once fixes both of the brief's course-row cases; only
+`pages/Projects.tsx`'s own project header (case 1) needed a second, separate edit, since nothing shares that
+markup with anything else.
+
+**`assertOnSameRow` (`e2e/mobile-viewport.spec.ts`) reads two elements' own bounding boxes and asserts their
+y-ranges overlap, rather than asserting a class or a computed style.** A `toHaveCSS`/class check cannot tell
+a row that still wraps from one that does not — both can carry identical `shrink-0`/`min-w-0` classes; only
+actual rendered layout, read back from the browser, proves the fix. Run at both 360px and 400px (the brief's
+own two widths) via `page.setViewportSize`, layered on top of the `mobile` Playwright project's own 375px
+default rather than a new project.
+
+**ADMIN-15's `OrganizationsList` footer (Courses/Users/Deletion history buttons) is removed outright, not
+hidden or conditionally rendered.** `AdminNav` (WEB-54) already carries all three at the top of every
+console screen including this one; the footer was a second, redundant way to reach the same three addresses,
+not an alternative for some case the nav does not cover. `onViewDeletions`/`onViewCourses`/`onViewUsers` are
+removed from `OrganizationsList`'s own props (and `pages/Admin.tsx`'s call site) rather than kept unused —
+an unused prop a caller must still supply is a trap for the next reader wondering what still depends on it.

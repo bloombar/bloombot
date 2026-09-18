@@ -635,15 +635,15 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           onBack={() => navigate({ kind: 'admin-accounts' })}
         />
       ) : (
+        // ADMIN-15: no longer passed onViewDeletions/onViewCourses/onViewUsers
+        // — `AdminNav` above already carries all three, and this screen's own
+        // footer buttons that duplicated them are gone.
         <OrganizationsList
           data={data}
           failed={error !== undefined}
           deletingId={deletingId}
           navigate={navigate}
           onDelete={handleDelete}
-          onViewDeletions={() => navigate({ kind: 'admin-deletions' })}
-          onViewCourses={() => navigate({ kind: 'admin-courses' })}
-          onViewUsers={() => navigate({ kind: 'admin-accounts' })}
         />
       )}
 

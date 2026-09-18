@@ -13615,3 +13615,34 @@ console screen including this one; the footer was a second, redundant way to rea
 not an alternative for some case the nav does not cover. `onViewDeletions`/`onViewCourses`/`onViewUsers` are
 removed from `OrganizationsList`'s own props (and `pages/Admin.tsx`'s call site) rather than kept unused —
 an unused prop a caller must still supply is a trap for the next reader wondering what still depends on it.
+
+## D-134 — `apps/web`: WEB-70 — a job names the course or project it ran for only if `JobStatus` already carries it, and it does not
+
+**`describeJob` returns only a title and detail — no course/project id or name field.** WEB-70's own text says
+a job "names which course or project it was for where the job names one," but `JobStatus`
+(`apps/web/src/api/types.ts`) carries no such field at all: `id`, `kind`, `status`, `attempts`, `maxAttempts`,
+`lastError`, `result`, `createdAt`, `updatedAt`, nothing that identifies a course or project by id or title.
+The brief's own instruction for exactly this case — "if the id or title is not already in the response, render
+without it rather than adding an API change; this slice is frontend-only" — is what this module and
+`pages/Jobs.tsx` follow: the row shows what a job's `kind` means in ordinary language, not which course it ran
+against, since that second half would need `jobs.list` (`packages/actions/src/actions/jobs.ts`) to start
+projecting a course/project id out of `result`/a new payload field, an `apps/api`/`packages/actions` change
+this slice's own brief rules out. A later slice with API scope can widen `JobStatus` and this module's
+`JobDescription` to carry it.
+
+**The kind string stays on the row, as secondary detail below the readable title/detail, not removed
+outright.** The brief's own "may still show the kind as secondary detail for support" is why — and it is what
+keeps `e2e/jobs-panel.spec.ts`'s existing `filter({ hasText: 'roster.import' })` locator passing unmodified,
+since that spec still filters the row by its raw kind string.
+
+**The seven job kinds are kept in step with `apps/worker/src/index.ts`'s own `handlers.register` calls by a
+comment naming that file, not by a test that imports it.** `apps/web` cannot import `apps/worker`'s source (the
+same app/package boundary `job-descriptions.ts`'s own module comment states), so a test asserting the two
+lists are identical would have to import the worker into the web test bundle to do it — crossing exactly the
+boundary the brief's own verification section flagged as the ideal-but-maybe-not-worth-it case.
+`apps/web/tests/job-descriptions.test.ts` instead hand-duplicates the same seven-kind list (already the
+convention `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`'s own doc comment describes for the kind strings
+themselves) and asserts every one of them resolves to a real title/detail, plus the unrecognised-kind
+fallback — catching a description that regresses to empty or throws, though not a kind newly registered in
+`apps/worker` that this module has not caught up with yet; the module's own comment names the file to check
+by hand when that happens.

@@ -39,6 +39,7 @@ import type { JobStatus } from '../api/types.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { SkeletonRow } from '../components/Skeleton.js'
 import { FailureIcon, PendingIcon, SpinnerIcon, SuccessIcon } from '../icons.js'
+import { describeJob } from './job-descriptions.js'
 
 export interface JobsScreenProps {
   organizationId: string
@@ -156,29 +157,43 @@ export function Jobs({ organizationId }: JobsScreenProps) {
       ) : (
         jobs && (
           <ul className="flex flex-col gap-2" data-testid="jobs-list">
-            {jobs.map((job) => (
-              <li
-                key={job.id}
-                className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3 text-sm"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="flex items-center gap-2 font-medium text-neutral-900">
-                    {statusIcon(job.status)}
-                    {job.kind}
-                  </span>
-                  <span className="text-neutral-500">
-                    {statusLabel(job.status)} ·{' '}
-                    {new Date(job.updatedAt).toLocaleString()}
-                  </span>
-                </div>
-                <p className="text-xs text-neutral-500">
-                  Attempt {job.attempts} of {job.maxAttempts}
-                </p>
-                {job.status === 'failed' && job.lastError && (
-                  <p className="text-sm text-danger-700">{job.lastError}</p>
-                )}
-              </li>
-            ))}
+            {jobs.map((job) => {
+              // WEB-70: a job names the ordinary-language work it did, not
+              // only the internal `kind` string that used to be the whole
+              // row's own heading — `describeJob` never throws or returns
+              // empty, even for a kind this module does not recognise.
+              const description = describeJob(job.kind)
+              return (
+                <li
+                  key={job.id}
+                  className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3 text-sm"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="flex items-center gap-2 font-medium text-neutral-900">
+                      {statusIcon(job.status)}
+                      {description.title}
+                    </span>
+                    <span className="text-neutral-500">
+                      {statusLabel(job.status)} ·{' '}
+                      {new Date(job.updatedAt).toLocaleString()}
+                    </span>
+                  </div>
+                  <p className="text-sm text-neutral-600">
+                    {description.detail}
+                  </p>
+                  {/* The kind string stays visible, but as secondary detail
+                      only — useful to support, no longer the row's own
+                      heading (WEB-70). */}
+                  <p className="text-xs text-neutral-400">{job.kind}</p>
+                  <p className="text-xs text-neutral-500">
+                    Attempt {job.attempts} of {job.maxAttempts}
+                  </p>
+                  {job.status === 'failed' && job.lastError && (
+                    <p className="text-sm text-danger-700">{job.lastError}</p>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         )
       )}

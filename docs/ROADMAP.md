@@ -522,3 +522,14 @@ FERPA, state student-data law, whose determination it is, and the fact that this
 student's part of what it is given.
 
 **In scope:** ROST-19, ROST-20
+
+## Phase 44 — Deleting, reversibly, then permanently
+
+Nothing in this platform could be deleted except a whole tenant, a project and a course — and each of those
+removed rows the instant it was asked, with no way back from a mis-click. There was no way to delete an
+account, a person, or one student's conversation history at all, which is the gap the roster acknowledgement
+has to warn instructors about. This phase makes deletion a reversible mark with a stated retention window, adds
+a scheduled sweep that permanently removes what the window releases, puts a Danger zone on every screen about
+a single entity, and lets a person delete their own history in a course.
+
+**In scope:** DATA-7, DATA-8, DATA-9, TEN-10, WEB-72, WEB-73

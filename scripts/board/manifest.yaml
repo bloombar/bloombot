@@ -4830,5 +4830,99 @@
   section: §48 Acknowledging What a Roster Upload Is
   family: ROST
   phase: 43
+  status: Done
+  review: false
+- id: DATA-7
+  title: Deleting content marks it deleted rather than removing it, for a stated
+    window
+  full: "Deleting an account, a person, an organization, a project, a course, or
+    one person's conversation history in a course marks the record deleted — a
+    deletedAt timestamp and the account that did it — rather than removing it.
+    The record is gone from the product the moment it is marked: it does not
+    appear in any list, cannot be opened at its own address, answers nothing,
+    costs nothing and counts toward nothing. What it is not is irrecoverable,
+    for a window this deployment configures (DELETED_DATA_RETENTION_DAYS, thirty
+    days by default). Deleting a parent marks its children with the same
+    timestamp, and that shared timestamp is what a restore reads: restoring
+    un-marks only the children marked at…"
+  section: §49 Deleting, Reversibly, Then Permanently
+  family: DATA
+  phase: 44
   status: In progress
+  review: false
+- id: DATA-8
+  title: A scheduled sweep permanently removes what the window has released
+  full: "A sweep runs on a schedule and permanently removes every record whose
+    deletedAt is older than the retention window — the rows, in foreign-key-safe
+    order, and the bytes: attachment files, export files, and the model
+    provider's own file objects and vector stores, through the same
+    content-deletion job that already removes them today rather than a second
+    implementation. The sweep is a job like any other, so its runs, failures and
+    retries are visible on the Jobs screen and in the queue's own retry policy
+    rather than in a log nobody reads. It schedules its own next run, and one is
+    queued when the worker starts, so a deployment that has been down does not
+    silently stop deleting. A retention window…"
+  section: §49 Deleting, Reversibly, Then Permanently
+  family: DATA
+  phase: 44
+  status: Backlog
+  review: false
+- id: DATA-9
+  title: Nothing deleted is ever read back
+  full: "Every read of a deletable entity excludes what is marked deleted. This is
+    a property of the queries rather than of the callers' discipline: the
+    repositories are where it is enforced, a test walks the repository layer and
+    fails a read of a deletable table that does not filter, and the exceptions —
+    a restore, the sweep, and a platform administrator's own view of what is
+    pending removal — are named in that test's allowlist rather than left to be
+    noticed. A record marked deleted answers no question on any surface: not the
+    web panel, not Discord, not an assistant through MCP."
+  section: §49 Deleting, Reversibly, Then Permanently
+  family: DATA
+  phase: 44
+  status: In progress
+  review: false
+- id: TEN-10
+  title: A tenant's deletion covers everything that belongs to the tenant
+  full: ADMIN-5's deletion walks a hand-written list of tables, and the list has
+    drifted from the schema more than once — each time discovered as a
+    foreign-key failure in production rather than by a test. Every table
+    carrying a tenant's data is covered, and a test derives the expectation from
+    the schema rather than repeating the list, so a table added later without
+    being added to the deletion fails that test instead of failing a deletion.
+  section: §49 Deleting, Reversibly, Then Permanently
+  family: TEN
+  phase: 44
+  status: In progress
+  review: false
+- id: WEB-72
+  title: Deleting a thing is offered in one place, and it looks dangerous
+  full: "Every screen about a single entity that can be deleted ends with a Danger
+    zone: the account screen, the organization's own screen, the course's
+    settings under General, and the platform administrator's course, project and
+    account screens. It is the last section on the screen, visibly separated
+    from what is above it, and holds the delete for that entity and nothing
+    else. Deleting asks first, in the dialog this panel already uses for a
+    destructive act, and the dialog names what will go, says it is reversible
+    for the retention window and permanent afterwards, and requires the entity's
+    own name to be typed before the destructive button does anything — the same
+    gate WEB-50 already applies to a…"
+  section: §49 Deleting, Reversibly, Then Permanently
+  family: WEB
+  phase: 44
+  status: Backlog
+  review: false
+- id: WEB-73
+  title: A person deletes their own conversation history in a course
+  full: "The chat screen's heading row carries a Delete history control, to the
+    right of the heading, styled as this panel styles a destructive action. It
+    deletes that person's own conversations in the course on screen and nothing
+    else: no other person's, no other course's, and nothing about the course
+    itself. It confirms first, naming the course, and it is the same soft delete
+    as everything else — reversible for the window, then swept. A person who has
+    asked nothing in the course is offered nothing to delete."
+  section: §49 Deleting, Reversibly, Then Permanently
+  family: WEB
+  phase: 44
+  status: Backlog
   review: false

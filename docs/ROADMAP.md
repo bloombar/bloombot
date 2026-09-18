@@ -513,3 +513,12 @@ each tab its own unsaved-changes guard, explains in ordinary words what each job
 controls wrapping below it on a phone, and drops a row of buttons the console's own navigation made redundant.
 
 **In scope:** WEB-69, WEB-70, WEB-71, ADMIN-15
+
+## Phase 43 — Acknowledging what a roster upload is
+
+A roster import hands an institution's own record of its students to a third party, and the screen offering it
+said nothing about that. This phase puts an acknowledgement in front of it, ticked afresh each time, naming
+FERPA, state student-data law, whose determination it is, and the fact that this service cannot forget one
+student's part of what it is given.
+
+**In scope:** ROST-19

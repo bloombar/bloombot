@@ -3380,3 +3380,13 @@ list.
 Approving a course and revoking its approval both ask for confirmation in a dialog naming the course before
 anything is sent, wherever the decision is offered — the Courses screen and the course's own screen alike.
 Revoking is presented as the destructive action it is. Cancelling leaves the course exactly as it was.
+
+#### ADMIN-14 A course awaiting approval sends word to the support address
+
+When a course becomes pending approval — it is created without qualifying for COST-8's automatic approval, or
+an administrator revokes an approval it already had — an email goes to the support address the deployment
+configures (`SUPPORT_CONTACT`), naming the course, its project, its organization and its owner, and carrying a
+link to that course's own console screen (ADMIN-9) so the decision is one click from the message. The link is
+built from `PUBLIC_APP_URL` (TEN-4), never hard-coded. A deployment with no support address configured, or no
+mail transport, sends nothing and records why rather than failing the operation that triggered it: a course is
+still created, and an approval is still revoked, when the mail cannot go out.

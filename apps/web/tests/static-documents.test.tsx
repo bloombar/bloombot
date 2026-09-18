@@ -152,29 +152,53 @@ describe('/privacy and /terms (published legal documents)', () => {
   })
 
   describe('the promises these documents deliberately withhold', () => {
-    it('does not promise deletion of a person, a conversation or a message', () => {
-      // Phrased as the claims a template would have made, since that is what a
-      // future edit is most likely to reintroduce.
+    // Phase 44 (DATA-7..DATA-9, WEB-72, WEB-73) built deletion, so the three
+    // assertions that used to live here — "per-student deletion does not
+    // exist", "no retention window", and a ban on the word "erase" — pinned
+    // claims that are now false. What replaces them guards the two ways this
+    // section can still go wrong: claiming a statutory compliance nobody has
+    // established, and claiming an expiry the sweep does not perform.
+    it('claims compliance with no statute', () => {
       const forbidden = [
-        /we will delete your data/i,
-        /permanently erase/i,
+        /(?:FERPA|GDPR|CCPA|COPPA)[- ]compliant/i,
+        /we comply with (?:FERPA|GDPR|CCPA|COPPA)/i,
         /right to be forgotten/i,
-        /deleted within \d+ days/i,
         /we honou?r (?:them|erasure)/i,
       ]
-      for (const pattern of forbidden) {
-        expect(flat(privacyDocument.body)).not.toMatch(pattern)
+      for (const doc of [privacyDocument, termsDocument]) {
+        for (const pattern of forbidden) {
+          expect(flat(doc.body)).not.toMatch(pattern)
+        }
       }
     })
 
-    it('says plainly that per-student deletion does not exist', () => {
-      expect(flat(privacyDocument.body)).toMatch(
-        /do not currently offer a way to delete an individual student's data/i
-      )
+    it('does not claim live content expires on its own — only deleted content is swept', () => {
+      const body = flat(privacyDocument.body)
+      expect(body).toMatch(/We keep what you give us until it is deleted/i)
+      expect(body).toMatch(/Nothing expires on its own/i)
     })
 
-    it('promises no retention window', () => {
-      expect(flat(privacyDocument.body)).toMatch(/no retention window/i)
+    it('states what deletion does and when it becomes permanent', () => {
+      const body = flat(privacyDocument.body)
+      // Who can delete what — the screens the product actually offers.
+      expect(body).toMatch(
+        /A person can delete their own conversation history in a course/i
+      )
+      expect(body).toMatch(/delete their own account/i)
+      // The window, stated as a number rather than as "a short time".
+      expect(body).toMatch(/that window is \*\*30 days\*\*/i)
+      expect(body).toMatch(/permanently erases the records and the files/i)
+      // And that the provider's copies go too, which is the part a reader
+      // cannot verify for themselves.
+      expect(body).toMatch(/including the copies held by the AI provider/i)
+    })
+
+    it('says which records survive a deletion, and why', () => {
+      const body = flat(privacyDocument.body)
+      expect(body).toMatch(/accounts of \*?events\*? rather than content/i)
+      expect(body).toMatch(
+        /a record of an action cannot be erasable by the person who took it/i
+      )
     })
 
     it('promises no availability level in the terms', () => {

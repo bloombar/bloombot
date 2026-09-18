@@ -43,6 +43,7 @@ const ROWS: OrganizationListRow[] = [
 const ACCOUNT: AccountSummary = {
   id: 'account-1',
   email: 'instructor@example.edu',
+  isPlatformAdministrator: false,
   memberships: [
     { organizationId: 'org-1', organizationName: 'Owned Org', role: 'owner' },
     {
@@ -285,6 +286,7 @@ describe('OrganizationList kebab (WEB-57/WEB-58)', () => {
     const accountAfterLeavingB: AccountSummary = {
       id: 'account-1',
       email: 'instructor@example.edu',
+      isPlatformAdministrator: false,
       memberships: [
         { organizationId: 'org-a', organizationName: 'Org A', role: 'owner' },
         {
@@ -369,6 +371,7 @@ describe('OrganizationList kebab (WEB-57/WEB-58)', () => {
     const refreshAccount = vi.fn().mockResolvedValue({
       id: 'account-1',
       email: 'instructor@example.edu',
+      isPlatformAdministrator: false,
       memberships: [],
       connectedOrganizations: [],
     } satisfies AccountSummary)

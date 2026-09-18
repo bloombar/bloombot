@@ -54,6 +54,15 @@
  * its own `transition-colors` (`Button.tsx`), and that bubbling event was
  * closing the drawer early, mid-slide, on an unrelated hover-color
  * transition finishing first (coordinator review finding, below).
+ *
+ * WEB-60: a click on the backdrop closes the drawer, through the same
+ * `closeDrawer` path `Escape` already takes — see the `<dialog>`'s own
+ * `onClick` below for why `event.target === event.currentTarget` is exactly
+ * "the backdrop, and nothing inside the drawer." Round-2 review's own
+ * "worth doing": `onMouseDown` also has to agree (`backdropMouseDownRef`,
+ * below), or a drag that starts inside the drawer (selecting text) and
+ * releases over the backdrop closes it too — a `click` event's own `target`
+ * there still resolves to the dialog, the same as a genuine backdrop click.
  */
 
 import {
@@ -189,6 +198,18 @@ export function AppShell({
 }: AppShellProps & { ref?: Ref<AppShellHandle> }) {
   const drawerRef = useRef<HTMLDialogElement>(null)
   const [phase, setPhase] = useState<DrawerPhase>('closed')
+  // WEB-60 round-2 review, "worth doing" — whether the *press* that started
+  // this gesture also landed on the dialog itself (the backdrop), not
+  // merely the eventual `click`. A drag that starts inside the drawer
+  // (selecting some text) and is released over the backdrop still fires a
+  // `click` whose own `target` resolves to the dialog — browsers compute a
+  // click's target from where the pointer went *down*, not up, for a
+  // multi-element drag — so `onClick` alone cannot tell that apart from an
+  // actual backdrop click. Recording `mousedown`'s own target here and
+  // requiring `onClick` to agree is the same guard `KebabMenu.tsx`'s own
+  // outside-click listener does not need (it uses `mousedown` alone,
+  // document-wide) but a `click` handler scoped to one element does.
+  const backdropMouseDownRef = useRef(false)
 
   const openDrawer = () => {
     drawerRef.current?.showModal()
@@ -317,6 +338,31 @@ export function AppShell({
           // here too, rather than the drawer vanishing outright.
           event.preventDefault()
           closeDrawer()
+        }}
+        // WEB-60: a click on the backdrop closes the drawer, the same
+        // `closeDrawer` path `Escape` already takes above. A click on the
+        // backdrop dispatches its `click` event with `target` set to the
+        // `<dialog>` element itself (there being no other element there to
+        // receive it) — `event.target === event.currentTarget` is exactly
+        // that case, and nothing else: every actual control inside the
+        // drawer (an item, the organization switcher, sign-out) is a
+        // descendant, so a click on any of *those* bubbles up with a
+        // `target` further down the tree and never reaches this branch.
+        // Round-2 review, "worth doing": `backdropMouseDownRef` (above) is
+        // required too, or a drag that starts inside the drawer (selecting
+        // text) and releases over the backdrop closes it — a `click`'s own
+        // `target` there still resolves to the dialog, indistinguishable
+        // from a real backdrop click by `event.target` alone.
+        onMouseDown={(event) => {
+          backdropMouseDownRef.current = event.target === event.currentTarget
+        }}
+        onClick={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            backdropMouseDownRef.current
+          ) {
+            closeDrawer()
+          }
         }}
       >
         <div className="flex h-full flex-col">

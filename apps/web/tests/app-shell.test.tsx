@@ -108,6 +108,109 @@ describe('AppShell drawer closing (WEB-29, coordinator review round 2)', () => {
   })
 })
 
+describe('AppShell drawer backdrop click (WEB-60)', () => {
+  it('a click on the backdrop closes the drawer, the same path Escape takes', async () => {
+    renderShell()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' })
+    expect(dialog).toBeVisible()
+
+    // A backdrop click's own event has no element to land on but the
+    // `<dialog>` itself — firing `mousedown` then `click` directly at it is
+    // exactly that case (this file's own `onClick`/`onMouseDown` comments
+    // on `AppShell.tsx`) — a real backdrop click presses and releases in
+    // the same place.
+    fireEvent.mouseDown(dialog)
+    fireEvent.click(dialog)
+    fireEvent.transitionEnd(dialog)
+
+    expect(dialog).not.toBeVisible()
+  })
+
+  it('a click on something inside the drawer does not close it', () => {
+    renderShell()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' })
+
+    // The "Menu" title bar — inert, but still a descendant of the dialog,
+    // not the dialog itself.
+    fireEvent.mouseDown(screen.getByText('Menu'))
+    fireEvent.click(screen.getByText('Menu'))
+
+    expect(dialog).toBeVisible()
+  })
+
+  // Round-2 review, "worth doing": a drag that starts inside the drawer
+  // (selecting some text) and is released over the backdrop must not close
+  // it — the resulting `click` event's own `target` still resolves to the
+  // `<dialog>` (the same as a genuine backdrop click), so `onClick` alone
+  // cannot tell the two apart; `onMouseDown` recording where the gesture
+  // actually *started* is what `onClick` checks against.
+  it('a drag starting inside the drawer and releasing on the backdrop does not close it', () => {
+    renderShell()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' })
+
+    // The press starts on a real control inside the drawer...
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Chat' }))
+    // ...but the click's own target — where the browser resolves a
+    // multi-element drag's click to — is the dialog itself, the backdrop.
+    fireEvent.click(dialog)
+    // `transitionEnd` is fired regardless, so a guard-less `onClick` (the
+    // regression this test exists to catch) has every chance to actually
+    // finish closing before the assertion below runs — without it, a
+    // `closeDrawer()` call still mid-`'closing'` phase would read as
+    // "visible" either way, and this test would pass whether or not the
+    // guard exists.
+    fireEvent.transitionEnd(dialog)
+
+    expect(dialog).toBeVisible()
+  })
+
+  // WEB-16/WEB-29 — a click on a nav item must not close the drawer by
+  // itself (`AppShellHandle`'s own doc comment on `AppShell.tsx`: that is
+  // `item.onClick`'s own job, once its own guarded navigation actually
+  // proceeds, not this component's). The backdrop-click handler must not
+  // second-guess that: `event.target` for a click on the item is the
+  // item's own button, never `event.currentTarget` (the dialog), so the
+  // branch this slice added never fires here — the same "descendant, not
+  // the dialog itself" case the "does not close" test above already pins,
+  // exercised again on a real nav item rather than inert title text.
+  it('a click on a nav item does not close the drawer through the new backdrop path (its own onClick still owns closing)', () => {
+    renderShell()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat' }))
+
+    expect(dialog).toBeVisible()
+  })
+
+  it('Escape still closes the drawer, unaffected by the backdrop click handler', () => {
+    renderShell()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' })
+
+    // jsdom does not dispatch a real `cancel` event for an actual Escape
+    // keypress on a `<dialog>` — the browser's own default is simulated
+    // directly, the same event `onCancel` (`AppShell.tsx`) already handles.
+    fireEvent(dialog, new Event('cancel', { cancelable: true }))
+    fireEvent.transitionEnd(dialog)
+
+    expect(dialog).not.toBeVisible()
+  })
+})
+
 describe('AppShell footer support link', () => {
   it('mails bloombot@wonkledge.com, not the old placeholder address', () => {
     renderShell()

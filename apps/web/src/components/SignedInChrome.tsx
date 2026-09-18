@@ -42,6 +42,12 @@
  * this extraction. The standalone pages pass nothing (the default below runs
  * the action immediately) — none of them nest a form this app asks anyone to
  * confirm leaving.
+ *
+ * WEB-59 — a third, always-last drawer group offers a platform
+ * administrator a link into the console (`/platform-admin`), read straight
+ * off `account.isPlatformAdministrator` (`GET /auth/me`, read live by
+ * `apps/api`'s own `routes/auth.ts`) rather than guessed at here from an
+ * email or a membership — see `adminGroup`, below.
  */
 
 import { useRef, useState } from 'react'
@@ -188,6 +194,34 @@ export function SignedInChrome({
     ],
   }
 
+  // WEB-59 — a third, always-below-the-rest group, shown only when `GET
+  // /auth/me` (`account.isPlatformAdministrator`, read live per request —
+  // `apps/api`'s own `routes/auth.ts`) actually names this account an
+  // administrator — never inferred here from an email or a membership. Not
+  // scoped to `activeOrganizationId`/`isMember` the way `everydayGroup`/
+  // `organizationGroup` are: the console itself is not organization-scoped
+  // (`App.tsx`'s own module comment on `/platform-admin`), so this group
+  // stands on its own regardless of which organization (if any) this render
+  // is otherwise acting in. The console's own routes refuse a
+  // non-administrator regardless of what this drawer offers — this only
+  // decides what is offered.
+  const adminGroup = {
+    key: 'admin',
+    label: 'Admin',
+    items: [
+      {
+        key: 'admin',
+        label: 'Admin',
+        onClick: () =>
+          runAction(() => {
+            navigate({ kind: 'platform-admin' })
+            appShellRef.current?.closeDrawer()
+          }),
+        active: false,
+      },
+    ],
+  }
+
   const handleSignOut = async () => {
     setSigningOut(true)
     try {
@@ -220,13 +254,18 @@ export function SignedInChrome({
           )
         )
       }
-      navGroups={
-        activeOrganizationId === undefined
+      navGroups={[
+        ...(activeOrganizationId === undefined
           ? []
           : isMember
             ? [everydayGroup, organizationGroup]
-            : [everydayGroup]
-      }
+            : [everydayGroup]),
+        // WEB-59 — always last, whatever the organization-scoped groups
+        // above resolved to (including neither, for a standalone page with
+        // no organization at all — the console itself is not
+        // organization-scoped either).
+        ...(account.isPlatformAdministrator ? [adminGroup] : []),
+      ]}
       headerStart={
         activeOrganizationId === undefined ? undefined : (
           <OrganizationSwitcher

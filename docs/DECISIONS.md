@@ -12954,3 +12954,134 @@ file already takes (`renameProject`/`archiveProject`, immediately above where th
 caller reads `renameOrganization`'s own resolved value — both re-read `GET /auth/me` instead (this file's own
 module comment on why) — so its return type is the minimal `{ id: string; name: string }` rather than a full
 `Organization` type this bundle has never needed to declare before.
+
+## D-123 — `apps/web`/`apps/api`: WEB-59..62 — the admin link, the drawer's outside click, and two controls that were missing
+
+**Problem.** Four small, independent gaps: the drawer never offered a platform administrator a way into the
+console; a click outside the drawer did nothing, unlike `Escape`; the project's own screen carried no menu
+for the same actions its row offers; the course's own screen carried no way into its chat.
+
+**WEB-59 — `isPlatformAdministrator` is read live, per request, in `routes/auth.ts`, and shipped as a plain
+boolean on `GET /auth/me`'s `account`, never cached alongside the session or inferred in the browser.**
+`@bloombot/auth`'s own `isPlatformAdministrator` already reads `ADMIN_EMAILS` from the environment on every
+call (`packages/config/src/admin.ts`'s own module comment: "takes effect by editing the environment, with no
+restart") — the API route just has to call it on every `/auth/me`, not once at sign-in, or granting an
+administrator mid-session would need a fresh sign-in to take effect. `components/SignedInChrome.tsx`'s own
+`adminGroup` is a third `navGroups` entry, appended unconditionally after the organization-scoped groups
+(including the empty array a standalone page with no organization at all produces) — the admin console is
+not organization-scoped either (`App.tsx`'s own module comment on `/platform-admin`), so gating this on
+`activeOrganizationId`/`isMember` the way `everydayGroup`/`organizationGroup` are would have hidden the link
+on exactly the pages (`/connect/:id`, `/account`) an administrator most plausibly reaches it from.
+
+**WEB-60 — the backdrop click is `event.target === event.currentTarget` on the `<dialog>`'s own `onClick`,
+reusing `closeDrawer` directly, not a second listener.** A click on the native `<dialog>`'s backdrop
+dispatches its `click` event with `target` set to the dialog element itself — there is no other element
+there to receive it — while every real control inside the drawer is a descendant, so its own click bubbles up
+with `target` set to that descendant, never the dialog. This is the same device a `<dialog>`-as-modal
+implementation commonly uses for "close on backdrop click," verified directly rather than assumed:
+`tests/app-shell.test.tsx`'s own new cases fire a `click` at the dialog itself (backdrop) and at a descendant
+inside it (not backdrop), and only the first closes.
+
+**WEB-61 — the row's own kebab (item list, handlers, confirmations) moved to a new hook,
+`hooks/useProjectMenu.tsx`, called once at each caller's own top level — not a shared component.**
+`components/CourseRows.tsx` is the precedent for "one implementation of a row's own menu," but it is a
+component precisely because `pages/Projects.tsx` mounts one *per project*, inside a `.map()` — each instance
+needs its own React fiber (and thus its own hook state) to keep two projects' own busy/error/notice state from
+colliding. The project menu is the opposite shape: `pages/Projects.tsx` already kept exactly one
+`busyProjectId`/`error`/`duplicateNotice` for the whole page (not one per row) before this slice, and
+`pages/Courses.tsx` (the project's own screen) only ever needs one instance for the one project it names. A
+hook called once per caller's own render, exposing `itemsFor(project): KebabMenuItem[]` for `Projects.tsx` to
+call inside its own `.map()` — legal because the *hook itself* is not called there, only the plain function it
+returns — reuses the exact page-level state shape both screens already had, rather than restructuring
+`Projects.tsx`'s per-row state to match a component that was never how this particular menu was scoped.
+
+**`Courses.tsx` (the project's own screen) does not own the `Project` it renders — `pages/ProjectsPanel.tsx`
+resolves it once, from the route's own id (`useResolvedProject`) — so Archive/Restore/Rename need a way to
+correct that resolved copy, or the screen's own heading reads stale until it is left and reached again.**
+The first pass of this slice left `onChanged` as a no-op on `Courses.tsx`, on the theory that "no live
+project refetch" was an acceptable, pre-existing limit (nothing on this screen refetches `project` today).
+This was wrong, caught by this slice's own e2e test (`e2e/projects-row-menus.spec.ts`): renaming a project
+from its own screen's kebab and expecting the heading to still read the old name is not a reasonable reading
+of "the same behaviour" the brief asks for — the row's own copy on `Projects.tsx` updates immediately (a
+relist), and a screen offering the identical menu that visibly does nothing is worse than one that offered
+no menu at all. Fixed by giving `Courses` a new `onProjectChanged: (project: Project) => void` prop,
+threaded from `hooks/useProjectMenu.tsx`'s own `onChanged` — called with the renamed/restored project
+`renameProject`/`unarchiveProject` actually return, or (`projects.archive` returns only `{ archived: boolean
+}`) a reconstructed copy for the one case the action does not echo back — and `ProjectsPanel.tsx` updates its
+own `resolution` state in place, no refetch. Duplicate and Import are deliberately excluded: neither changes
+the project this screen names (Duplicate creates a second one; Import adds a course to this one), so only
+their own notice fires.
+
+**Delete gets its own, distinct callback (`onDeleted`/`onBack`), not `onProjectChanged`.** The project this
+screen names is gone, not merely different — `pages/Courses.tsx`'s own `onBack` (already the target of the
+`← Projects` control) is the "go somewhere that still exists" cue, matching the brief's own text. `Projects.tsx`
+treats Delete identically to every other mutation (`refresh()`), since a deleted row disappearing from a
+relist already is "navigating away," for a list.
+
+**WEB-62 — `onOpenChat` on `CourseEditor` is required, not optional (reversed by review round 2).** The first
+pass made it optional, defaulting to a no-op, on the same "most of `tests/course-editor.test.tsx`'s roughly
+thirty call sites do not care" reasoning `onNavigateTab` on this same component already uses. Review round 2's
+own "worth doing" caught the difference: `onNavigateTab`'s own absence degrades gracefully — no tab bar
+renders at all for the one case (`courseId === undefined`) it would matter — while an absent `onOpenChat`
+still renders a visible, clickable Chat button (gated only on `courseId !== undefined`, the same
+"existing record only" rule every other course-scoped section on this screen already follows) that silently
+does nothing when clicked. A control that looks live and is not is worse than the mechanical cost of adding
+`onOpenChat={vi.fn()}` to every call site that does not exercise it — done here, not deferred.
+
+## Review round 2 — WEB-59..62: four fixes
+
+Coordinator review round 2 found three bugs and one misleading comment in the round-1 diff above, plus two
+items marked "worth doing." All five addressed in the same slice, before merge.
+
+**Must-fix — Duplicate stopped refreshing `Projects.tsx`'s own list.** `hooks/useProjectMenu.tsx`'s own
+`handleDuplicate` reasoned "Duplicate leaves *this* project untouched, so `onChanged` is not called" — true,
+but `onChanged` was the only cue either caller had, and `Projects.tsx` (unlike `Courses.tsx`) lists *every*
+project on the page, including the new one Duplicate just created. `tests/projects.test.tsx`'s own existing
+test only asserted the action call and the notice, which is why it stayed green through the regression.
+Fixed with a fourth, distinctly-named callback, `onProjectCreated: (project: Project) => void` — handed
+`result.project` from `duplicateProject`'s own response — that `Projects.tsx` wires to `refresh()` and
+`Courses.tsx` (listing no projects at all) omits. A new test,
+`the duplicated project appears in the list without a reload`, drives a real duplicate through the modal and
+asserts the new row's own button, not merely the action call or the notice — proven to fail against the
+pre-fix commit in a throwaway `git worktree` before the fix landed.
+
+**Must-fix — Import on `Courses.tsx` (the project's own screen) never refreshed that screen's own course
+list.** The dialog's `onImported` only ever set `duplicateNotice`; nothing told `Courses.tsx` to re-run its
+own `courses.list`, so an imported course was missing from the very list it just landed in until the reader
+left the screen and returned. `pages/Projects.tsx`'s own per-project course lists have an identical gap,
+pre-existing on `master` (Import there predates this slice, and always had this limit) — left alone, as
+review scoped the fix to the regression this slice actually introduced (Import becoming reachable from
+`Courses.tsx` at all). Fixed with a fifth callback, `onCourseImported: () => void`, wired to `Courses.tsx`'s
+own `refresh`. A new test drives a real import (file-drop, the same device
+`tests/course-import-dialog.test.tsx` already uses) to completion and asserts the row appears — also proven
+to fail pre-fix.
+
+**Cheap-fix — two independent `error` states on `Projects.tsx` (and, by the same construction, on
+`Courses.tsx`).** `hooks/useProjectMenu.tsx` kept its own `error` state; each caller already had its own,
+for its own list fetch (`handleCreate`'s refusal, `listCourses`' own failure). `setError(undefined)` in
+either caller's own handler cleared only its own state, so a failed kebab action's banner could outlive a
+later, unrelated success, or the two could show at once. Fixed by removing `error` from the hook's own state
+entirely — it now takes `onError: (error: ApiError | undefined) => void` in its handlers and reports every
+refusal there — so both callers hand it their own existing `setError`, making it the one and only error
+state either screen has. A new test in `tests/projects.test.tsx`
+(`a failed kebab action's banner clears once a later, unrelated action succeeds`) pins this, and failed
+against the pre-fix commit for the reason the fix exists: the rename's own banner was still on screen after
+the unrelated "New project" succeeded.
+
+**Cheap-fix — `e2e/navigation-drawer.spec.ts`'s own backdrop-click comment was factually wrong.** It claimed
+`{ x: 700, y: 5 }` landed inside the dialog's "full-viewport box"; the `<dialog>` element is `w-64` (256px)
+— the comment described `::backdrop`, a distinct box the dialog element itself does not have. Corrected to
+say what is actually true: the position is deliberately *outside* the dialog's own box, and the click still
+resolves to it because a native `<dialog>`'s backdrop has no DOM element of its own for a browser to target.
+
+**Worth doing, addressed — a drag starting inside the drawer and releasing on the backdrop closed it.** A
+`click` event's own `target` is computed from where the pointer went *down*, not up, for a multi-element
+drag — so selecting text inside the drawer and releasing the mouse over the backdrop fired a `click` whose
+`target` still resolved to the `<dialog>`, indistinguishable from a genuine backdrop click by
+`event.target === event.currentTarget` alone. Fixed with `backdropMouseDownRef`
+(`components/AppShell.tsx`) — `onMouseDown` records whether the *press* also landed on the dialog itself,
+and `onClick` requires both. `tests/app-shell.test.tsx`'s own new case fires `mousedown` on a real control
+inside the drawer and `click` on the dialog, and pins that the drawer stays open — proven to fail without the
+guard. The two existing backdrop-click tests needed a matching `fireEvent.mouseDown` added alongside their
+own `fireEvent.click`, since `fireEvent.click` alone (unlike a real click) does not synthesize a preceding
+`mousedown`.

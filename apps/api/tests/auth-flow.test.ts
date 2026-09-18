@@ -24,9 +24,16 @@ import { SESSION_COOKIE_NAME } from '../src/middleware/session.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
 let testDb: TestDatabase
+// WEB-59 — restored after every test, the same discipline
+// `tests/routes/admin.test.ts`'s own `seedPlatformAdministrator` already
+// holds this allowlist to: a test that sets it must not leak the value into
+// whichever test happens to run next.
+const originalAdminEmails = process.env['ADMIN_EMAILS']
 
 afterEach(() => {
   testDb.cleanup()
+  if (originalAdminEmails === undefined) delete process.env['ADMIN_EMAILS']
+  else process.env['ADMIN_EMAILS'] = originalAdminEmails
 })
 
 /** Pulls the value of `bloombot_session` out of a `set-cookie` header array, or `undefined`. */
@@ -638,5 +645,74 @@ describe('POST /auth/request-link and POST /auth/redeem — destination (AUTH-6)
 
     expect(response.status).toBe(400)
     expect(response.body).toMatchObject({ error: 'invalid_request' })
+  })
+})
+
+/**
+ * WEB-59: `GET /auth/me`'s own `account.isPlatformAdministrator` — the
+ * field `components/SignedInChrome.tsx` (`apps/web`) reads to decide
+ * whether the drawer offers an **Admin** link at all. `true` only for an
+ * account the `ADMIN_EMAILS` allowlist (AUTH-4) actually names, and read
+ * live on every request rather than cached anywhere on the session — the
+ * second case below is what that "live" actually buys: the same session,
+ * granted mid-lifetime, reports differently without a fresh sign-in.
+ */
+describe('GET /auth/me — isPlatformAdministrator (WEB-59)', () => {
+  it('is false for an ordinary account, even one with a real session and membership', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+    const caller = seedSignedInCaller(testDb.db)
+
+    const me = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+
+    expect(
+      (me.body as { account: { isPlatformAdministrator: boolean } }).account
+        .isPlatformAdministrator
+    ).toBe(false)
+  })
+
+  it('is true only for the exact address ADMIN_EMAILS names, read live rather than cached on the session', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+    const caller = seedSignedInCaller(testDb.db)
+    const callerEmail = accounts.getAccountById(
+      caller.accountId,
+      testDb.db
+    )!.email
+
+    // Before the allowlist names this account at all — the same session
+    // token as every assertion below, proving `isPlatformAdministrator` is
+    // not decided once at sign-in and then carried along.
+    const before = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    expect(
+      (before.body as { account: { isPlatformAdministrator: boolean } }).account
+        .isPlatformAdministrator
+    ).toBe(false)
+
+    // A second, ordinary account never named by the allowlist — proves this
+    // is not simply "any signed-in account, once someone is an admin."
+    const other = seedSignedInCaller(testDb.db)
+
+    process.env['ADMIN_EMAILS'] = callerEmail
+
+    const after = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    expect(
+      (after.body as { account: { isPlatformAdministrator: boolean } }).account
+        .isPlatformAdministrator
+    ).toBe(true)
+
+    const otherAfter = await request(app)
+      .get('/auth/me')
+      .set('Cookie', other.cookieHeader)
+    expect(
+      (otherAfter.body as { account: { isPlatformAdministrator: boolean } })
+        .account.isPlatformAdministrator
+    ).toBe(false)
   })
 })

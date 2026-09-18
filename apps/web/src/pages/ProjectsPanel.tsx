@@ -167,6 +167,17 @@ export function ProjectsPanel({
         organizationId={organizationId}
         project={project}
         onBack={() => navigate({ kind: 'projects', organizationId })}
+        // WEB-61 — an Archive/Restore/Rename/Duplicate from this screen's
+        // own kebab (`Courses.tsx`'s own module comment on why this exists)
+        // updates the `Project` this component resolved, in place — no
+        // refetch, since `renamed`/`restored` already is the fresh record
+        // (`hooks/useProjectMenu.tsx`'s own doc comment on where it comes
+        // from). Without this, the header above `Courses`' own "New course"
+        // row would still read the project's *old* name (or archived state)
+        // until the screen was left and reached again.
+        onProjectChanged={(changed) =>
+          setResolution({ status: 'ready', project: changed })
+        }
         onOpenCourse={(courseId) =>
           navigate(
             courseId === undefined
@@ -200,6 +211,9 @@ export function ProjectsPanel({
       // through (`CourseEditor`'s own module comment on why it takes this
       // at all).
       navigate={navigate}
+      // WEB-62 — the same Chat handoff `Courses`/`Projects` above already
+      // thread through, reused unchanged for this screen's own Chat button.
+      onOpenChat={onOpenChat}
       courseId={route.kind === 'course-editor' ? route.courseId : undefined}
       // WEB-35 — omitted entirely on `'new-course'`, rather than passed as
       // `undefined`: a course that does not exist yet has no tab address

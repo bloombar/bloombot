@@ -209,6 +209,7 @@ describe('DiscordCallback — the person-link connect branch (LINK-6/7)', () => 
         account={{
           id: 'account-a',
           email: 'account-a@example.edu',
+          isPlatformAdministrator: false,
           memberships: [],
           connectedOrganizations: [],
         }}

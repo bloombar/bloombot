@@ -481,6 +481,66 @@ describe('Projects (WEB-7)', () => {
     expect(notice).toHaveTextContent('Spring 2027')
   })
 
+  // Round-2 review, must-fix: `handleDuplicate` on `master` ended with
+  // `setDuplicateNotice(...); refresh()` — the `hooks/useProjectMenu.tsx`
+  // extraction dropped the relist, reasoning (wrongly, for this screen)
+  // that Duplicate leaves *this* project untouched. It does — but this
+  // screen lists every project on the page, and the *new* one duplicating
+  // creates is missing from it without a reload. The test above only
+  // asserts the action call and the notice, which is why it stayed green
+  // through that regression; this one asserts the actual row.
+  it('the duplicated project appears in the list without a reload', async () => {
+    const duplicatedProject: Project = {
+      ...PROJECT,
+      id: 'project-2',
+      name: 'Spring 2027',
+    }
+    listProjects
+      .mockResolvedValueOnce([PROJECT])
+      .mockResolvedValueOnce([PROJECT, duplicatedProject])
+    duplicateProject.mockResolvedValue({
+      project: duplicatedProject,
+      coursesCopied: 0,
+      coursesDisabled: true,
+    })
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+    expect(
+      screen.queryByRole('button', { name: 'Spring 2027' })
+    ).not.toBeInTheDocument()
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Duplicate' })
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Duplicate "Fall 2026"',
+    })
+    fireEvent.change(within(dialog).getByLabelText('New project name'), {
+      target: { value: 'Spring 2027' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Duplicate' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Spring 2027' })
+      ).toBeInTheDocument()
+    )
+    // The relist this pins — not merely a second `listProjects` call for
+    // its own sake.
+    expect(listProjects).toHaveBeenCalledTimes(2)
+  })
+
   it("a create refused for a name collision renders the conflict's own message (WEB-5)", async () => {
     listProjects.mockResolvedValue([])
     createProject.mockRejectedValue(
@@ -1252,5 +1312,77 @@ describe('Projects — delete (PROJ-9/WEB-50)', () => {
 
     expect(await screen.findByRole('alert')).toBeInTheDocument()
     expect(await screen.findByText('Fall 2026')).toBeInTheDocument()
+  })
+})
+
+/**
+ * Round-2 review, cheap-fix: this screen's own `error` (for "New project")
+ * and the kebab menu's own error used to be two independent states —
+ * `handleCreate`'s `setError(undefined)` cleared only its own, so a failed
+ * menu action's banner outlived a later, unrelated successful action, and
+ * the two could show at once. `hooks/useProjectMenu.tsx` now reports every
+ * refusal through this screen's own `setError` directly (`onError`) —  one
+ * state, one banner.
+ */
+describe('Projects — one error state, not two (round-2 review, cheap-fix)', () => {
+  it("a failed kebab action's banner clears once a later, unrelated action succeeds", async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    renameProject.mockRejectedValueOnce(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: { message: 'Project name already used.' },
+      })
+    )
+    createProject.mockResolvedValue({
+      ...PROJECT,
+      id: 'project-2',
+      name: 'Spring 2027',
+    })
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Rename' })
+    )
+    const renameDialog = await screen.findByRole('dialog', {
+      name: 'Rename "Fall 2026"',
+    })
+    fireEvent.change(within(renameDialog).getByLabelText('Project name'), {
+      target: { value: 'Autumn 2026' },
+    })
+    fireEvent.click(
+      within(renameDialog).getByRole('button', { name: 'Rename' })
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Project name already used.'
+    )
+
+    // An unrelated, later action — "New project" — succeeds. Before this
+    // fix, the rename's own banner (a second, independent `error` state)
+    // was still on screen here.
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }))
+    const createDialog = await screen.findByRole('dialog', {
+      name: 'New project',
+    })
+    fireEvent.change(within(createDialog).getByLabelText('Project name'), {
+      target: { value: 'Spring 2027' },
+    })
+    fireEvent.click(
+      within(createDialog).getByRole('button', { name: 'Create' })
+    )
+
+    await waitFor(() => expect(createProject).toHaveBeenCalled())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

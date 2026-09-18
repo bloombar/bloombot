@@ -52,6 +52,7 @@ vi.mock('../src/api/client.js', async () => {
 const ACCOUNT: AccountSummary = {
   id: 'account-1',
   email: 'student@example.edu',
+  isPlatformAdministrator: false,
   memberships: [
     {
       organizationId: 'personal-org',

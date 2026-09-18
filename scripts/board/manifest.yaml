@@ -4606,7 +4606,7 @@
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-8
   title: A project has its own console screen
@@ -4618,7 +4618,7 @@
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-9
   title: A course's console screen shows the course and the people in it
@@ -4633,7 +4633,7 @@
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-10
   title: The console lists the platform's accounts
@@ -4645,7 +4645,7 @@
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-11
   title: An account has its own console screen
@@ -4662,7 +4662,7 @@
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-12
   title: Every console list can be searched
@@ -4685,6 +4685,23 @@
     offered — the Courses screen and the course's own screen alike. Revoking is
     presented as the destructive action it is. Cancelling leaves the course
     exactly as it was.
+  section: §45 The Administrator Console as a Map of the Platform
+  family: ADMIN
+  phase: 40
+  status: Backlog
+  review: false
+- id: ADMIN-14
+  title: A course awaiting approval sends word to the support address
+  full: "When a course becomes pending approval — it is created without qualifying
+    for COST-8's automatic approval, or an administrator revokes an approval it
+    already had — an email goes to the support address the deployment configures
+    (SUPPORT_CONTACT), naming the course, its project, its organization and its
+    owner, and carrying a link to that course's own console screen (ADMIN-9) so
+    the decision is one click from the message. The link is built from
+    PUBLIC_APP_URL (TEN-4), never hard-coded. A deployment with no support
+    address configured, or no mail transport, sends nothing and records why
+    rather than failing the operation that triggered it: a course is still
+    created, and an approval is still…"
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40

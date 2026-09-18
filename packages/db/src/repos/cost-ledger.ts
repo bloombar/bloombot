@@ -5,14 +5,19 @@
  * Every function that reaches into one organization's own ledger is scoped
  * by `organizationId`, its first parameter — the same TEN-2 discipline every
  * other file in this directory holds itself to. `listOrganizationTotals` is
- * this file's one documented exception: it is the platform administrator's
+ * this file's first documented exception: it is the platform administrator's
  * own read (COST-4's "a platform administrator sees usage per organization"),
  * which by definition spans every organization rather than one — the same
  * class of exception `repos/jobs.ts#countQueuedJobs` already is for JOB-5's
  * own "how deep is the queue, platform-wide" operational read.
+ * `listAccountTotals` and `getAccountUsageSummary` (ADMIN-10/ADMIN-11) are
+ * the same class one level up again: a platform administrator's own read of
+ * one *account's* usage, resolved through `person_identities` rather than
+ * `organizationId`, since an account is not itself scoped to one
+ * organization (`people.ts`'s own module comment on that mapping).
  */
 
-import { and, eq, sql, sum } from 'drizzle-orm'
+import { and, eq, inArray, sql, sum } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import {
@@ -21,6 +26,7 @@ import {
   courses,
   organizations,
   people,
+  personIdentities,
   type CostLedgerSurface,
   type CostMeasurement,
   type Surface,
@@ -476,4 +482,310 @@ export function listOrganizationTotals(db: Database): OrganizationTotal[] {
       bySurface: sortBySurface(totalsForOrganization?.bySurface ?? []),
     }
   })
+}
+
+/**
+ * ADMIN-9 — one course's own usage, broken down by surface, computed
+ * directly for the single course rather than by reading it out of
+ * `getOrganizationUsageSummary`'s own whole-organization scan (which the
+ * course's own console screen has no reason to pay for just to render one
+ * row of it).
+ */
+export interface CourseUsage {
+  totalCostMicros: number
+  callCount: number
+  bySurface: CostBySurface[]
+}
+
+export function getCourseUsageSummary(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): CourseUsage {
+  const rows = db
+    .select({
+      surface: costLedgerEntries.surface,
+      costMicros: sum(costLedgerEntries.costMicros),
+      estimatedCostMicros: sql<number>`sum(case when ${costLedgerEntries.measurement} = 'estimated' then ${costLedgerEntries.costMicros} else 0 end)`,
+      callCount: sql<number>`count(*)`,
+    })
+    .from(costLedgerEntries)
+    .where(
+      and(
+        eq(costLedgerEntries.organizationId, organizationId),
+        eq(costLedgerEntries.courseId, courseId)
+      )
+    )
+    .groupBy(costLedgerEntries.surface)
+    .all()
+
+  let totalCostMicros = 0
+  let callCount = 0
+  const bySurface: CostBySurface[] = []
+  for (const row of rows) {
+    const rowCostMicros = Number(row.costMicros ?? 0)
+    const rowEstimatedCostMicros = Number(row.estimatedCostMicros ?? 0)
+    const rowCallCount = Number(row.callCount)
+    totalCostMicros += rowCostMicros
+    callCount += rowCallCount
+    bySurface.push({
+      surface: row.surface,
+      costMicros: rowCostMicros,
+      estimatedCostMicros: rowEstimatedCostMicros,
+      callCount: rowCallCount,
+    })
+  }
+
+  return { totalCostMicros, callCount, bySurface: sortBySurface(bySurface) }
+}
+
+/**
+ * ADMIN-9 — one course's cost, broken down by the person it was charged to,
+ * in a single grouped query rather than one read per enrolled person — the
+ * same "batch the fan-out" style `getOrganizationUsageSummary` already uses
+ * for its own per-course breakdown. `routes/admin.ts` looks this up by
+ * `personId` for every person the course's people list already has to
+ * render, from `enrolments.listEnrolmentsForCourse`.
+ */
+export interface PersonCourseUsage {
+  personId: string
+  costMicros: number
+  callCount: number
+}
+
+export function getCoursePersonUsage(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): PersonCourseUsage[] {
+  const rows = db
+    .select({
+      personId: costLedgerEntries.personId,
+      costMicros: sum(costLedgerEntries.costMicros),
+      callCount: sql<number>`count(*)`,
+    })
+    .from(costLedgerEntries)
+    .where(
+      and(
+        eq(costLedgerEntries.organizationId, organizationId),
+        eq(costLedgerEntries.courseId, courseId)
+      )
+    )
+    .groupBy(costLedgerEntries.personId)
+    .all()
+
+  return rows.map((row) => ({
+    personId: row.personId,
+    costMicros: Number(row.costMicros ?? 0),
+    callCount: Number(row.callCount),
+  }))
+}
+
+/**
+ * ADMIN-10 — every account's own total spend and call count, across every
+ * organization it has ever been charged in, for the console's Users list.
+ * An account is reached from `cost_ledger_entries.personId` through
+ * `person_identities` (`surface = 'web'`, `externalId = accountId` —
+ * `people.ts`'s own module comment on that mapping): joined here rather
+ * than in `routes/admin.ts`, the same "the cost-ledger reasoning stays in
+ * this file" discipline `listOrganizationTotals` already holds itself to.
+ *
+ * TEN-2 exception, the same class `listOrganizationTotals` already is: a
+ * platform administrator's own read, spanning every organization (and every
+ * account) by definition, allowlisted in
+ * `tests/tenant-scoping-convention.test.ts` accordingly.
+ */
+export interface AccountTotal {
+  accountId: string
+  totalCostMicros: number
+  callCount: number
+}
+
+export function listAccountTotals(db: Database): AccountTotal[] {
+  const rows = db
+    .select({
+      accountId: personIdentities.externalId,
+      costMicros: sum(costLedgerEntries.costMicros),
+      callCount: sql<number>`count(*)`,
+    })
+    .from(costLedgerEntries)
+    .innerJoin(
+      personIdentities,
+      and(
+        eq(personIdentities.personId, costLedgerEntries.personId),
+        eq(personIdentities.surface, 'web')
+      )
+    )
+    .groupBy(personIdentities.externalId)
+    .all()
+
+  return rows.map((row) => ({
+    accountId: row.accountId,
+    totalCostMicros: Number(row.costMicros ?? 0),
+    callCount: Number(row.callCount),
+  }))
+}
+
+/**
+ * ADMIN-11 — one account's own usage, across every organization it has ever
+ * been charged in: its total, broken down by surface (COST-7) and by course
+ * (naming the course and the organization it belongs to, for the console
+ * to link each one), and when it was last active. `hasEstimated` (COST-6's
+ * "never presented as a measurement") is `true` when any part of the total
+ * came from an estimated row rather than a measured one — the account
+ * screen has no per-course estimate breakdown to show, unlike
+ * `CourseUsageSummary`'s own `estimatedCostMicros`, so this collapses to a
+ * single boolean rather than carrying the full amount through.
+ *
+ * The account's own people are found the same way `listAccountTotals`
+ * above resolves one account's cost — through `person_identities`
+ * (`surface = 'web'`, `externalId = accountId`) — across every organization,
+ * since an account can hold a distinct `web` person in each one it is
+ * connected to (`people.ts#listConnectedOrganizationsForAccount`'s own
+ * comment on that shape). A course whose own row has since been deleted
+ * (PROJ-8 nulls `cost_ledger_entries.course_id`) still counts toward the
+ * total and `bySurface`, but is excluded from `byCourse` — there is no
+ * course left to name.
+ *
+ * TEN-2 exception, the same class `listAccountTotals` above and
+ * `people.ts#listConnectedOrganizationsForAccount` already are: an
+ * account's own usage is not scoped to one organization until this call
+ * resolves it, allowlisted in `tests/tenant-scoping-convention.test.ts`
+ * accordingly.
+ */
+export interface AccountCourseUsage {
+  courseId: string
+  courseTitle: string
+  organizationId: string
+  totalCostMicros: number
+  callCount: number
+}
+
+export interface AccountUsageSummary {
+  totalCostMicros: number
+  callCount: number
+  hasEstimated: boolean
+  bySurface: CostBySurface[]
+  byCourse: AccountCourseUsage[]
+  lastActiveAt: number | null
+}
+
+export function getAccountUsageSummary(
+  accountId: string,
+  db: Database
+): AccountUsageSummary {
+  const personRows = db
+    .select({ personId: personIdentities.personId })
+    .from(personIdentities)
+    .where(
+      and(
+        eq(personIdentities.surface, 'web'),
+        eq(personIdentities.externalId, accountId)
+      )
+    )
+    .all()
+  const personIds = personRows.map((row) => row.personId)
+  if (personIds.length === 0) {
+    return {
+      totalCostMicros: 0,
+      callCount: 0,
+      hasEstimated: false,
+      bySurface: [],
+      byCourse: [],
+      lastActiveAt: null,
+    }
+  }
+
+  const rows = db
+    .select({
+      courseId: costLedgerEntries.courseId,
+      organizationId: costLedgerEntries.organizationId,
+      surface: costLedgerEntries.surface,
+      costMicros: sum(costLedgerEntries.costMicros),
+      estimatedCostMicros: sql<number>`sum(case when ${costLedgerEntries.measurement} = 'estimated' then ${costLedgerEntries.costMicros} else 0 end)`,
+      callCount: sql<number>`count(*)`,
+    })
+    .from(costLedgerEntries)
+    .where(inArray(costLedgerEntries.personId, personIds))
+    .groupBy(
+      costLedgerEntries.courseId,
+      costLedgerEntries.organizationId,
+      costLedgerEntries.surface
+    )
+    .all()
+
+  const lastActiveRow = db
+    .select({
+      lastCreatedAt: sql<number | null>`max(${costLedgerEntries.createdAt})`,
+    })
+    .from(costLedgerEntries)
+    .where(inArray(costLedgerEntries.personId, personIds))
+    .get()
+
+  let totalCostMicros = 0
+  let totalEstimatedCostMicros = 0
+  let callCount = 0
+  const bySurfaceMap = new Map<CostLedgerSurface, CostBySurface>()
+  const byCourseMap = new Map<
+    string,
+    { organizationId: string; costMicros: number; callCount: number }
+  >()
+  for (const row of rows) {
+    const rowCostMicros = Number(row.costMicros ?? 0)
+    const rowEstimatedCostMicros = Number(row.estimatedCostMicros ?? 0)
+    const rowCallCount = Number(row.callCount)
+    totalCostMicros += rowCostMicros
+    totalEstimatedCostMicros += rowEstimatedCostMicros
+    callCount += rowCallCount
+
+    const surfaceTotals = bySurfaceMap.get(row.surface) ?? {
+      surface: row.surface,
+      costMicros: 0,
+      estimatedCostMicros: 0,
+      callCount: 0,
+    }
+    surfaceTotals.costMicros += rowCostMicros
+    surfaceTotals.estimatedCostMicros += rowEstimatedCostMicros
+    surfaceTotals.callCount += rowCallCount
+    bySurfaceMap.set(row.surface, surfaceTotals)
+
+    if (row.courseId !== null) {
+      const courseTotals = byCourseMap.get(row.courseId) ?? {
+        organizationId: row.organizationId,
+        costMicros: 0,
+        callCount: 0,
+      }
+      courseTotals.costMicros += rowCostMicros
+      courseTotals.callCount += rowCallCount
+      byCourseMap.set(row.courseId, courseTotals)
+    }
+  }
+
+  const courseIds = [...byCourseMap.keys()]
+  const courseTitleById = new Map<string, string>()
+  if (courseIds.length > 0) {
+    const courseRows = db
+      .select({ id: courses.id, title: courses.title })
+      .from(courses)
+      .where(inArray(courses.id, courseIds))
+      .all()
+    for (const course of courseRows) {
+      courseTitleById.set(course.id, course.title)
+    }
+  }
+
+  return {
+    totalCostMicros,
+    callCount,
+    hasEstimated: totalEstimatedCostMicros > 0,
+    bySurface: sortBySurface([...bySurfaceMap.values()]),
+    byCourse: [...byCourseMap.entries()].map(([courseId, totals]) => ({
+      courseId,
+      courseTitle: courseTitleById.get(courseId) ?? '',
+      organizationId: totals.organizationId,
+      totalCostMicros: totals.costMicros,
+      callCount: totals.callCount,
+    })),
+    lastActiveAt: lastActiveRow?.lastCreatedAt ?? null,
+  }
 }

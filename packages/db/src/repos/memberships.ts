@@ -44,7 +44,12 @@ import { and, eq, isNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import { writeTransaction } from '../client.js'
-import { memberships, type MembershipRole } from '../schema.js'
+import {
+  accounts,
+  memberships,
+  organizations,
+  type MembershipRole,
+} from '../schema.js'
 
 export type Membership = typeof memberships.$inferSelect
 export type { MembershipRole }
@@ -200,6 +205,85 @@ export function listMembershipsForAccount(
   return db
     .select()
     .from(memberships)
+    .where(
+      and(eq(memberships.accountId, accountId), isNull(memberships.revokedAt))
+    )
+    .all()
+}
+
+/** ADMIN-7 — one active membership, with its account's own email and display name, `listMembershipsForOrganizationWithAccounts`'s own row. */
+export interface MembershipWithAccount {
+  accountId: string
+  email: string
+  displayName: string
+  role: MembershipRole
+  grantedAt: number | null
+}
+
+/**
+ * ADMIN-7: every active membership in `organizationId`, joined with the
+ * account it names — the organization's own console screen lists its
+ * members by role, and `AdminAccountRef`'s own owners list draws from this
+ * same read (`routes/admin.ts`'s own composition), rather than
+ * `listMembershipsForOrganization`'s bare rows plus one `getAccountById`
+ * call per member.
+ */
+export function listMembershipsForOrganizationWithAccounts(
+  organizationId: string,
+  db: Database
+): MembershipWithAccount[] {
+  return db
+    .select({
+      accountId: memberships.accountId,
+      email: accounts.email,
+      displayName: accounts.displayName,
+      role: memberships.role,
+      grantedAt: memberships.grantedAt,
+    })
+    .from(memberships)
+    .innerJoin(accounts, eq(accounts.id, memberships.accountId))
+    .where(
+      and(
+        eq(memberships.organizationId, organizationId),
+        isNull(memberships.revokedAt)
+      )
+    )
+    .all()
+}
+
+/** ADMIN-11 — one active membership `listMembershipsForAccountWithOrganizations` reports, its organization named alongside it. */
+export interface MembershipWithOrganization {
+  organizationId: string
+  organizationName: string
+  role: MembershipRole
+  grantedAt: number | null
+}
+
+/**
+ * ADMIN-11: every active membership `accountId` holds, across every
+ * organization, joined with that organization's own name — the account's
+ * own console screen lists them the same way `listMembershipsForAccount`
+ * already resolves *which* organizations an account may act in (`GET
+ * /auth/me`'s own read), this time with the name to render rather than the
+ * bare id.
+ *
+ * TEN-2 exception, the same class `listMembershipsForAccount` already is:
+ * an account's own memberships are not scoped to one organization,
+ * allowlisted in `tests/tenant-scoping-convention.test.ts` accordingly.
+ */
+export function listMembershipsForAccountWithOrganizations(
+  accountId: string,
+  db: Database
+): MembershipWithOrganization[] {
+  return db
+    .select({
+      organizationId: memberships.organizationId,
+      organizationName: organizations.name,
+      role: memberships.role,
+      grantedAt: memberships.grantedAt,
+    })
+    .from(memberships)
+    .innerJoin(organizations, eq(organizations.id, memberships.organizationId))
     .where(
       and(eq(memberships.accountId, accountId), isNull(memberships.revokedAt))
     )

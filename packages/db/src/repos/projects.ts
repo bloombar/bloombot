@@ -127,6 +127,30 @@ export function createProject(
     .get()
 }
 
+/**
+ * ADMIN-8 — a scoped, indexed point lookup — `projects.id` is that table's
+ * own primary key — for the one thing `routes/admin.ts#GET /admin/projects/:projectId`
+ * actually needs before it can call anything else in this file: which
+ * organization a project id belongs to. `undefined` when the id does not
+ * exist. The same shape `course-approval.ts#findCourseOrganizationId`
+ * already is for the identical reason, one table up — an admin-console
+ * route reaches a project directly by id, with no organization already in
+ * hand to scope `getProject` by.
+ *
+ * TEN-2 exception, allowlisted in `tests/tenant-scoping-convention.test.ts`
+ * accordingly.
+ */
+export function findProjectOrganizationId(
+  projectId: string,
+  db: Database
+): string | undefined {
+  return db
+    .select({ organizationId: projects.organizationId })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .get()?.organizationId
+}
+
 /** Look up a project by id, scoped to `organizationId`. */
 export function getProject(
   organizationId: string,

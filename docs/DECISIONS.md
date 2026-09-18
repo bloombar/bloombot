@@ -13328,3 +13328,48 @@ when one was applied, omitted (not "any surface") otherwise, the same discipline
 surface already holds itself to. Without this, a Discord-only read and a whole-course read over the same
 dates were indistinguishable on this row, even though ADMIN-2's own "an institution has to be able to account
 for" means what an access covered, not merely that one happened.
+
+## D-126 — `packages/db`/`apps/api`: ADMIN-7..11 — the console's read model, a per-course/per-account fan-out kept batched, and `hasEstimated` collapsing `estimatedCostMicros` to a boolean for an account
+
+**`getOrganizationUsageSummary` and `getCourseUsageSummary`/`getCoursePersonUsage` co-exist rather than the
+course-level reads deriving from the wider summary.** `GET /admin/organizations/:organizationId` and
+`GET /admin/projects/:projectId` both already need a whole organization's own per-course cost breakdown (to
+brief every course a project or organization lists in one pass), so both reuse `costLedger.getOrganizationUsageSummary`
+— the existing COST-4 read, unchanged. `GET /admin/courses/:courseId` only ever wants *one* course's own
+total, so it gets a new, narrower `costLedger.getCourseUsageSummary` rather than paying for the whole
+organization's scan just to discard every row but one. `getCoursePersonUsage` is the same narrowing one level
+down, for the course's own people list.
+
+**An account's own usage is resolved through `person_identities` (`surface = 'web'`, `externalId = accountId`),
+not through `memberships`.** ADMIN-10/ADMIN-11 both need "this account's own cost", but cost is attributed to
+a `personId`, and an account can hold a distinct `web` person in every organization it is connected to
+(`people.ts#listConnectedOrganizationsForAccount`'s own module comment already establishes this shape for
+LINK-10). `costLedger.listAccountTotals`/`getAccountUsageSummary` both join `cost_ledger_entries` to
+`person_identities` on that mapping — a platform-wide, TEN-2-exception read, the same class
+`listOrganizationTotals` already is one level up.
+
+**`AdminAccountDetail.usage.hasEstimated` is a single boolean, not the per-surface `estimatedCostMicros`
+`CostBySurface` already carries.** COST-6 requires an estimate never be "presented as a measurement"; the
+organization and course reads already satisfy this with a numeric `estimatedCostMicros` a caller can render
+as a caveat next to the actual figure. An account's own screen has no natural place to show *how much* of its
+total came from an estimate without a second full breakdown nobody asked for — the brief's own shape names
+only `hasEstimated: boolean` — so `getAccountUsageSummary` computes the sum internally (to decide the
+boolean) and discards it rather than exposing a number the response shape has no field for.
+
+**Watching the N+1 the brief calls out: every per-course and per-account fan-out in these five routes is one
+grouped query, not one query per row.** `enrolments.countActiveEnrolmentsByCourse` batches a whole
+organization's own active-enrolment counts in one `GROUP BY`; `costLedger.getOrganizationUsageSummary`
+already did the same for cost. The one deliberate exception is `GET /admin/courses/:courseId`'s own
+approval-event approver-email lookup, left as a plain `getAccountById` per distinct approver — bounded by
+one course's own audit trail (a handful of events at most), not by how many courses an organization holds,
+so it is not the class of fan-out `listCoursesForApproval`'s own batched owner-email lookup exists to avoid.
+
+**Six new TEN-2 exceptions, all "an account's own read, not an organization's"** — `accounts.listAccounts`,
+`cost-ledger.ts#listAccountTotals`/`getAccountUsageSummary`, `memberships.ts#listMembershipsForAccountWithOrganizations`,
+`people.ts#listConnectedOrganizationsWithNamesForAccount`/`listPeopleForAccount`, and
+`enrolments.ts#listEnrolmentsForPeople` — each documented in its own doc comment and allowlisted in
+`tests/tenant-scoping-convention.test.ts`, the same discipline `listOrganizationTotals`/`listTenantDeletions`
+already established for ADMIN-4/ADMIN-5. `projects.ts#findProjectOrganizationId` is not one of these — it
+takes no organization id to scope by at all (the same class `course-approval.ts#findCourseOrganizationId`
+already is), since `GET /admin/projects/:projectId` reaches a project directly by id with no organization
+already in hand.

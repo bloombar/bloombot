@@ -55,13 +55,20 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import * as courses from './courses.js'
 import * as memberships from './memberships.js'
 import { getPerson } from './people.js'
-import { enrolments, people, type EnrolmentSource } from '../schema.js'
+import {
+  courses as coursesTable,
+  enrolments,
+  organizations as organizationsTable,
+  people,
+  projects as projectsTable,
+  type EnrolmentSource,
+} from '../schema.js'
 
 export type Enrolment = typeof enrolments.$inferSelect
 export type { EnrolmentSource }
@@ -371,6 +378,97 @@ export function listEnrolmentsForCourse(
   // seen overwrites its map entry in place rather than moving it, so this
   // stays sorted the same way without a second sort here.
   return Array.from(byPerson.values())
+}
+
+/** ADMIN-7/ADMIN-8 — one course's active enrolment count, `countActiveEnrolmentsByCourse`'s own row. */
+export interface CourseEnrolmentCount {
+  courseId: string
+  count: number
+}
+
+/**
+ * ADMIN-7/ADMIN-8 — every course's active enrolment count in one
+ * organization, batched in a single grouped query rather than one `count(*)`
+ * per course row — the organization and project console screens each list a
+ * course's enrolment count beside every other course in the same
+ * organization or project, so a caller with `n` courses would otherwise pay
+ * `n` separate queries for the identical read (the same "batch the fan-out"
+ * style `course-approval.ts#listCoursesForApproval` already uses for its own
+ * owner-email lookup).
+ */
+export function countActiveEnrolmentsByCourse(
+  organizationId: string,
+  db: Database
+): CourseEnrolmentCount[] {
+  const rows = db
+    .select({ courseId: enrolments.courseId, count: sql<number>`count(*)` })
+    .from(enrolments)
+    .where(
+      and(
+        eq(enrolments.organizationId, organizationId),
+        isNull(enrolments.endedAt)
+      )
+    )
+    .groupBy(enrolments.courseId)
+    .all()
+  return rows.map((row) => ({
+    courseId: row.courseId,
+    count: Number(row.count),
+  }))
+}
+
+/** ADMIN-11 — one active enrolment of one of an account's own people, `listEnrolmentsForPeople`'s own row. */
+export interface AccountEnrolment {
+  courseId: string
+  courseTitle: string
+  projectId: string
+  projectName: string
+  organizationId: string
+  organizationName: string
+  enroledAt: number
+}
+
+/**
+ * ADMIN-11 — every active enrolment held by any of `personIds` (an
+ * account's own people, across every organization it is connected to — the
+ * caller, `routes/admin.ts`, resolves these through
+ * `people.ts#listPeopleForAccount`), with enough identifying detail (course,
+ * project, organization) for the account's own console screen to link each
+ * one.
+ *
+ * TEN-2 exception, one level up from this file's own organization-scoped
+ * `listCoursesForPerson`/`listPeopleForCourse`: an account's own enrolments
+ * are not scoped to one organization until this call names them, the same
+ * reason `people.ts#listConnectedOrganizationsForAccount` is unscoped for
+ * the identical "account, not organization" question. Allowlisted in
+ * `tests/tenant-scoping-convention.test.ts` accordingly.
+ */
+export function listEnrolmentsForPeople(
+  personIds: string[],
+  db: Database
+): AccountEnrolment[] {
+  if (personIds.length === 0) return []
+  return db
+    .select({
+      courseId: enrolments.courseId,
+      courseTitle: coursesTable.title,
+      projectId: coursesTable.projectId,
+      projectName: projectsTable.name,
+      organizationId: enrolments.organizationId,
+      organizationName: organizationsTable.name,
+      enroledAt: enrolments.createdAt,
+    })
+    .from(enrolments)
+    .innerJoin(coursesTable, eq(coursesTable.id, enrolments.courseId))
+    .innerJoin(projectsTable, eq(projectsTable.id, coursesTable.projectId))
+    .innerJoin(
+      organizationsTable,
+      eq(organizationsTable.id, enrolments.organizationId)
+    )
+    .where(
+      and(inArray(enrolments.personId, personIds), isNull(enrolments.endedAt))
+    )
+    .all()
 }
 
 /**
@@ -824,6 +922,11 @@ export function enrolViaSelfEnrolment(
  * caller already has a real, disclosed relationship to the organization's
  * own courses, the way reaching the right Discord channel proves a
  * message actually routed there.
+ *
+ * ADMIN-11 adds `listEnrolmentsForPeople`, below — the one TEN-2 exception
+ * in this file, spanning every organization an account's own people hold an
+ * enrolment in, for the identical "account, not organization" reason
+ * `people.ts#listConnectedOrganizationsForAccount` is unscoped.
  */
 export type ChatAdmission =
   | { kind: 'enrolled'; enrolment: Enrolment }

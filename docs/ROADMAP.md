@@ -494,4 +494,4 @@ phase gives organizations, projects, courses and accounts each a full screen, li
 adds a Users screen and a search field to every list, and puts a confirmation in front of an approval
 decision.
 
-**In scope:** ADMIN-7, ADMIN-8, ADMIN-9, ADMIN-10, ADMIN-11, ADMIN-12, ADMIN-13
+**In scope:** ADMIN-7, ADMIN-8, ADMIN-9, ADMIN-10, ADMIN-11, ADMIN-12, ADMIN-13, ADMIN-14

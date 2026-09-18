@@ -3464,3 +3464,25 @@ The Organizations screen ended with a row of buttons to Courses, Users and Delet
 before the console had navigation of its own. WEB-54's secondary navigation now carries all three at the top
 of every console screen, so the buttons at the foot are removed rather than offering a second way to the
 same places.
+
+### 48. Acknowledging What a Roster Upload Is
+
+#### ROST-19 Importing a roster is acknowledged before it can happen
+
+A roster import is the one moment in this platform where an institution's own record of who its students are
+is handed to a third party. Above the roster upload, an instructor must tick an acknowledgement before the
+import can be started at all: that uploading names, email addresses and other student information to this
+service may be a disclosure of education records under FERPA and may be governed by state student-data and
+retention law; that whether it is permitted is their institution's determination and not this service's; and
+that this service keeps what it is given indefinitely with no way to delete one student's part of it.
+
+The box is unticked every time the screen is opened — an acknowledgement carried over from last time is not
+an acknowledgement. Until it is ticked the import cannot be started, and the reason is on screen rather than
+in a disabled control that explains nothing. Choosing a file is still allowed while it is unticked; only
+starting the import is gated, so the acknowledgement is read at the moment it means something rather than
+before there is anything to acknowledge. The acknowledgement names the terms and the privacy policy and links
+to both.
+
+Nothing else about the import changes: the same CSV, the same options, the same job, the same report. A
+student who joins by link rather than by roster is untouched by this, because no institutional record is
+handed over on that path.

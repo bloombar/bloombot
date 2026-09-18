@@ -4797,3 +4797,20 @@
   phase: 42
   status: Backlog
   review: false
+- id: ROST-19
+  title: Importing a roster is acknowledged before it can happen
+  full: "A roster import is the one moment in this platform where an institution's
+    own record of who its students are is handed to a third party. Above the
+    roster upload, an instructor must tick an acknowledgement before the import
+    can be started at all: that uploading names, email addresses and other
+    student information to this service may be a disclosure of education records
+    under FERPA and may be governed by state student-data and retention law;
+    that whether it is permitted is their institution's determination and not
+    this service's; and that this service keeps what it is given indefinitely
+    with no way to delete one student's part of it. The box is unticked every
+    time the screen is opened — an…"
+  section: §48 Acknowledging What a Roster Upload Is
+  family: ROST
+  phase: 43
+  status: In progress
+  review: false

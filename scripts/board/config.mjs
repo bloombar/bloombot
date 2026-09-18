@@ -69,6 +69,7 @@ export const MILESTONE_TITLE = {
   40: 'Phase 40 — The console as a map of the platform',
   41: 'Phase 41 — Landing somewhere usable',
   42: "Phase 42 — One place for an organization's settings",
+  43: 'Phase 43 — Acknowledging what a roster upload is',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

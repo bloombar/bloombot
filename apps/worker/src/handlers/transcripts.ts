@@ -194,6 +194,10 @@ export function createTranscriptExportHandler(
         ...(exportRow.personId ? { personId: exportRow.personId } : {}),
         ...(exportRow.startAt !== null ? { startAt: exportRow.startAt } : {}),
         ...(exportRow.endAt !== null ? { endAt: exportRow.endAt } : {}),
+        // WEB-66 — the same surface filter the panel read applied, carried
+        // through on the export row (`transcriptExports.NewTranscriptExport`'s
+        // own doc comment).
+        ...(exportRow.surface !== null ? { surface: exportRow.surface } : {}),
       },
       db
     )
@@ -293,21 +297,45 @@ export function createTranscriptExportHandler(
     const pseudonymByPersonId = identityFieldsOmitted
       ? assignPseudonyms(transcript.entries)
       : undefined
+    // WEB-65 widened `TranscriptEntry` (`@bloombot/db`) with
+    // `personFirstName`/`personLastName`/`personEmail` for the panel's own
+    // heading — fields this file's own PPL-5 gate above never intended an
+    // export to carry, filtered or not (`personDisplayName` is the only
+    // identity field a *filtered* export has ever included). Both branches
+    // below project explicitly, rather than spreading `transcript.entries`
+    // as this file used to for the identified case, so that widening does
+    // not silently add a student's email or full name to a file this
+    // gate's own reasoning never re-examined.
     const transcriptEntries = pseudonymByPersonId
-      ? transcript.entries.map(
-          ({ personId, direction, content, createdAt }) => {
-            const participant = pseudonymByPersonId.get(personId)
-            // Invariant, not a real branch: `pseudonymByPersonId` is built
-            // from these exact entries' own `personId`s, immediately above.
-            if (!participant) {
-              throw new Error(
-                `transcripts.export: no pseudonym assigned for person "${personId}"`
-              )
-            }
-            return { participant, direction, content, createdAt }
+      ? transcript.entries.map((entry) => {
+          const participant = pseudonymByPersonId.get(entry.personId)
+          // Invariant, not a real branch: `pseudonymByPersonId` is built
+          // from these exact entries' own `personId`s, immediately above.
+          if (!participant) {
+            throw new Error(
+              `transcripts.export: no pseudonym assigned for person "${entry.personId}"`
+            )
           }
-        )
-      : transcript.entries
+          return {
+            participant,
+            direction: entry.direction,
+            content: entry.content,
+            createdAt: entry.createdAt,
+            surface: entry.surface,
+            channelRef: entry.channelRef,
+            categoryRef: entry.categoryRef,
+          }
+        })
+      : transcript.entries.map((entry) => ({
+          personId: entry.personId,
+          personDisplayName: entry.personDisplayName,
+          direction: entry.direction,
+          content: entry.content,
+          createdAt: entry.createdAt,
+          surface: entry.surface,
+          channelRef: entry.channelRef,
+          categoryRef: entry.categoryRef,
+        }))
 
     const fileContent = JSON.stringify(
       {
@@ -317,6 +345,9 @@ export function createTranscriptExportHandler(
           personId: exportRow.personId,
           startAt: exportRow.startAt,
           endAt: exportRow.endAt,
+          // WEB-66 — the export's own file reflects the surface filter
+          // exactly as it already reflects the other two above.
+          surface: exportRow.surface,
         },
         usage: courseUsage ?? null,
         // What is actually true, named accurately (this handler's own

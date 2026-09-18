@@ -1502,6 +1502,14 @@ export const transcriptExports = sqliteTable(
     status: text('status', { enum: TRANSCRIPT_EXPORT_STATUSES }).notNull(),
     startAt: integer('start_at'),
     endAt: integer('end_at'),
+    // WEB-66 — the surface filter this export was requested with, if any;
+    // `null` reads every surface, the same "omitted means unfiltered"
+    // convention `startAt`/`endAt` already use on this row. Carried through
+    // to `apps/worker`'s own handler so the file it produces reflects
+    // exactly the same filter the panel read applied, the same "an export
+    // reflects whatever filter is in force" WEB-66 asks of `startAt`/`endAt`
+    // already.
+    surface: text('surface', { enum: SURFACES }),
     // Set once the job produces the file — the bytes themselves live in
     // FILE-5's own `AttachmentStorage`, addressed by this row's own `id`
     // (`apps/worker`'s handler writes them there, never this table).
@@ -1527,6 +1535,12 @@ export const transcriptExports = sqliteTable(
     check(
       'transcript_exports_status_check',
       sql`${table.status} in ('pending', 'ready', 'failed')`
+    ),
+    // WEB-66 — the same "null or one of `SURFACES`" shape
+    // `messages_surface_check` already gives `messages.surface`, above.
+    check(
+      'transcript_exports_surface_check',
+      sql`${table.surface} is null or ${table.surface} in ('discord', 'web', 'mcp')`
     ),
   ]
 )

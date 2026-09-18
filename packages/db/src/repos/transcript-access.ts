@@ -28,18 +28,39 @@ import {
   people,
   transcriptAccessLog,
   type MessageDirection,
+  type Surface,
   type TranscriptAccessKind,
 } from '../schema.js'
 
 export type TranscriptAccessLogEntry = typeof transcriptAccessLog.$inferSelect
 
-/** One message, with just enough about the student it belongs to for a display or an export — never the student's email or any other identity field beyond a name to show (ADMIN-4's own "sees tenants, not conversations" is about a different screen, but the discipline of naming only what a reader needs is the same one). */
+/**
+ * One message, with just enough about the student it belongs to for a
+ * display or an export — never the student's email or any other identity
+ * field beyond what WEB-52's own "who is this" rule needs (ADMIN-4's own
+ * "sees tenants, not conversations" is about a different screen, but the
+ * discipline of naming only what a reader needs is the same one).
+ *
+ * WEB-65 — `surface`/`channelRef`/`categoryRef` say where a message
+ * actually came from, carried straight through from `messages` (`schema.ts`'s
+ * own comment on those columns): `null` for a message recorded before
+ * surfaces were tracked, or (`channelRef`/`categoryRef`) for any surface but
+ * Discord — a caller shows nothing for either rather than guessing, the
+ * same discipline `surface-label.ts`'s own callers already hold themselves
+ * to for a `null`/`'unknown'` cost-ledger surface.
+ */
 export interface TranscriptEntry {
   personId: string
   personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
+  personEmail: string | null
   direction: MessageDirection
   content: string
   createdAt: number
+  surface: Surface | null
+  channelRef: string | null
+  categoryRef: string | null
 }
 
 /** What a caller supplies to read (or export) a course's transcript back. */
@@ -52,6 +73,8 @@ export interface ReadCourseTranscriptInput {
   /** ADMIN-1's own "filtered by ... date" — inclusive bounds, epoch milliseconds. Either or both may be omitted. */
   startAt?: number
   endAt?: number
+  /** WEB-66 — narrows to messages that arrived on this surface only; omitted reads every surface, the same "unfiltered means every value" convention `personId`/`startAt`/`endAt` already use on this same input. */
+  surface?: Surface
   /** `'read'` for the panel screen, `'export'` for the job — ADMIN-3's own "the export ... writes the same audit entry as a read", distinguished only by this field. */
   kind: TranscriptAccessKind
 }
@@ -158,9 +181,15 @@ export function readCourseTranscript(
     .select({
       personId: messages.personId,
       personDisplayName: people.displayName,
+      personFirstName: people.firstName,
+      personLastName: people.lastName,
+      personEmail: people.email,
       direction: messages.direction,
       content: messages.content,
       createdAt: messages.createdAt,
+      surface: messages.surface,
+      channelRef: messages.channelRef,
+      categoryRef: messages.categoryRef,
     })
     .from(messages)
     .innerJoin(
@@ -175,6 +204,11 @@ export function readCourseTranscript(
         eq(messages.organizationId, organizationId),
         eq(messages.courseId, input.courseId),
         input.personId ? eq(messages.personId, input.personId) : undefined,
+        // WEB-66 — the surface filter, combined with the others above
+        // rather than replacing them; `undefined` (no filter given) drops
+        // out of `and(...)` the same way every other optional condition
+        // here already does.
+        input.surface ? eq(messages.surface, input.surface) : undefined,
         ...dateConditions
       )
     )

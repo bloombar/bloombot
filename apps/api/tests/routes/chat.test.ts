@@ -499,6 +499,46 @@ describe('routes/chat.ts (WEB-10)', () => {
     })
   })
 
+  // WEB-65 — every message on the transcript names the surface it arrived
+  // on, and the response names the caller's own identity (WEB-52's rule)
+  // once, for `ChatMessage.tsx`'s own heading. Fails without
+  // `toChatMessageView`/`chatStudentName` (`routes/chat.ts`) carrying
+  // these through.
+  it('carries the surface on every message, and the caller’s own identity once, for the panel’s own heading (WEB-65)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('Sure thing.')
+
+    const app = await buildTestApp(testDb.db, { model })
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'What is on the syllabus?' })
+
+    const get = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(get.status).toBe(200)
+    const body = get.body as {
+      messages: { role: string; surface: string | null }[]
+      studentName: string
+    }
+    expect(body.messages).toHaveLength(2)
+    // Every message on this thread went through the web chat POST above —
+    // this router's own `answerQuestion` call names `surface: 'web'`.
+    for (const message of body.messages) {
+      expect(message.surface).toBe('web')
+    }
+    expect(body.studentName.length).toBeGreaterThan(0)
+  })
+
   // CORE-7/CORE-8 — this route's own `addressPersonForWeb` (`routes/chat.ts`)
   // is the surface's own decision, exercised here through the real router
   // rather than a unit test of a private function this file cannot import:

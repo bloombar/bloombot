@@ -860,4 +860,81 @@ describe('transcripts.export handler (ADMIN-3)', () => {
     expect(parsed.transcript[0]?.personId).toBe(student.id)
     expect(parsed.transcript[0]?.content).toBe('When is office hours?')
   })
+
+  // WEB-66 — an export reflects the surface filter it was requested with,
+  // the same way it already reflects `startAt`/`endAt`: fails without this
+  // slice's own `exportRow.surface` being read and passed through to
+  // `readCourseTranscript`.
+  it('carries the surface filter into the file, alongside every other filter (WEB-66)', async () => {
+    const storage = await setUp()
+    const { organizationId, course, instructor, student } =
+      seedCourseWithTranscript(testDb.db)
+
+    // A second message, from the same student, on a different surface —
+    // `seedCourseWithTranscript`'s own message defaults to `web`
+    // (`getOrCreateConversation`'s own call inside it).
+    const discordConversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId: course.id, personId: student.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!discordConversation) throw new Error('setup failed: conversation')
+    conversations.appendMessage(
+      organizationId,
+      discordConversation.id,
+      {
+        direction: 'from_person',
+        content: 'Asked over Discord',
+        surface: 'discord',
+      },
+      testDb.db
+    )
+
+    const exportRow = transcriptExports.createPendingExport(
+      organizationId,
+      {
+        courseId: course.id,
+        requestedByAccountId: instructor.id,
+        surface: 'discord',
+      },
+      testDb.db
+    )
+    jobs.enqueueJob(
+      organizationId,
+      {
+        kind: TRANSCRIPT_EXPORT_JOB_KIND,
+        payload: { exportId: exportRow.id },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register(
+      TRANSCRIPT_EXPORT_JOB_KIND,
+      createTranscriptExportHandler({ attachmentStorage: storage })
+    )
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 30_000,
+      handlerTimeoutMs: 5_000,
+      retryPolicy,
+    })
+    expect(result.outcome).toBe('succeeded')
+
+    const bytes = await storage.read(organizationId, exportRow.id)
+    if (!bytes) throw new Error('setup failed: no bytes written')
+    const parsed = JSON.parse(bytes.toString('utf8')) as {
+      filters: { surface: string | null }
+      transcript: { content: string; surface: string | null }[]
+    }
+
+    expect(parsed.filters.surface).toBe('discord')
+    expect(parsed.transcript).toHaveLength(1)
+    expect(parsed.transcript[0]?.content).toBe('Asked over Discord')
+    expect(parsed.transcript[0]?.surface).toBe('discord')
+  })
 })

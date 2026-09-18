@@ -109,6 +109,7 @@ import {
   jobs,
   memberships,
   people,
+  schema,
   transcriptAccess,
   transcriptExports,
 } from '@bloombot/db'
@@ -125,10 +126,18 @@ function requireAccountId(accountId: string | undefined): string {
   return accountId
 }
 
+// WEB-66 — shared by `.read` and `.export`, the same way the rest of
+// `dateRangeSchema` already is: a surface filter combines with the student
+// and date filters rather than replacing them, and an export reflects
+// whatever filter is in force, exactly as it already does for the others.
+// `z.enum(schema.SURFACES)` refuses anything outside the three real
+// surfaces this platform tracks — the same enum `messages_surface_check`
+// enforces at the database layer.
 const dateRangeSchema = {
   personId: z.string().min(1).optional(),
   startAt: z.number().int().nonnegative().optional(),
   endAt: z.number().int().nonnegative().optional(),
+  surface: z.enum(schema.SURFACES).optional(),
 }
 
 const readInputSchema = z.object({
@@ -164,6 +173,7 @@ export const readTranscriptAction: Action<
         ...(input.personId !== undefined ? { personId: input.personId } : {}),
         ...(input.startAt !== undefined ? { startAt: input.startAt } : {}),
         ...(input.endAt !== undefined ? { endAt: input.endAt } : {}),
+        ...(input.surface !== undefined ? { surface: input.surface } : {}),
       },
       db
     )
@@ -287,6 +297,7 @@ export const exportTranscriptAction: Action<
         ...(input.personId !== undefined ? { personId: input.personId } : {}),
         ...(input.startAt !== undefined ? { startAt: input.startAt } : {}),
         ...(input.endAt !== undefined ? { endAt: input.endAt } : {}),
+        ...(input.surface !== undefined ? { surface: input.surface } : {}),
       },
       db
     )

@@ -32,10 +32,27 @@ import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 
 import { CHAT_MARKDOWN_SCHEMA } from '../markdown-schema.js'
+import { surfaceLabel } from '../surface-label.js'
 
 export interface ChatMessageProps {
   role: 'student' | 'assistant'
   text: string
+  /** WEB-65 — this thread's own timestamp, rendered in the same readable form `components/TranscriptBrowser.tsx` already uses. */
+  createdAt: number
+  /** WEB-65 — where this message arrived, and (Discord only) which category/channel — `null` for either says nothing rather than guessing (this file's own module comment on `messageHeading`). */
+  surface: 'discord' | 'web' | 'mcp' | null
+  channelRef: string | null
+  categoryRef: string | null
+  /**
+   * WEB-65/WEB-52 — this thread's one student, by name alone: a `student`
+   * row is headed by this name, an `assistant` row by "Bloombot to
+   * `<name>`" — replacing the "`<name>` — asked"/"`<name>` — answered"
+   * pairing `components/TranscriptBrowser.tsx` used to carry too. One name
+   * for the whole thread (`pages/Chat.tsx`'s own `studentName`, resolved
+   * server-side), since every message here is either from this account or
+   * addressed to it.
+   */
+  studentName: string
 }
 
 /**
@@ -93,13 +110,57 @@ const MARKDOWN_COMPONENTS: Components = {
   table: TableWithScroll,
 }
 
-export function ChatMessage({ role, text }: ChatMessageProps) {
+/** WEB-65's own heading — a student's own name alone, or "Bloombot to `<name>`" for the reply. */
+function messageHeading(role: ChatMessageProps['role'], studentName: string) {
+  return role === 'student' ? studentName : `Bloombot to ${studentName}`
+}
+
+/**
+ * WEB-65 — where this message arrived, and (Discord only) which category
+ * and channel it was posted in; `undefined` when the surface itself was
+ * never recorded, so nothing is guessed at and nothing is shown for it —
+ * the same discipline `components/TranscriptBrowser.tsx`'s own entry
+ * header holds itself to.
+ */
+function messageOrigin(
+  surface: ChatMessageProps['surface'],
+  channelRef: string | null,
+  categoryRef: string | null
+): string | undefined {
+  if (!surface) return undefined
+  const label = surfaceLabel(surface)
+  if (surface !== 'discord') return label
+  const place = [categoryRef, channelRef].filter(Boolean).join(' / ')
+  return place ? `${label} — ${place}` : label
+}
+
+export function ChatMessage({
+  role,
+  text,
+  createdAt,
+  surface,
+  channelRef,
+  categoryRef,
+  studentName,
+}: ChatMessageProps) {
   const isStudent = role === 'student'
+  const origin = messageOrigin(surface, channelRef, categoryRef)
   return (
     <div
-      className={`flex ${isStudent ? 'justify-end' : 'justify-start'}`}
+      className={`flex flex-col gap-1 ${isStudent ? 'items-end' : 'items-start'}`}
       data-testid={`chat-message-${role}`}
     >
+      {/* WEB-65 — compact, labelled metadata above the bubble: a message
+          stays a message, not a card (this file's own doc comment quotes
+          the same register `TranscriptBrowser.tsx`'s own entry header
+          already holds itself to). */}
+      <div className="flex items-center gap-2 text-xs text-neutral-500">
+        <span>{messageHeading(role, studentName)}</span>
+        {origin && <span>{`· ${origin}`}</span>}
+        <time dateTime={new Date(createdAt).toISOString()}>
+          {new Date(createdAt).toLocaleString()}
+        </time>
+      </div>
       <div
         className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
           isStudent

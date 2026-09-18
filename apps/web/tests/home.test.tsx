@@ -180,3 +180,38 @@ describe('accepting the documents before an account exists', () => {
     expect(screen.queryByTestId('google-gated')).not.toBeInTheDocument()
   })
 })
+
+// A plea, not a policy paragraph: the home page names the categories a
+// student should keep out of a question, because this service stores what it
+// is told indefinitely and cannot forget one student's part of it.
+describe('Home — what not to tell the bot', () => {
+  it('asks students not to divulge private information, and names the categories', async () => {
+    render(<Home onSignedIn={vi.fn()} />)
+
+    const heading = await screen.findByRole('heading', {
+      name: /don’t tell the bot anything private/i,
+    })
+    expect(heading).toBeInTheDocument()
+
+    const callout = heading.closest('div')
+    expect(callout).not.toBeNull()
+    for (const category of [
+      /grades, transcripts, disciplinary records/i,
+      /student ID numbers/i,
+      /health or medical information/i,
+      /immigration or citizenship status/i,
+      /sexual orientation or gender identity/i,
+      /home address or precise location/i,
+      /anything about another student/i,
+    ]) {
+      expect(
+        within(callout as HTMLElement).getByText(category)
+      ).toBeInTheDocument()
+    }
+
+    // It says why these in particular, rather than leaving "private" to the
+    // reader's judgement.
+    expect(callout).toHaveTextContent(/FERPA/)
+    expect(callout).toHaveTextContent(/state student-data laws/i)
+  })
+})

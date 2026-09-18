@@ -237,9 +237,14 @@ describe('Transcripts (ADMIN-1)', () => {
       entries: [],
     })
 
-    const labels = screen
-      .getAllByText(/^(Student|Surface|From)$/)
-      .map((el) => el.textContent)
+    // `selectProjectAndCourse` returns as soon as it has changed the Course
+    // select; the filter row renders after that course's student list
+    // resolves. Every other test here waits through a `findBy*`/`waitFor`,
+    // so this one must too — a synchronous `getAllByText` read the DOM
+    // before the row existed and failed only under a loaded machine.
+    const labels = (await screen.findAllByText(/^(Student|Surface|From)$/)).map(
+      (el) => el.textContent
+    )
     expect(labels).toEqual(['Student', 'Surface', 'From'])
 
     const { fireEvent } = await import('@testing-library/react')

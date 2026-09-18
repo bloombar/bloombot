@@ -162,6 +162,16 @@ export const discordServerBindings = sqliteTable('discord_server_bindings', {
     .references(() => accounts.id),
   installedAt: integer('installed_at').notNull(),
   removedAt: integer('removed_at'),
+  // WEB-68 — the guild's own display name, read from Discord at install
+  // time (`apps/api`'s install callback already has it, from the same
+  // `userGuilds` lookup that resolves the guild id) and persisted so the
+  // Discord screen can name a server without asking Discord again on every
+  // page load. Nullable: a binding installed before this column existed has
+  // no name recorded, and is deliberately left that way rather than
+  // backfilled — the UI falls back to the id for those (`InstallButton.tsx`'s
+  // `DiscordServerRow`) — and it gains a name only if it is ever
+  // reinstalled.
+  serverName: text('server_name'),
 })
 
 // PROJ-1 — course configurations are grouped into a project, typically a

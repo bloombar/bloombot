@@ -47,6 +47,12 @@ export function resolveDiscordServerBinding(
 export interface ClaimDiscordServer {
   serverId: string
   installedByAccountId: string
+  // WEB-68 — the guild's display name, already in the install callback's
+  // hand from the same Discord lookup that resolved `serverId`
+  // (`apps/api/src/routes/discord-servers.ts`). Optional: a caller that does
+  // not have it (there are none left in this codebase, but nothing here
+  // requires one) leaves the column null, the same as a pre-WEB-68 binding.
+  serverName?: string
 }
 
 /**
@@ -165,6 +171,9 @@ export function claimDiscordServerBinding(
           organizationId,
           installedByAccountId: input.installedByAccountId,
           installedAt: Date.now(),
+          // WEB-68 — `undefined` here inserts SQL `NULL`, same as a caller
+          // that never passed one.
+          serverName: input.serverName,
         })
         .returning()
         .get()
@@ -209,6 +218,11 @@ export function claimDiscordServerBinding(
       installedByAccountId: input.installedByAccountId,
       installedAt: Date.now(),
       removedAt: null,
+      // WEB-68 — a re-claim is itself a reinstall, so it is one of the
+      // moments a name gets recorded (or refreshed, if the guild has been
+      // renamed since it was last bound) — this file's own module comment
+      // on why an un-named binding is never backfilled any other way.
+      serverName: input.serverName,
     })
     .where(
       and(

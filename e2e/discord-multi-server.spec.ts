@@ -99,8 +99,10 @@ test('an organization with two active Discord bindings lists both, and a course 
   await expect(page.getByText(guildA)).toBeVisible()
   await expect(page.getByText(guildB)).toBeVisible()
   await expect(page.getByRole('button', { name: 'Remove' })).toHaveCount(2)
+  // WEB-68 — with two active bindings already, the install button reads
+  // "another," not the bare "Install to Discord" it reads with none.
   await expect(
-    page.getByRole('button', { name: 'Install to Discord' })
+    page.getByRole('button', { name: 'Install to another Discord server' })
   ).toBeVisible()
 
   // 4. Define a course through the panel, choosing `guildB` explicitly

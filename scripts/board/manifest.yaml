@@ -4645,7 +4645,7 @@
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40
-  status: In review
+  status: Done
   review: false
 - id: ADMIN-11
   title: An account has its own console screen
@@ -4676,7 +4676,7 @@
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40
-  status: In progress
+  status: Done
   review: false
 - id: ADMIN-13
   title: Approving or revoking a course is confirmed first
@@ -4688,7 +4688,7 @@
   section: §45 The Administrator Console as a Map of the Platform
   family: ADMIN
   phase: 40
-  status: In progress
+  status: Done
   review: false
 - id: ADMIN-14
   title: A course awaiting approval sends word to the support address

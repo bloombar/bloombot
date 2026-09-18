@@ -52,6 +52,10 @@ const {
   fetchAdminCourse,
   approveAdminCourse,
   unapproveAdminCourse,
+  fetchAdminOrganization,
+  fetchAdminProject,
+  fetchAdminAccounts,
+  fetchAdminAccount,
 } = vi.hoisted(() => ({
   fetchAdminOrganizations: vi.fn(),
   fetchDeletionPreview: vi.fn(),
@@ -61,6 +65,11 @@ const {
   fetchAdminCourse: vi.fn(),
   approveAdminCourse: vi.fn(),
   unapproveAdminCourse: vi.fn(),
+  // ADMIN-7..ADMIN-11 — this phase's own four new reads.
+  fetchAdminOrganization: vi.fn(),
+  fetchAdminProject: vi.fn(),
+  fetchAdminAccounts: vi.fn(),
+  fetchAdminAccount: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -77,6 +86,10 @@ vi.mock('../src/api/client.js', async () => {
     fetchAdminCourse,
     approveAdminCourse,
     unapproveAdminCourse,
+    fetchAdminOrganization,
+    fetchAdminProject,
+    fetchAdminAccounts,
+    fetchAdminAccount,
   }
 })
 
@@ -287,6 +300,12 @@ describe('Admin (ADMIN-4)', () => {
       fetchTenantDeletions.mockRejectedValue(
         new ApiError(403, { error: 'not_platform_administrator' })
       )
+      // ADMIN-7 — `'admin-organization'` now fires its own read too; the
+      // identical refusal, the same account-wide gate every route behind
+      // `/platform-admin` makes.
+      fetchAdminOrganization.mockRejectedValue(
+        new ApiError(403, { error: 'not_platform_administrator' })
+      )
 
       renderAdmin({ route })
 
@@ -384,6 +403,25 @@ describe('Admin — ADMIN-5’s confirmed, audited deletion', () => {
   })
 })
 
+// ADMIN-7 — `'admin-organization'`'s own fixture: `fetchAdminOrganization`'s
+// full shape, not merely the list row `fetchAdminOrganizations` returns.
+const ORG_DETAIL = {
+  organizationId: 'org-1',
+  name: 'A Real Tenant',
+  isPersonal: false,
+  spendingCapMicros: null,
+  createdAt: Date.now(),
+  usage: {
+    totalCostMicros: 1_500_000,
+    callCount: 3,
+    hasEstimated: false,
+    bySurface: [],
+  },
+  owners: [],
+  members: [],
+  projects: [],
+}
+
 describe('Admin — WEB-33’s own screens', () => {
   beforeEach(() => {
     fetchAdminOrganizations.mockResolvedValue({
@@ -405,6 +443,7 @@ describe('Admin — WEB-33’s own screens', () => {
   // address left the operator on that address, which the refreshed read no
   // longer matches: a successful deletion rendered "Not found".
   it('a deletion started from an organization’s own screen returns to the list, not a not-found page', async () => {
+    fetchAdminOrganization.mockResolvedValue(ORG_DETAIL)
     fetchDeletionPreview.mockResolvedValue(PREVIEW)
     deleteTenant.mockResolvedValue(undefined)
     fetchTenantDeletions.mockResolvedValue([])
@@ -436,7 +475,10 @@ describe('Admin — WEB-33’s own screens', () => {
     expect(await screen.findByText('A Real Tenant')).toBeInTheDocument()
   })
 
-  it('opens an organization’s own detail screen by name, and back returns to the list', async () => {
+  // ADMIN-7 — the organization's own screen is now its own read
+  // (`fetchAdminOrganization`), not a row `.find()`d out of the list.
+  it('opens an organization’s own detail screen by name, reads its own richer fetch, and back returns to the list', async () => {
+    fetchAdminOrganization.mockResolvedValue(ORG_DETAIL)
     renderAdmin()
 
     fireEvent.click(
@@ -446,6 +488,7 @@ describe('Admin — WEB-33’s own screens', () => {
     expect(
       await screen.findByTestId('admin-org-detail-org-1')
     ).toBeInTheDocument()
+    expect(fetchAdminOrganization).toHaveBeenCalledWith('org-1')
     expect(screen.getByText(/\$1\.50 spent/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '← Organizations' }))
@@ -453,11 +496,14 @@ describe('Admin — WEB-33’s own screens', () => {
     expect(await screen.findByTestId('admin-organizations')).toBeInTheDocument()
   })
 
-  // WEB-33: an address naming an organization that does not exist gets the
+  // ADMIN-7: an address naming an organization the API 404s renders the
   // same not-found treatment the rest of the panel gives, not an empty
-  // screen — proven here by asking for a screen the fetched list has no
-  // matching entry for at all.
-  it('an organization id absent from the fetched list renders not-found', async () => {
+  // screen.
+  it('an organization id the API does not recognise (404) renders not-found', async () => {
+    fetchAdminOrganization.mockRejectedValue(
+      new ApiError(404, { error: 'organization_not_found' })
+    )
+
     renderAdmin({
       route: { kind: 'admin-organization', organizationId: 'no-such-org' },
     })
@@ -599,6 +645,10 @@ describe('Admin — WEB-53’s Courses screen', () => {
       attachments: [],
       webSources: [],
       aiApprovalDecidedAt: null,
+      // ADMIN-9's own widening from ADMIN-6's settings-only read.
+      approvalEvents: [],
+      usage: { totalCostMicros: 0, callCount: 0, bySurface: [] },
+      people: [],
     })
 
     renderAdmin({ route: { kind: 'admin-courses' } })
@@ -643,7 +693,12 @@ describe('Admin — WEB-54’s console navigation and health footer', () => {
       aiApprovedByAccountId: null,
       aiApprovedByEmail: null,
       aiApprovalDecidedAt: null,
+      approvalEvents: [],
+      usage: { totalCostMicros: 0, callCount: 0, bySurface: [] },
+      people: [],
     })
+    // ADMIN-7 — `'admin-organization'` now fires its own read too.
+    fetchAdminOrganization.mockResolvedValue(ORG_DETAIL)
   })
 
   it.each([
@@ -815,6 +870,33 @@ describe('Admin — ADMIN-6’s read-only course settings screen', () => {
     aiApprovedByAccountId: null,
     aiApprovedByEmail: null,
     aiApprovalDecidedAt: null,
+    // ADMIN-9's own widening from ADMIN-6's settings-only read.
+    approvalEvents: [
+      {
+        id: 'event-1',
+        action: 'approve' as const,
+        accountId: 'account-1',
+        accountEmail: 'admin@bloombot.example',
+        createdAt: Date.now(),
+      },
+    ],
+    usage: {
+      totalCostMicros: 250_000,
+      callCount: 2,
+      bySurface: [],
+    },
+    people: [
+      {
+        personId: 'person-1',
+        displayName: 'QA Student',
+        email: 'student@example.edu',
+        enroledAt: Date.now(),
+        connectedAt: Date.now(),
+        accountId: 'account-2',
+        totalCostMicros: 100_000,
+        callCount: 1,
+      },
+    ],
   }
 
   beforeEach(() => {
@@ -1008,5 +1090,402 @@ describe('Admin — ADMIN-6’s read-only course settings screen', () => {
 
     expect(screen.getByText('Course B')).toBeInTheDocument()
     expect(screen.queryByText(/not found/i)).not.toBeInTheDocument()
+  })
+
+  // ADMIN-9 — the widening past ADMIN-6's settings-only read: organization
+  // and project as links, the approval history, usage, and the people
+  // enrolled, linking to `admin-account` when a person carries one.
+  it('shows the organization/project links, approval history, usage and enrolled people (ADMIN-9)', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+
+    const detail = await screen.findByTestId('admin-course-detail-course-1')
+
+    expect(
+      within(detail).getByRole('link', { name: 'A Real Tenant' })
+    ).toHaveAttribute('href', '/platform-admin/organizations/org-1')
+    expect(
+      within(detail).getByRole('link', { name: 'Fall 2026' })
+    ).toHaveAttribute('href', '/platform-admin/projects/proj-1')
+
+    expect(
+      within(detail).getByRole('region', { name: 'Approval history' })
+    ).toHaveTextContent('admin@bloombot.example')
+
+    expect(
+      within(detail).getByRole('region', { name: 'Usage' })
+    ).toHaveTextContent('$0.25 spent')
+
+    const people = within(detail).getByRole('region', { name: 'People' })
+    expect(people).toHaveTextContent('QA Student')
+    expect(
+      within(people).getByRole('link', { name: 'QA Student' })
+    ).toHaveAttribute('href', '/platform-admin/users/account-2')
+  })
+})
+
+// ADMIN-7 — the organization screen's own richer read: usage, owners,
+// members with roles, and its projects, each listing its own courses with
+// approval state, enrolment count and cost — every project, course and
+// owner a link to that entity's own screen.
+describe('Admin — ADMIN-7’s organization console screen', () => {
+  const RICH_ORG_DETAIL = {
+    organizationId: 'org-1',
+    name: 'A Real Tenant',
+    isPersonal: false,
+    spendingCapMicros: 5_000_000,
+    createdAt: Date.now(),
+    usage: {
+      totalCostMicros: 1_500_000,
+      callCount: 3,
+      hasEstimated: false,
+      bySurface: [],
+    },
+    owners: [
+      {
+        accountId: 'account-1',
+        email: 'owner@example.edu',
+        displayName: 'Owner One',
+      },
+    ],
+    members: [
+      {
+        accountId: 'account-1',
+        email: 'owner@example.edu',
+        displayName: 'Owner One',
+        role: 'owner',
+        grantedAt: Date.now(),
+      },
+    ],
+    projects: [
+      {
+        projectId: 'proj-1',
+        name: 'Fall 2026',
+        archivedAt: null,
+        createdAt: Date.now(),
+        courses: [
+          {
+            courseId: 'course-1',
+            title: 'Web Design',
+            enabled: true,
+            aiApprovedAt: null,
+            enrolmentCount: 4,
+            totalCostMicros: 250_000,
+          },
+        ],
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+  })
+
+  it('renders usage, owners, members and projects with courses, each a link to its own screen', async () => {
+    fetchAdminOrganization.mockResolvedValue(RICH_ORG_DETAIL)
+
+    renderAdmin({
+      route: { kind: 'admin-organization', organizationId: 'org-1' },
+    })
+
+    const detail = await screen.findByTestId('admin-org-detail-org-1')
+
+    expect(detail).toHaveTextContent('$1.50 spent')
+    expect(
+      within(detail).getByRole('region', { name: 'Owners' })
+    ).toHaveTextContent('Owner One')
+    expect(
+      within(detail).getByRole('region', { name: 'Members' })
+    ).toHaveTextContent('owner')
+
+    const projects = within(detail).getByRole('region', { name: 'Projects' })
+    expect(
+      within(projects).getByRole('link', { name: 'Fall 2026' })
+    ).toHaveAttribute('href', '/platform-admin/projects/proj-1')
+    expect(
+      within(projects).getByRole('link', { name: 'Web Design' })
+    ).toHaveAttribute('href', '/platform-admin/courses/course-1')
+    expect(projects).toHaveTextContent('4 enrolled')
+
+    // "Owner One" links twice — once from Owners, once from Members (the
+    // same account, both an owner and a member) — scoped to Owners rather
+    // than asking `detail` for one link with two matches.
+    const owners = within(detail).getByRole('region', { name: 'Owners' })
+    expect(
+      within(owners).getByRole('link', { name: 'Owner One' })
+    ).toHaveAttribute('href', '/platform-admin/users/account-1')
+  })
+})
+
+// ADMIN-8 — a project's own console screen, reached by a link from
+// `admin-organization`: its name, its organization (a link back), when it
+// was created, whether it is archived, and its courses.
+describe('Admin — ADMIN-8’s project console screen', () => {
+  const PROJECT_DETAIL = {
+    projectId: 'proj-1',
+    name: 'Fall 2026',
+    organizationId: 'org-1',
+    organizationName: 'A Real Tenant',
+    archivedAt: null,
+    createdAt: Date.now(),
+    courses: [
+      {
+        courseId: 'course-1',
+        title: 'Web Design',
+        enabled: true,
+        aiApprovedAt: Date.now(),
+        enrolmentCount: 4,
+        totalCostMicros: 250_000,
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+  })
+
+  it('renders the project’s own facts, its organization link, and its courses with a link each', async () => {
+    fetchAdminProject.mockResolvedValue(PROJECT_DETAIL)
+
+    renderAdmin({ route: { kind: 'admin-project', projectId: 'proj-1' } })
+
+    const detail = await screen.findByTestId('admin-project-detail-proj-1')
+
+    expect(
+      within(detail).getByRole('link', { name: 'A Real Tenant' })
+    ).toHaveAttribute('href', '/platform-admin/organizations/org-1')
+    expect(
+      within(detail).getByRole('link', { name: 'Web Design' })
+    ).toHaveAttribute('href', '/platform-admin/courses/course-1')
+    expect(detail).toHaveTextContent('4')
+    expect(detail).toHaveTextContent('$0.25')
+  })
+
+  it('a project id the API does not recognise (404) renders not-found', async () => {
+    fetchAdminProject.mockRejectedValue(
+      new ApiError(404, { error: 'project_not_found' })
+    )
+
+    renderAdmin({ route: { kind: 'admin-project', projectId: 'missing' } })
+
+    expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
+  })
+})
+
+// ADMIN-10 — the console's Users screen: every account, newest first, each
+// a link to its own console screen.
+describe('Admin — ADMIN-10’s Users screen', () => {
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+  })
+
+  it('lists accounts with a link into each account’s own screen', async () => {
+    fetchAdminAccounts.mockResolvedValue({
+      accounts: [
+        {
+          accountId: 'account-1',
+          email: 'owner@example.edu',
+          displayName: 'Owner One',
+          firstName: 'Owner',
+          lastName: 'One',
+          createdAt: Date.now(),
+          disabledAt: null,
+          isPlatformAdministrator: false,
+          organizationCount: 2,
+          totalCostMicros: 500_000,
+        },
+      ],
+    })
+
+    renderAdmin({ route: { kind: 'admin-accounts' } })
+
+    const list = await screen.findByTestId('admin-accounts')
+    expect(
+      within(list).getByRole('link', { name: 'Owner One' })
+    ).toHaveAttribute('href', '/platform-admin/users/account-1')
+    expect(list).toHaveTextContent('owner@example.edu')
+    expect(list).toHaveTextContent('$0.50')
+  })
+
+  it('reached from the organizations list’s own Users button', async () => {
+    fetchAdminAccounts.mockResolvedValue({ accounts: [] })
+
+    renderAdmin()
+    fireEvent.click(await screen.findByRole('button', { name: 'Users' }))
+
+    expect(await screen.findByText('No accounts yet.')).toBeInTheDocument()
+  })
+})
+
+// ADMIN-11 — one account's own console screen: identity, memberships with
+// roles, connected organizations, enrolments, people records and usage,
+// every organization/project/course a link to its own screen.
+describe('Admin — ADMIN-11’s account console screen', () => {
+  const ACCOUNT_DETAIL = {
+    accountId: 'account-1',
+    email: 'owner@example.edu',
+    displayName: 'Owner One',
+    firstName: 'Owner',
+    lastName: 'One',
+    createdAt: Date.now(),
+    disabledAt: null,
+    isPlatformAdministrator: false,
+    memberships: [
+      {
+        organizationId: 'org-1',
+        organizationName: 'A Real Tenant',
+        role: 'owner',
+        grantedAt: Date.now(),
+      },
+    ],
+    connectedOrganizations: [],
+    people: [
+      {
+        personId: 'person-1',
+        organizationId: 'org-1',
+        organizationName: 'A Real Tenant',
+        displayName: 'Owner One',
+        email: 'owner@example.edu',
+        githubHandle: null,
+        connectedAt: Date.now(),
+        createdAt: Date.now(),
+        identities: [
+          { surface: 'web', externalId: 'account-1', createdAt: Date.now() },
+        ],
+      },
+    ],
+    enrolments: [
+      {
+        courseId: 'course-1',
+        courseTitle: 'Web Design',
+        projectId: 'proj-1',
+        projectName: 'Fall 2026',
+        organizationId: 'org-1',
+        organizationName: 'A Real Tenant',
+        enroledAt: Date.now(),
+      },
+    ],
+    usage: {
+      totalCostMicros: 500_000,
+      callCount: 5,
+      hasEstimated: false,
+      bySurface: [],
+      byCourse: [
+        {
+          courseId: 'course-1',
+          courseTitle: 'Web Design',
+          organizationId: 'org-1',
+          totalCostMicros: 500_000,
+          callCount: 5,
+        },
+      ],
+      lastActiveAt: Date.now(),
+    },
+  }
+
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+  })
+
+  it('renders identity, memberships, enrolments, people and usage, each entity a link to its own screen', async () => {
+    fetchAdminAccount.mockResolvedValue(ACCOUNT_DETAIL)
+
+    renderAdmin({
+      route: { kind: 'admin-account', accountId: 'account-1' },
+    })
+
+    const detail = await screen.findByTestId('admin-account-detail-account-1')
+
+    expect(detail).toHaveTextContent('owner@example.edu')
+    // "A Real Tenant" links from three sections now, so each assertion scopes
+    // to the section it is about rather than asking `detail` for one match.
+    const organizations = within(detail).getByRole('region', {
+      name: 'Organizations',
+    })
+    expect(
+      within(organizations).getByRole('link', { name: 'A Real Tenant' })
+    ).toHaveAttribute('href', '/platform-admin/organizations/org-1')
+    // "Web Design" links twice — once from the enrolment, once from the
+    // usage-by-course breakdown — so this scopes to the enrolments section
+    // rather than asking `detail` for one link with two matches.
+    const enrolments = within(detail).getByRole('region', {
+      name: 'Enrolments',
+    })
+    expect(
+      within(enrolments).getByRole('link', { name: 'Web Design' })
+    ).toHaveAttribute('href', '/platform-admin/courses/course-1')
+    // ADMIN-11: *every* entity named on this screen is a link, not only the
+    // course — the project and organization an enrolment names are reachable
+    // without going back out through the course screen.
+    expect(
+      within(enrolments).getByRole('link', { name: 'Fall 2026' })
+    ).toHaveAttribute('href', '/platform-admin/projects/proj-1')
+    expect(
+      within(enrolments).getByRole('link', { name: 'A Real Tenant' })
+    ).toHaveAttribute('href', '/platform-admin/organizations/org-1')
+    // The same organization is a link in the people section too, where a
+    // connected-only tenant may appear that the memberships section never
+    // names.
+    const peopleSection = within(detail).getByRole('region', { name: 'People' })
+    expect(
+      within(peopleSection).getByRole('link', { name: 'A Real Tenant' })
+    ).toHaveAttribute('href', '/platform-admin/organizations/org-1')
+    expect(detail).toHaveTextContent('$0.50 spent')
+  })
+
+  it('an account id the API does not recognise (404) renders not-found', async () => {
+    fetchAdminAccount.mockRejectedValue(
+      new ApiError(404, { error: 'account_not_found' })
+    )
+
+    renderAdmin({
+      route: { kind: 'admin-account', accountId: 'missing' },
+    })
+
+    expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
+  })
+})
+
+// ADMIN-10 — `AdminNav` carries Users between Courses and Deletion
+// history, and marks it current from either the list or its own account
+// detail screen.
+describe('Admin — ADMIN-10’s Users nav item', () => {
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchAdminAccounts.mockResolvedValue({ accounts: [] })
+  })
+
+  it('appears between Courses and Deletion history, and is marked current on the Users screen', async () => {
+    renderAdmin({ route: { kind: 'admin-accounts' } })
+
+    const nav = await screen.findByRole('navigation', { name: 'Console' })
+    const links = within(nav).getAllByRole('link')
+    const labels = links.map((link) => link.textContent)
+    expect(labels).toEqual([
+      'Organizations',
+      'Courses',
+      'Users',
+      'Deletion history',
+    ])
+    expect(within(nav).getByRole('link', { name: 'Users' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
   })
 })

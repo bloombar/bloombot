@@ -32,6 +32,12 @@ const ROUTES: Route[] = [
   { kind: 'admin-courses' },
   // ADMIN-6 — one course's own read-only settings, reached from the list.
   { kind: 'admin-course', courseId: 'course-1' },
+  // ADMIN-8 — a project's own console screen.
+  { kind: 'admin-project', projectId: 'proj-1' },
+  // ADMIN-10 — the Users list.
+  { kind: 'admin-accounts' },
+  // ADMIN-11 — one account's own console screen.
+  { kind: 'admin-account', accountId: 'account-1' },
   { kind: 'discord-callback' },
   { kind: 'sign-in', token: 'tok_abc123' },
   { kind: 'connect', organizationId: 'org-1' },
@@ -129,6 +135,9 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/platform-admin/deletions',
     '/platform-admin/courses',
     '/platform-admin/courses/course-1',
+    '/platform-admin/projects/proj-1',
+    '/platform-admin/users',
+    '/platform-admin/users/account-1',
   ])('parses the exact literal path %s', (path) => {
     expect(parseRoute(path).kind).not.toBe('not-found')
   })
@@ -218,6 +227,11 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     // segment; a second is one too many, the same "no slot for it" rule
     // every other over-long path here already falls through on.
     '/platform-admin/courses/course-1/extra',
+    // ADMIN-8/ADMIN-10/ADMIN-11 — the same "no slot for a second/no id at
+    // all" rules as their siblings above.
+    '/platform-admin/projects',
+    '/platform-admin/projects/proj-1/extra',
+    '/platform-admin/users/account-1/extra',
   ])('malformed or unknown path %s lands on not-found', (path) => {
     expect(parseRoute(path)).toEqual({ kind: 'not-found' })
   })

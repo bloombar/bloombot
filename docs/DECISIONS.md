@@ -13373,3 +13373,48 @@ already established for ADMIN-4/ADMIN-5. `projects.ts#findProjectOrganizationId`
 takes no organization id to scope by at all (the same class `course-approval.ts#findCourseOrganizationId`
 already is), since `GET /admin/projects/:projectId` reaches a project directly by id with no organization
 already in hand.
+
+## D-127 — `apps/web`: ADMIN-7..11 — the console's five new full-page screens, and splitting `pages/Admin.tsx` into a directory
+
+**`pages/Admin.tsx` became a directory, `pages/admin/`, one module per screen, rather than staying one file.**
+The brief's own number — this slice roughly doubles what was already a 1300+ line file — was the forcing
+function, but the split follows a line this codebase already drew for `pages/CourseEditor.tsx`'s own five
+tabs (`components/` holding one file per tab's panel): a screen this size earns its own module the moment a
+second screen needs the same shared pieces (`formatMicros`/`formatBySurface`/`ReadOnlyField`, pulled into
+`pages/admin/shared.tsx`) without either copying them or reaching into the other screen's own file to import
+them. `pages/Admin.tsx` itself stays the router/fetch shell the brief asked for — one `useState`/`useCallback`
+pair and one out-of-order-guarding `useRef` per read, one `useEffect` choosing which fires for the route
+that is current, and the handlers (`handleDelete`, `handleApprove`, `handleUnapprove`) every screen still
+shares — never a screen's own markup.
+
+**`'admin-organization'` moved from `.find()`-out-of-a-list to its own fetch, the identical shape ADMIN-6
+already established for `'admin-course'`.** Before this slice, `OrganizationDetail` searched the same
+`fetchAdminOrganizations()` result the list itself already held — cheap, but that list row never carried a
+project, a course or a member at all, so once ADMIN-7 needed all three there was nothing left to search.
+`refreshOrganizationDetail` now guards against the identical out-of-order race `refreshCourseDetail` already
+guards against (a slow read for organization A landing after a fast one for B already has), documented once
+on `currentCourseIdRef` and referenced, not re-explained, by its three new siblings
+(`currentOrganizationIdRef`/`currentProjectIdRef`/`currentAccountIdRef`).
+
+**Four new modules render five new/changed screens** — `OrganizationDetail.tsx` (ADMIN-7, rewritten),
+`ProjectDetail.tsx` (ADMIN-8, new), `CourseDetail.tsx` (ADMIN-6+ADMIN-9, widened), `AccountsList.tsx`
+(ADMIN-10, new) and `AccountDetail.tsx` (ADMIN-11, new) — each a `<dl>` summary block plus
+`<section aria-label="…">` groups with real headings, the layout the brief calls for, reusing the existing
+`Button`/`Skeleton`/`NotFound`/`AppLink` components rather than inventing screen-specific ones. Every link
+between entities (`AppLink`, never a hand-built `href`) matches the brief's own "every project, course and
+account named on this screen is a link to that entity's own screen" for each of the three new screens in
+turn.
+
+**A judgment call the brief did not settle: `OrganizationsList` and `AdminNav` both gained a "Users" entry
+pointing at `'admin-accounts'`.** The brief asked only for `AdminNav` to carry it; `OrganizationsList`
+already duplicates its own Courses/Deletion-history destinations as inline buttons below the list (predating
+this slice), so leaving Users out of that row alone — reachable from the nav but not from the same row its
+two siblings sit in — would have been an inconsistency nothing asked for. Added for the same reason those
+two already exist there: an operator does not have to know the nav exists to find the console's other
+screens.
+
+**Delete stayed on `OrganizationDetail`, unchanged, though the brief's own "what each screen must show" list
+for ADMIN-7 does not mention it.** `admin.test.tsx`'s pre-existing "a deletion started from an organization's
+own screen returns to the list" test (and the matching WEB-33 module-comment claim) already depended on it
+being there; removing it would have been scope the brief did not ask for, on a screen ADMIN-5 already visits
+by a different address.

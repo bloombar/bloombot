@@ -3541,6 +3541,12 @@ window — the rows, in foreign-key-safe order, and the bytes: attachment files,
 provider's own file objects and vector stores, through the same content-deletion job that already removes them
 today rather than a second implementation.
 
+The window is the deployment's to choose, not the code's: `DELETED_DATA_RETENTION_DAYS` is read from the
+deployment's configuration alongside every other setting (CFG-1), documented in `env.example`, and defaults to
+**30 days** when unset — long enough that a mis-click is recoverable across a weekend and a holiday, short
+enough to be a retention answer an institution can accept. Whatever it is set to is what the privacy policy
+says, so the two cannot drift.
+
 The sweep is a job like any other, so its runs, failures and retries are visible on the Jobs screen and in the
 queue's own retry policy rather than in a log nobody reads. It schedules its own next run, and one is queued
 when the worker starts, so a deployment that has been down does not silently stop deleting. A retention window
@@ -3587,3 +3593,9 @@ nothing else: no other person's, no other course's, and nothing about the course
 naming the course, and it is the same soft delete as everything else — reversible for the window, then swept.
 
 A person who has asked nothing in the course is offered nothing to delete.
+
+#### WEB-74 A course's Discord tab names the server, not only its id
+
+The Discord server chooser in a course's settings lists each of the organization's connected servers by the
+name WEB-68 records, falling back to the id for a server connected before that name was captured. A course
+is assigned to a server by choosing a name an instructor recognises rather than by matching a snowflake.

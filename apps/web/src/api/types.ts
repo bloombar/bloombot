@@ -224,6 +224,12 @@ export interface DiscordServerBindingSummary {
   installedByAccountId: string
   installedAt: number
   removedAt: number | null
+  // WEB-68 — the guild's display name, recorded at install time
+  // (`packages/db`'s own `discord_server_bindings.server_name`). Null for a
+  // binding installed before this column existed, and left that way rather
+  // than backfilled — `InstallButton.tsx`'s `DiscordServerRow` falls back to
+  // the id when this is null.
+  serverName: string | null
 }
 
 /**

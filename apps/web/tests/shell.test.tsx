@@ -771,6 +771,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       installedByAccountId: 'account-other',
       installedAt: Date.now() - 86_400_000,
       removedAt: null,
+      serverName: null,
     }
 
     it('a reload with an existing binding shows it as installed, with Remove offered — this is the defect', async () => {
@@ -782,13 +783,17 @@ describe('Shell (WEB-3, WEB-4)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
       // A fetched binding this session never created still renders as
-      // installed. TEN-9 — "Install to Discord" is offered too, now,
-      // alongside an existing binding: an organization can bind more than
-      // one server, so this is "install another," not a state this screen
-      // used to treat as mutually exclusive with "already installed."
+      // installed. TEN-9 — installing another is offered too, now, alongside
+      // an existing binding: an organization can bind more than one server,
+      // so this is "install another," not a state this screen used to treat
+      // as mutually exclusive with "already installed." WEB-68 — and it says
+      // so: the label reads "Install to another Discord server" once one
+      // already exists.
       expect(await screen.findByText(/guild-99/)).toBeInTheDocument()
       expect(
-        screen.getByRole('button', { name: 'Install to Discord' })
+        screen.getByRole('button', {
+          name: 'Install to another Discord server',
+        })
       ).toBeInTheDocument()
 
       // Remove is reachable for a binding this session did not create —
@@ -808,6 +813,21 @@ describe('Shell (WEB-3, WEB-4)', () => {
       expect(
         await screen.findByRole('button', { name: 'Install to Discord' })
       ).toBeInTheDocument()
+    })
+
+    // WEB-68 — the name this file's own `listDiscordServers` mock returns
+    // reaches the rendered row, not just the id.
+    it('WEB-68: a binding carrying a stored name shows it in the row', async () => {
+      listDiscordServers.mockResolvedValue([
+        { ...EXISTING_BINDING, serverName: 'Study Hall' },
+      ])
+
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
+      openDrawer()
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+
+      expect(await screen.findByText('Study Hall')).toBeInTheDocument()
+      expect(screen.getByText('guild-99')).toBeInTheDocument()
     })
 
     it('a lookup in flight does not render "Install"', async () => {
@@ -872,6 +892,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       installedByAccountId: 'account-other',
       installedAt: Date.now() - 86_400_000,
       removedAt: null,
+      serverName: null,
     }
     const BINDING_B: DiscordServerBindingSummary = {
       serverId: 'guild-b',
@@ -879,6 +900,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       installedByAccountId: 'account-other',
       installedAt: Date.now() - 43_200_000,
       removedAt: null,
+      serverName: null,
     }
 
     it('lists every active binding with its own Remove, and still offers installing another', async () => {
@@ -890,11 +912,15 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       expect(await screen.findByText(/guild-a/)).toBeInTheDocument()
       expect(screen.getByText(/guild-b/)).toBeInTheDocument()
-      // One "Install to Discord" pair per binding — never one Install/Remove
-      // pair for the whole organization the way this screen used to be.
+      // One Remove per binding — never one Install/Remove pair for the whole
+      // organization the way this screen used to be. WEB-68 — and with two
+      // active bindings already, the install button still reads "another,"
+      // not the bare "Install to Discord" this screen shows with none.
       expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(2)
       expect(
-        screen.getByRole('button', { name: 'Install to Discord' })
+        screen.getByRole('button', {
+          name: 'Install to another Discord server',
+        })
       ).toBeInTheDocument()
     })
 
@@ -1110,6 +1136,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
           installedByAccountId: 'account-1',
           installedAt: Date.now(),
           removedAt: null,
+          serverName: null,
         },
       ])
       // Flush the microtask queue so the stale response's `.then` — the one

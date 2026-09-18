@@ -37,9 +37,17 @@ export const PENDING_INSTALL_ORG_KEY = 'bloombot:pendingInstallOrganizationId'
 
 export interface InstallButtonProps {
   organizationId: string
+  // WEB-68 — whether this organization already holds at least one active
+  // Discord binding (`pages/Shell.tsx`'s own `installedServerIds`).
+  // Installing again *adds* a server rather than replacing the one already
+  // there, so the label says so once there is one to add to.
+  hasExistingServer: boolean
 }
 
-export function InstallButton({ organizationId }: InstallButtonProps) {
+export function InstallButton({
+  organizationId,
+  hasExistingServer,
+}: InstallButtonProps) {
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [starting, setStarting] = useState(false)
 
@@ -68,7 +76,13 @@ export function InstallButton({ organizationId }: InstallButtonProps) {
         onClick={() => void handleClick()}
         disabled={starting}
       >
-        {starting ? 'Starting…' : 'Install to Discord'}
+        {starting
+          ? 'Starting…'
+          : // WEB-68 — installing again adds a server, it does not replace
+            // the one(s) already there, so the label says so once one exists.
+            hasExistingServer
+            ? 'Install to another Discord server'
+            : 'Install to Discord'}
       </Button>
       {error && <ErrorMessage error={error} />}
     </div>
@@ -78,6 +92,11 @@ export function InstallButton({ organizationId }: InstallButtonProps) {
 export interface DiscordServerRowProps {
   /** The active binding's own server id — always defined; a row is only ever rendered for a binding that exists (`pages/Shell.tsx`'s own `installedServerIds`). */
   serverId: string
+  // WEB-68 — the guild's own display name (`DiscordServerBindingSummary.serverName`).
+  // `null` for a binding recorded before this column existed — see
+  // `api/types.ts`'s own comment — and this row falls back to the id, the
+  // same text it showed before this slice.
+  serverName: string | null
   onRemove: () => void
   removing: boolean
 }
@@ -91,6 +110,7 @@ export interface DiscordServerRowProps {
  */
 export function DiscordServerRow({
   serverId,
+  serverName,
   onRemove,
   removing,
 }: DiscordServerRowProps) {
@@ -113,8 +133,21 @@ export function DiscordServerRow({
 
   return (
     <div className="flex items-center gap-3" data-testid="install-button">
+      {/* WEB-68 — the guild's own name leads, with the id kept alongside
+          as secondary context so an operator can still copy the snowflake.
+          A binding with no stored name (never reinstalled since this
+          slice) falls back to the id exactly as this row read before. */}
       <p className="text-sm text-neutral-700">
-        Installed — server <code>{serverId}</code>
+        {serverName ? (
+          <>
+            Installed — <span className="font-medium">{serverName}</span>{' '}
+            <code>{serverId}</code>
+          </>
+        ) : (
+          <>
+            Installed — server <code>{serverId}</code>
+          </>
+        )}
       </p>
       <Button
         variant="destructive"

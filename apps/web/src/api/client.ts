@@ -66,6 +66,7 @@ import type {
   Project,
   ProjectDeletionPreview,
   RevealedCourseJoinLink,
+  RosterImportAcknowledgement,
   SetSpendingCapResult,
   SignedInResponse,
   TenantDeletion,
@@ -940,20 +941,41 @@ export function reinstateCourseEnrolment(
  * field already populated with a default value is asserting something
  * about what the request will do, and this call site is what keeps that
  * assertion true.
+ *
+ * ROST-20: `filename`/`acknowledgementVersion` travel with every dispatch
+ * too, both required — `roster.import`'s own input schema refuses a call
+ * missing either, the same "an unversioned record is what this exists to
+ * prevent" reasoning that action's own module comment gives.
  */
 export function importRoster(
   organizationId: string,
   courseId: string,
   csvText: string,
   createStudentCategories: boolean,
-  studentCategoryBaseName: string
+  studentCategoryBaseName: string,
+  filename: string,
+  acknowledgementVersion: string
 ): Promise<{ jobId: string }> {
   return dispatchAction(organizationId, 'roster.import', {
     courseId,
     csvText,
     createStudentCategories,
     studentCategoryBaseName,
+    filename,
+    acknowledgementVersion,
   })
+}
+
+/** ROST-20: a course's own roster-import acknowledgements, newest first — `RosterImport.tsx`'s own list, below the import itself. */
+export function listRosterAcknowledgements(
+  organizationId: string,
+  courseId: string
+): Promise<RosterImportAcknowledgement[]> {
+  return dispatchAction<RosterImportAcknowledgement[]>(
+    organizationId,
+    'rosterAcknowledgements.listForCourse',
+    { courseId }
+  )
 }
 
 /** JOB-1..5: a job's current status and outcome — what a caller polls after dispatching a job-backed action such as `discordServers.scaffold`. */

@@ -7,22 +7,54 @@
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
-import type { JobStatus, RosterImportReport } from '../src/api/types.js'
+import type {
+  JobStatus,
+  RosterImportAcknowledgement,
+  RosterImportReport,
+} from '../src/api/types.js'
 import { RosterImport } from '../src/components/RosterImport.js'
 
-const { importRoster, getJobStatus } = vi.hoisted(() => ({
-  importRoster: vi.fn(),
-  getJobStatus: vi.fn(),
-}))
+const { importRoster, getJobStatus, listRosterAcknowledgements } = vi.hoisted(
+  () => ({
+    importRoster: vi.fn(),
+    getJobStatus: vi.fn(),
+    listRosterAcknowledgements: vi.fn(),
+  })
+)
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, importRoster, getJobStatus }
+  return { ...actual, importRoster, getJobStatus, listRosterAcknowledgements }
+})
+
+function acknowledgement(
+  overrides: Partial<RosterImportAcknowledgement> = {}
+): RosterImportAcknowledgement {
+  return {
+    id: 'ack-1',
+    organizationId: 'org-1',
+    courseId: 'course-1',
+    accountId: 'account-1',
+    filename: 'roster.csv',
+    jobId: 'job-1',
+    acknowledgementVersion: '2026-09-18',
+    acknowledgedAt: Date.now(),
+    ...overrides,
+  }
+}
+
+// ROST-20: every test below gets an empty list by default — the
+// `listRosterAcknowledgements` call this component now makes on mount would
+// otherwise call `.then` on `undefined` (an un-mocked `vi.fn()`'s own
+// return value) and throw for every single test in this file, not only the
+// ones this slice actually added.
+beforeEach(() => {
+  listRosterAcknowledgements.mockResolvedValue([])
 })
 
 function emptyReport(
@@ -96,6 +128,7 @@ function renderRosterImport(
   overrides: {
     pollIntervalMs?: number
     stillQueuedHintAfterMs?: number
+    viewerAccountId?: string
   } = {}
 ) {
   return render(
@@ -215,15 +248,18 @@ describe('RosterImport (WEB-21)', () => {
       fireEvent.click(checkbox)
       fireEvent.click(button)
 
-      // Same dispatch as before this slice — the acknowledgement travels
-      // with nothing added to `importRoster`'s own arguments.
+      // ROST-20: the chosen file's own name and the wording's own version
+      // travel with the dispatch too, alongside everything ROST-15 already
+      // sent.
       await waitFor(() =>
         expect(importRoster).toHaveBeenCalledWith(
           'org-1',
           'course-1',
           csvText,
           true,
-          'Test Course - STUDENTS'
+          'Test Course - STUDENTS',
+          'roster.csv',
+          '2026-09-18'
         )
       )
     })
@@ -262,7 +298,9 @@ describe('RosterImport (WEB-21)', () => {
         'course-1',
         csvText,
         true,
-        'Test Course - STUDENTS'
+        'Test Course - STUDENTS',
+        'roster.csv',
+        '2026-09-18'
       )
     )
     expect(await screen.findByText('Queued…')).toBeInTheDocument()
@@ -310,7 +348,9 @@ describe('RosterImport (WEB-21)', () => {
           'course-1',
           'First,Last,Email,Discord,GitHub\n',
           false,
-          'Test Course - STUDENTS'
+          'Test Course - STUDENTS',
+          'roster.csv',
+          '2026-09-18'
         )
       )
     })
@@ -334,7 +374,9 @@ describe('RosterImport (WEB-21)', () => {
           'course-1',
           'First,Last,Email,Discord,GitHub\n',
           true,
-          'Custom Base'
+          'Custom Base',
+          'roster.csv',
+          '2026-09-18'
         )
       )
     })
@@ -436,7 +478,9 @@ describe('RosterImport (WEB-21)', () => {
           'course-1',
           'First,Last,Email,Discord,GitHub\n',
           true,
-          'Test Course - STUDENTS'
+          'Test Course - STUDENTS',
+          'roster.csv',
+          '2026-09-18'
         )
       )
     })
@@ -469,7 +513,9 @@ describe('RosterImport (WEB-21)', () => {
           'course-1',
           'First,Last,Email,Discord,GitHub\n',
           false,
-          'Test Course - STUDENTS'
+          'Test Course - STUDENTS',
+          'roster.csv',
+          '2026-09-18'
         )
       )
     })
@@ -764,6 +810,105 @@ describe('RosterImport (WEB-21)', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Not found, or you do not have access to it.'
+    )
+  })
+})
+
+describe('ROST-20 — the roster acknowledgement is recorded, and readable afterwards', () => {
+  it("renders the course's own acknowledgements, newest first", async () => {
+    listRosterAcknowledgements.mockResolvedValue([
+      acknowledgement({
+        id: 'ack-2',
+        filename: 'second.csv',
+        acknowledgedAt: 2000,
+      }),
+      acknowledgement({
+        id: 'ack-1',
+        filename: 'first.csv',
+        acknowledgedAt: 1000,
+      }),
+    ])
+
+    renderRosterImport()
+
+    const list = await screen.findByTestId('roster-acknowledgements')
+    const entries = list.querySelectorAll('li')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]).toHaveTextContent('second.csv')
+    expect(entries[1]).toHaveTextContent('first.csv')
+  })
+
+  // Rework finding (cheap-fix): `entry.accountId` used to render as a bare
+  // UUID even for the instructor reading their own acknowledgement — this
+  // component has no read that turns an account id into an email or display
+  // name (its own doc comment on the D-54 gap), so the viewer's own entry
+  // now reads "you" instead, and only a peer's entry still falls back to the
+  // bare id.
+  it('names the viewer\'s own acknowledgement "you", and a peer\'s by their bare account id', async () => {
+    listRosterAcknowledgements.mockResolvedValue([
+      acknowledgement({ id: 'ack-1', accountId: 'account-1' }),
+      acknowledgement({ id: 'ack-2', accountId: 'account-2' }),
+    ])
+
+    renderRosterImport({ viewerAccountId: 'account-1' })
+
+    const list = await screen.findByTestId('roster-acknowledgements')
+    const entries = list.querySelectorAll('li')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]).toHaveTextContent('acknowledged by you')
+    expect(entries[1]).toHaveTextContent('acknowledged by account-2')
+  })
+
+  it('shows an empty state when the course has no acknowledgements yet', async () => {
+    listRosterAcknowledgements.mockResolvedValue([])
+
+    renderRosterImport()
+
+    expect(
+      await screen.findByText(
+        'No roster has been imported into this course yet.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('sends the acknowledgement version and the chosen file name with the import', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(job({ status: 'pending' }))
+    const csvText = 'First,Last,Email,Discord,GitHub\n'
+
+    renderRosterImport()
+    chooseFile(rosterFile(csvText))
+    acknowledge()
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    await waitFor(() =>
+      expect(importRoster).toHaveBeenCalledWith(
+        'org-1',
+        'course-1',
+        csvText,
+        true,
+        'Test Course - STUDENTS',
+        'roster.csv',
+        '2026-09-18'
+      )
+    )
+  })
+
+  it('refreshes the acknowledgement list once an import starts', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(job({ status: 'pending' }))
+
+    renderRosterImport()
+    const callsBeforeImport = listRosterAcknowledgements.mock.calls.length
+
+    chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    await waitFor(() =>
+      expect(listRosterAcknowledgements.mock.calls.length).toBeGreaterThan(
+        callsBeforeImport
+      )
     )
   })
 })

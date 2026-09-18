@@ -126,6 +126,7 @@ describe('ACT-6 — machine-readable catalog', () => {
         'jobs.get',
         'jobs.list',
         'roster.import',
+        'rosterAcknowledgements.listForCourse',
         'courseAttachments.attach',
         'courseAttachments.list',
         'courseAttachments.detach',

@@ -763,6 +763,12 @@ function ShellInner({
           route={route}
           navigate={navigate}
           onOpenChat={(courseId) => openChatForCourse(courseId)}
+          // Rework finding (cheap-fix) — the same `viewerAccountId={account.id}`
+          // shape `Team` above already takes (ENRL-11), threaded through to
+          // `CourseEditor`'s own Roster tab so a roster-import
+          // acknowledgement can name the viewer's own entry "you" rather
+          // than a bare account id.
+          viewerAccountId={account.id}
         />
       ) : (
         // Defensive, not expected (this codebase's own "defended, not

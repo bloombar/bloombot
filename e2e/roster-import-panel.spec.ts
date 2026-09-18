@@ -241,6 +241,14 @@ test('an instructor imports a roster through the panel; an unparseable row is re
       await expect(report).toContainText('Line 3:')
       await expect(report).toContainText('1 added')
 
+      // ROST-20: the import that just ran wrote an acknowledgement — the
+      // panel's own list (below the import) shows the file it accompanied,
+      // read back through `rosterAcknowledgements.listForCourse` rather
+      // than inferred from the report above.
+      await expect(page.getByTestId('roster-acknowledgements')).toContainText(
+        'roster.csv'
+      )
+
       // Read back directly: exactly the one resolvable row was enrolled.
       const enrolledAfterFirstImport = enrolments.listPeopleForCourse(
         organizationId,

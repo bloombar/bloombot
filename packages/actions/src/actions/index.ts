@@ -59,7 +59,10 @@ import {
   scaffoldDiscordServerAction,
 } from './discord-servers.js'
 import { getJobAction, listJobsAction } from './jobs.js'
-import { importRosterAction } from './roster.js'
+import {
+  importRosterAction,
+  listRosterAcknowledgementsAction,
+} from './roster.js'
 import { organizationUsageAction, setSpendingCapAction } from './cost-ledger.js'
 import {
   createCourseJoinLinkAction,
@@ -153,7 +156,10 @@ export {
   scaffoldDiscordServerAction,
 } from './discord-servers.js'
 export { getJobAction, listJobsAction, type JobStatus } from './jobs.js'
-export { importRosterAction } from './roster.js'
+export {
+  importRosterAction,
+  listRosterAcknowledgementsAction,
+} from './roster.js'
 export {
   organizationUsageAction,
   setSpendingCapAction,
@@ -291,6 +297,7 @@ export function createPlatformRegistry(options?: {
   registry.register(getJobAction)
   registry.register(listJobsAction)
   registry.register(importRosterAction)
+  registry.register(listRosterAcknowledgementsAction)
   registry.register(createAttachCourseAttachmentAction(attachmentStorage))
   registry.register(listCourseAttachmentsAction)
   registry.register(detachCourseAttachmentAction)

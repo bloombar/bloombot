@@ -595,6 +595,24 @@ export interface RosterImportReport {
 }
 
 /**
+ * ROST-20 — one recorded acknowledgement of a roster import: who
+ * acknowledged, when, the file, and which wording they were shown
+ * (`acknowledgementVersion`). Mirrors `@bloombot/db`'s own
+ * `rosterImportAcknowledgements.RosterImportAcknowledgement` by hand — what
+ * `rosterAcknowledgements.listForCourse` returns, newest first.
+ */
+export interface RosterImportAcknowledgement {
+  id: string
+  organizationId: string
+  courseId: string
+  accountId: string
+  filename: string
+  jobId: string
+  acknowledgementVersion: string
+  acknowledgedAt: number
+}
+
+/**
  * WEB-10 — one message on a chat transcript (`GET .../chat/courses/:courseId/messages`),
  * and the shape `POST .../messages` appends locally once its own
  * `ChatAnswerResult` confirms the reply.
@@ -868,6 +886,16 @@ export interface AdminCoursePerson {
   callCount: number
 }
 
+/** ROST-20 — one of a course's own roster-import acknowledgements, the acknowledging account's email resolved. Mirrors `apps/api`'s own `AdminRosterAcknowledgement` by hand. */
+export interface AdminRosterAcknowledgement {
+  id: string
+  accountId: string
+  accountEmail: string | null
+  filename: string
+  acknowledgementVersion: string
+  acknowledgedAt: number
+}
+
 /**
  * ADMIN-6 — `GET /admin/courses/:courseId`'s own shape: one course's
  * settings, read-only, grouped by `pages/Admin.tsx` into General, AI and
@@ -909,6 +937,8 @@ export interface AdminCourseDetail {
     bySurface: CostBySurface[]
   }
   people: AdminCoursePerson[]
+  // ROST-20 — the course's own roster-import acknowledgements.
+  rosterAcknowledgements: AdminRosterAcknowledgement[]
 }
 
 /** ADMIN-10 — one row of `GET /admin/accounts`'s own list. Mirrors `apps/api`'s own `AdminAccountSummary` by hand. */
@@ -968,6 +998,18 @@ export interface AdminAccountEnrolment {
   enroledAt: number
 }
 
+/** ROST-20 — one acknowledgement `AdminAccountDetail.rosterAcknowledgements` names, across every course and organization. Mirrors `apps/api`'s own `AdminAccountRosterAcknowledgement` by hand. */
+export interface AdminAccountRosterAcknowledgement {
+  id: string
+  courseId: string
+  courseTitle: string
+  organizationId: string
+  organizationName: string
+  filename: string
+  acknowledgementVersion: string
+  acknowledgedAt: number
+}
+
 /** ADMIN-11 — an account's own usage across every organization. Mirrors `@bloombot/db`'s own `costLedger.AccountUsageSummary` by hand. */
 export interface AdminAccountUsageSummary {
   totalCostMicros: number
@@ -999,6 +1041,8 @@ export interface AdminAccountDetail {
   people: AdminAccountPerson[]
   enrolments: AdminAccountEnrolment[]
   usage: AdminAccountUsageSummary
+  // ROST-20 — every roster import this account has ever acknowledged.
+  rosterAcknowledgements: AdminAccountRosterAcknowledgement[]
 }
 
 /** ADMIN-5's own "names exactly what will be deleted before it happens". */

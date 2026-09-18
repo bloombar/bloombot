@@ -688,6 +688,7 @@ describe('Admin — WEB-53’s Courses screen', () => {
       approvalEvents: [],
       usage: { totalCostMicros: 0, callCount: 0, bySurface: [] },
       people: [],
+      rosterAcknowledgements: [],
     })
 
     renderAdmin({ route: { kind: 'admin-courses' } })
@@ -735,6 +736,7 @@ describe('Admin — WEB-54’s console navigation and health footer', () => {
       approvalEvents: [],
       usage: { totalCostMicros: 0, callCount: 0, bySurface: [] },
       people: [],
+      rosterAcknowledgements: [],
     })
     // ADMIN-7 — `'admin-organization'` now fires its own read too.
     fetchAdminOrganization.mockResolvedValue(ORG_DETAIL)
@@ -950,6 +952,17 @@ describe('Admin — ADMIN-6’s read-only course settings screen', () => {
         accountId: 'account-2',
         totalCostMicros: 100_000,
         callCount: 1,
+      },
+    ],
+    // ROST-20 — the course's own roster-import acknowledgements.
+    rosterAcknowledgements: [
+      {
+        id: 'ack-1',
+        accountId: 'account-1',
+        accountEmail: 'instructor@bloombot.example',
+        filename: 'roster.csv',
+        acknowledgementVersion: '2026-09-18',
+        acknowledgedAt: Date.now(),
       },
     ],
   }
@@ -1206,6 +1219,21 @@ describe('Admin — ADMIN-6’s read-only course settings screen', () => {
     expect(
       within(people).getByRole('link', { name: 'QA Student' })
     ).toHaveAttribute('href', '/platform-admin/users/account-2')
+  })
+
+  // ROST-20 — the course's own roster-import acknowledgements, alongside
+  // the approval history.
+  it('shows the course’s own roster-import acknowledgements', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+
+    const detail = await screen.findByTestId('admin-course-detail-course-1')
+    const acknowledgements = within(detail).getByRole('region', {
+      name: 'Roster acknowledgements',
+    })
+    expect(acknowledgements).toHaveTextContent('roster.csv')
+    expect(acknowledgements).toHaveTextContent('instructor@bloombot.example')
   })
 })
 
@@ -1479,6 +1507,19 @@ describe('Admin — ADMIN-11’s account console screen', () => {
       ],
       lastActiveAt: Date.now(),
     },
+    // ROST-20 — every roster import this account has acknowledged.
+    rosterAcknowledgements: [
+      {
+        id: 'ack-1',
+        courseId: 'course-1',
+        courseTitle: 'Web Design',
+        organizationId: 'org-1',
+        organizationName: 'A Real Tenant',
+        filename: 'roster.csv',
+        acknowledgementVersion: '2026-09-18',
+        acknowledgedAt: Date.now(),
+      },
+    ],
   }
 
   beforeEach(() => {
@@ -1544,6 +1585,25 @@ describe('Admin — ADMIN-11’s account console screen', () => {
     })
 
     expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
+  })
+
+  // ROST-20 — every acknowledgement this account has made, each course
+  // linking to its own console screen.
+  it('shows the account’s own roster-import acknowledgements, its course a link to its own screen', async () => {
+    fetchAdminAccount.mockResolvedValue(ACCOUNT_DETAIL)
+
+    renderAdmin({
+      route: { kind: 'admin-account', accountId: 'account-1' },
+    })
+
+    const detail = await screen.findByTestId('admin-account-detail-account-1')
+    const acknowledgements = within(detail).getByRole('region', {
+      name: 'Roster acknowledgements',
+    })
+    expect(acknowledgements).toHaveTextContent('roster.csv')
+    expect(
+      within(acknowledgements).getByRole('link', { name: 'Web Design' })
+    ).toHaveAttribute('href', '/platform-admin/courses/course-1')
   })
 })
 

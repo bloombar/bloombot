@@ -4865,7 +4865,7 @@
   section: §49 Deleting, Reversibly, Then Permanently
   family: DATA
   phase: 44
-  status: In progress
+  status: Done
   review: false
 - id: DATA-9
   title: Nothing deleted is ever read back
@@ -4897,7 +4897,7 @@
   section: §49 Deleting, Reversibly, Then Permanently
   family: PROJ
   phase: 44
-  status: In progress
+  status: Done
   review: false
 - id: TEN-10
   title: A tenant's deletion covers everything that belongs to the tenant

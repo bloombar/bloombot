@@ -129,6 +129,7 @@ import {
   getCourse,
   listDiscordServers,
   saveCourse,
+  softDeleteCourse,
 } from '../api/client.js'
 import type { SaveCourseCategoryInput, SaveCourseInput } from '../api/client.js'
 import { isActiveDiscordBinding } from '../api/types.js'
@@ -589,7 +590,15 @@ export function CourseEditor({
   const formDirty = useFormDirty(baseline, form)
   const isDirty = formDirty || instructionsDirty
   const { confirmDiscard } = useUnsavedChangesGuard(isDirty)
-  const { confirm, choose } = useModal()
+  const { confirm, choose, prompt } = useModal()
+  // WEB-72/DATA-7 — the Danger zone's own busy/error state, separate from
+  // this form's own `saveError` (below) — a delete is a different async
+  // write than a save, the same split every other Danger zone in this
+  // slice already holds between its own state and its screen's other ones.
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<ApiError | undefined>(
+    undefined
+  )
   // The handles `components/CourseInstructions.tsx` registers, so the tab
   // prompt's own Save/Discard can reach an unsaved instructions edit —
   // that section owns its text and its own save (its module comment), so
@@ -1364,6 +1373,56 @@ export function CourseEditor({
     if (await confirmDiscard()) onCancel()
   }
 
+  /**
+   * WEB-72/DATA-7 — delete this course: asks first, naming it and gating
+   * on typing its own title exactly (`form.title` — the same typed-name
+   * discipline `components/CourseRows.tsx#handleDelete`/
+   * `hooks/useProjectMenu.tsx` already apply to a course/project row).
+   * Reversible for the deployment's retention window, then permanent —
+   * worded that way, not "cannot be undone" (this Danger zone's own
+   * `courses.softDelete`, distinct from `CourseRows.tsx`'s own
+   * `courses.delete`, PROJ-8's permanent wipe). Only ever reached once
+   * `courseId !== undefined` (this file's own module comment on why the
+   * tabbed layout, and so this Danger zone, only renders for an existing
+   * course) — asserted, not merely assumed, since nothing about this
+   * function's own type narrows that for it the way the render branch
+   * above does.
+   */
+  const handleDelete = async () => {
+    if (courseId === undefined) return
+    const typed = await prompt({
+      title: `Delete ${form.title || 'this course'}?`,
+      description:
+        `This deletes ${form.title || 'this course'}. It is reversible ` +
+        'for a while, and permanent after that. Type the course’s title ' +
+        'to confirm.',
+      label: 'Course title',
+      placeholder: form.title,
+      confirmLabel: 'Delete course',
+      destructive: true,
+      validate: (value) =>
+        value === form.title ? undefined : 'Type the title exactly to confirm.',
+    })
+    if (typed === undefined) return
+
+    setDeleteError(undefined)
+    setDeleting(true)
+    try {
+      await softDeleteCourse(organizationId, courseId)
+      // The course this screen was editing is gone — the same "must not
+      // strand the caller on the thing they just deleted" reasoning
+      // `handleCancel` above already reaches through `onCancel`, which
+      // `pages/ProjectsPanel.tsx` wires to this project's own course list
+      // (that file's own module comment).
+      onCancel()
+    } catch (caught) {
+      if (caught instanceof ApiError) setDeleteError(caught)
+      else throw caught
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   // WEB-19: `useCallback` so `CourseInstructions`'s own `useEffect`
   // (`onDirtyChange` in its dependency array) does not re-run on every
   // render of this component for no reason — a new inline arrow function
@@ -2088,6 +2147,36 @@ export function CourseEditor({
                     courseId={courseId}
                   />
                 </section>
+
+                {/* WEB-72 — the last section on this tab, visibly
+                    separated, holding this course's own delete and
+                    nothing else. Owner-gated (`isOwner`, this component's
+                    own prop) — the server's own check
+                    (`courses.softDelete`) refuses a non-owner regardless,
+                    the same "offering a control the server would always
+                    refuse teaches nothing but a click that fails" reasoning
+                    `components/Team.tsx`'s own Danger zone already gives. */}
+                {isOwner && (
+                  <section
+                    aria-label="Danger zone"
+                    className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
+                  >
+                    <h2 className="text-section-title font-semibold text-danger-700">
+                      Danger zone
+                    </h2>
+                    {deleteError && <ErrorMessage error={deleteError} />}
+                    <Button
+                      variant="destructive"
+                      icon={
+                        <DeleteIcon aria-hidden="true" className="size-4" />
+                      }
+                      onClick={() => void handleDelete()}
+                      disabled={deleting}
+                    >
+                      {deleting ? 'Deleting…' : 'Delete course'}
+                    </Button>
+                  </section>
+                )}
               </>
             )}
           </div>

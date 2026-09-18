@@ -1743,3 +1743,286 @@ describe('ADMIN-11 — an account has its own console screen', () => {
     })
   })
 })
+
+// WEB-72/DATA-7 — the console's own soft-delete for a course: reversible
+// for the deployment's retention window, then permanent, distinct from
+// PROJ-8's own permanent `courses.delete` (never reached from this
+// console) and from ADMIN-5's own tenant wipe (above).
+describe('WEB-72/DATA-7 — the console soft-deletes a course', () => {
+  it('refuses when the confirmation name does not match, and deletes nothing (409)', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/courses/${courseId}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'the wrong title entirely' })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toEqual({ error: 'confirmation_name_mismatch' })
+    expect(
+      coursesRepo.getCourse(organizationId, courseId, testDb.db)
+    ).toBeDefined()
+  })
+
+  it('marks the course deleted once the confirmation name matches exactly, and it answers nothing afterward (DATA-9)', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/courses/${courseId}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'Web Design' })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ deleted: true })
+    // DATA-9 — an ordinary read excludes it; still there at the database
+    // level (DATA-7's own "not irrecoverable"), just answering nothing.
+    expect(
+      coursesRepo.getCourse(organizationId, courseId, testDb.db)
+    ).toBeUndefined()
+
+    const stillReachable = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(stillReachable.status).toBe(404)
+  })
+
+  it('404s on a course id that does not exist', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/courses/${randomUUID()}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'anything' })
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'course_not_found' })
+  })
+
+  it('refuses a signed-out caller (401) and a non-administrator (403), deleting nothing either way', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const signedOut = await request(app)
+      .post(`/admin/courses/${courseId}/delete`)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'Web Design' })
+    expect(signedOut.status).toBe(401)
+
+    const notAdmin = await request(app)
+      .post(`/admin/courses/${courseId}/delete`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'Web Design' })
+    expect(notAdmin.status).toBe(403)
+
+    expect(
+      coursesRepo.getCourse(organizationId, courseId, testDb.db)
+    ).toBeDefined()
+  })
+})
+
+// WEB-72/DATA-7 — the console's own soft-delete for a project, the same
+// shape as a course's above.
+describe('WEB-72/DATA-7 — the console soft-deletes a project', () => {
+  it('refuses when the confirmation name does not match, and deletes nothing (409)', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, projectId } = seedTenantWithTranscript(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/projects/${projectId}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'the wrong name entirely' })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toEqual({ error: 'confirmation_name_mismatch' })
+    expect(
+      projectsRepo.getProject(organizationId, projectId, testDb.db)
+    ).toBeDefined()
+  })
+
+  it('marks the project (and its own course) deleted once the confirmation name matches exactly', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, projectId, courseId } = seedTenantWithTranscript(
+      testDb.db
+    )
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/projects/${projectId}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'Fall 2026' })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ deleted: true })
+    expect(
+      projectsRepo.getProject(organizationId, projectId, testDb.db)
+    ).toBeUndefined()
+    // The cascade `projects.ts#softDeleteProject` documents — a live
+    // course of this project carries the same tombstone.
+    expect(
+      coursesRepo.getCourse(organizationId, courseId, testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('404s on a project id that does not exist', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/projects/${randomUUID()}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'anything' })
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'project_not_found' })
+  })
+
+  it('refuses a signed-out caller (401) and a non-administrator (403), deleting nothing either way', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { organizationId, projectId } = seedTenantWithTranscript(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const signedOut = await request(app)
+      .post(`/admin/projects/${projectId}/delete`)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'Fall 2026' })
+    expect(signedOut.status).toBe(401)
+
+    const notAdmin = await request(app)
+      .post(`/admin/projects/${projectId}/delete`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'Fall 2026' })
+    expect(notAdmin.status).toBe(403)
+
+    expect(
+      projectsRepo.getProject(organizationId, projectId, testDb.db)
+    ).toBeDefined()
+  })
+})
+
+// WEB-72/DATA-7 — the console's own soft-delete for an account, the same
+// shape again, plus DATA-7's own end-every-session guarantee.
+describe('WEB-72/DATA-7 — the console soft-deletes an account', () => {
+  it('refuses when the confirmation name does not match, and deletes nothing (409)', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/accounts/${seed.studentAccountId}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'the wrong name entirely' })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toEqual({ error: 'confirmation_name_mismatch' })
+    expect(
+      accounts.getAccountById(seed.studentAccountId, testDb.db)
+    ).toBeDefined()
+  })
+
+  it('marks the account deleted once the confirmation name matches exactly, and ends every one of its sessions', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    // A live session of the account's own, the same way a real signed-in
+    // student would have one — proving DATA-7's own "ends every session
+    // belonging to this account", not only the row itself.
+    const studentSession = createSession(seed.studentAccountId, testDb.db)
+    const studentCookie = `${SESSION_COOKIE_NAME}=${studentSession.token}`
+    const app = await buildTestApp(testDb.db)
+
+    const studentAccount = accounts.getAccountById(
+      seed.studentAccountId,
+      testDb.db
+    )
+    if (!studentAccount) throw new Error('seed account missing')
+
+    const response = await request(app)
+      .post(`/admin/accounts/${seed.studentAccountId}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: studentAccount.displayName })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ deleted: true })
+    expect(
+      accounts.getAccountById(seed.studentAccountId, testDb.db)
+    ).toBeUndefined()
+
+    // The deleted account's own session no longer validates — `GET
+    // /auth/me` reports it signed out, the same as a revoked or expired
+    // token would.
+    const me = await request(app).get('/auth/me').set('Cookie', studentCookie)
+    expect(me.status).toBe(200)
+    expect((me.body as { account: unknown }).account).toBeNull()
+  })
+
+  it('404s on an account id that does not exist', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/accounts/${randomUUID()}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'anything' })
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'account_not_found' })
+  })
+
+  it('refuses a signed-out caller (401) and a non-administrator (403), deleting nothing either way', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+    const studentAccount = accounts.getAccountById(
+      seed.studentAccountId,
+      testDb.db
+    )
+    if (!studentAccount) throw new Error('seed account missing')
+
+    const signedOut = await request(app)
+      .post(`/admin/accounts/${seed.studentAccountId}/delete`)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: studentAccount.displayName })
+    expect(signedOut.status).toBe(401)
+
+    const notAdmin = await request(app)
+      .post(`/admin/accounts/${seed.studentAccountId}/delete`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: studentAccount.displayName })
+    expect(notAdmin.status).toBe(403)
+
+    expect(
+      accounts.getAccountById(seed.studentAccountId, testDb.db)
+    ).toBeDefined()
+  })
+})

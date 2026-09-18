@@ -101,3 +101,68 @@ export const renameOrganizationAction: Action<
     return renamed
   },
 }
+
+const emptyInputSchema = z.strictObject({})
+type EmptyInput = z.infer<typeof emptyInputSchema>
+
+/**
+ * WEB-72/DATA-7 — soft-delete the caller's own organization: marks it (and,
+ * with the same timestamp, every project/course/person/conversation it owns
+ * — `@bloombot/db`'s `organizations.ts#softDeleteOrganization`'s own doc
+ * comment) rather than removing it. Reversible within the deployment's
+ * retention window (a platform administrator's own restore, not built by
+ * this slice); permanent once DATA-8's sweep runs.
+ *
+ * **Only an existing owner may call this** — the identical `callerMembership`
+ * check `renameOrganizationAction` above already holds itself to, and for
+ * the identical reason (a policy cannot see the caller's own account id).
+ * A non-owner member, or a caller with no membership here at all, is
+ * refused (`ActionRefusedError`, ACT-3) — TEN-5: the refusal reads as
+ * not-found, never as "forbidden", so this action never discloses whether
+ * an organization it refuses even has an owner other than the caller.
+ *
+ * Distinct from `apps/api/src/routes/admin.ts`'s own `/organizations/:id/delete`
+ * (ADMIN-5) — that route *permanently* wipes a tenant's data, console-only,
+ * re-checking `isRequestFromPlatformAdministrator` itself; this action is
+ * the ordinary, reversible delete an owner reaches from their own
+ * organization's screen, and the two are not connected.
+ */
+export const softDeleteOrganizationAction: Action<
+  'organizations.softDelete',
+  EmptyInput,
+  Organization,
+  Organization
+> = {
+  name: 'organizations.softDelete',
+  description:
+    "Delete the caller's own organization (WEB-72/DATA-7): reversible for the deployment's retention window, then permanent. Only an existing owner may call this.",
+  inputSchema: emptyInputSchema,
+  policy: {
+    descriptor: { resource: 'organization', access: 'write' },
+    resolve: (_input, context) =>
+      organizations.getOrganizationById(context.organizationId, context.db),
+  },
+  execute: ({ organizationId, accountId, db }) => {
+    if (!accountId) throw new ActionRefusedError()
+
+    const callerMembership = memberships.getMembership(
+      organizationId,
+      accountId,
+      db
+    )
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new ActionRefusedError()
+    }
+
+    const deleted = organizations.softDeleteOrganization(
+      organizationId,
+      accountId,
+      db
+    )
+    // Same TEN-2 race every other write in this package guards against, not
+    // asserted away — the policy already proved this organization exists
+    // moments earlier.
+    if (!deleted) throw new ActionRefusedError()
+    return deleted
+  },
+}

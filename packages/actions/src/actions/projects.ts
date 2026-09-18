@@ -10,6 +10,7 @@ import {
   courses,
   courseWebSources,
   deletions,
+  memberships,
   organizations,
   projects,
   writeTransaction,
@@ -576,5 +577,67 @@ export const deleteProjectAction: Action<
     // inside that same transaction, not read separately here.
     enqueueRemoveDeletedContentBytes(organizationId, result.byteRemovals, db)
     return result.preview
+  },
+}
+
+/**
+ * WEB-72/DATA-7 — soft-delete a project: marks it (and, with the same
+ * timestamp, every live course — and each of those courses' own
+ * conversations — it owns, `@bloombot/db`'s
+ * `projects.ts#softDeleteProject`'s own doc comment) rather than removing
+ * it. Reversible within the deployment's retention window (a platform
+ * administrator's own restore, not built by this slice); permanent once
+ * DATA-8's sweep runs.
+ *
+ * Distinct from `projects.delete` (PROJ-9, above) — that action
+ * *permanently* wipes a project, no restore, ever; this one is the
+ * ordinary, reversible delete this slice's own Danger zone offers. The two
+ * are not connected, and this slice leaves `projects.delete` exactly as it
+ * was.
+ *
+ * **Only an existing owner of the organization may call this** — the same
+ * `callerMembership` check `organizations.ts#softDeleteOrganizationAction`/
+ * `courses.ts#softDeleteCourseAction` both hold themselves to, for the
+ * identical reason (a policy cannot see the caller's own account id). A
+ * non-owner member is refused (`ActionRefusedError`, ACT-3) — TEN-5: the
+ * refusal reads as not-found.
+ */
+export const softDeleteProjectAction: Action<
+  'projects.softDelete',
+  ProjectIdInput,
+  Project,
+  Project
+> = {
+  name: 'projects.softDelete',
+  description:
+    "Delete a project (WEB-72/DATA-7): reversible for the deployment's retention window, then permanent. Only an existing owner of the organization may call this.",
+  inputSchema: projectIdInputSchema,
+  policy: {
+    descriptor: { resource: 'project', access: 'write' },
+    resolve: resolveOwnProject,
+  },
+  execute: ({ organizationId, entity, accountId, db }) => {
+    if (!accountId) throw new ActionRefusedError()
+
+    const callerMembership = memberships.getMembership(
+      organizationId,
+      accountId,
+      db
+    )
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new ActionRefusedError()
+    }
+
+    const deleted = projects.softDeleteProject(
+      organizationId,
+      entity.id,
+      accountId,
+      db
+    )
+    // Same TEN-2 race every other write in this file guards against, not
+    // asserted away — the policy already proved this project exists moments
+    // earlier.
+    if (!deleted) throw new ActionRefusedError()
+    return deleted
   },
 }

@@ -194,6 +194,8 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         // PROJ-9 — added by this slice.
         'POST /organizations/:organizationId/actions/projects.previewDelete',
         'POST /organizations/:organizationId/actions/projects.delete',
+        // WEB-72/DATA-7 — added by this slice.
+        'POST /organizations/:organizationId/actions/projects.softDelete',
         'POST /organizations/:organizationId/actions/courses.save',
         // ACT-7 — added by this slice.
         'POST /organizations/:organizationId/actions/courses.updateSettings',
@@ -204,6 +206,8 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         // PROJ-8 — added by this slice.
         'POST /organizations/:organizationId/actions/courses.previewDelete',
         'POST /organizations/:organizationId/actions/courses.delete',
+        // WEB-72/DATA-7 — added by this slice.
+        'POST /organizations/:organizationId/actions/courses.softDelete',
         // PORT-1/PORT-4 — added by this slice.
         'POST /organizations/:organizationId/actions/courses.export',
         'POST /organizations/:organizationId/actions/courses.import',
@@ -258,6 +262,8 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         'POST /organizations/:organizationId/actions/transcripts.listAccessLog',
         // WEB-57 — added by this slice.
         'POST /organizations/:organizationId/actions/organizations.rename',
+        // WEB-72/DATA-7 — added by this slice.
+        'POST /organizations/:organizationId/actions/organizations.softDelete',
         'POST /organizations/:organizationId/discord-servers/install/begin',
         'POST /organizations/:organizationId/discord-servers/install/callback',
         'GET /organizations/:organizationId/transcript-exports/:exportId/download',

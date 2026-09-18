@@ -13903,3 +13903,72 @@ saved course record never becomes a name.
 
 A binding with `serverName: null` (WEB-68: never reinstalled since that slice) falls back to the id exactly
 as the option read before this slice, matching `DiscordServerRow`'s own fallback and requiring no backfill.
+
+## D-140 — `packages/actions`/`apps/api`/`apps/web`: WEB-72/WEB-73 — exposing DATA-7's soft delete: new action names, an unscoped `/account` router, and where each Danger zone actually lives
+
+PR #509 (D-137/D-138) gave `packages/db` the soft-delete/restore repo functions this slice exposes; nothing
+called any of them before this. Four judgment calls this slice's own brief left open.
+
+**New action names, not the existing `courses.delete`/`projects.delete`.** Those two names were already taken
+by PROJ-8/PROJ-9's own *permanent* wipe — reachable today from `components/CourseRows.tsx`'s and
+`hooks/useProjectMenu.tsx`'s own row-level kebab menus, with no owner-only check at all (any staff role may
+permanently delete a course or project through that surface, unchanged by this slice). This soft delete is a
+second, independent mechanism — `organizations.softDelete`, `projects.softDelete`, `courses.softDelete` — not
+a replacement for the first. The two now coexist on purpose: a course can be permanently wiped from its row's
+own kebab menu, or soft-deleted, reversibly, from its own Danger zone. That is a genuine product duplication
+this slice's own brief did not ask it to resolve, and it does not — recorded here for whoever decides whether
+`CourseRows.tsx`'s own permanent delete should be retired in favour of this one, later.
+
+**An account holder deletes their own account through a new, unscoped `/account` router
+(`apps/api/src/routes/account.ts`), not through `packages/actions`' own dispatch.** Every action's `policy`
+resolves against an `organizationId` (`policy.ts`'s own `PolicyContext`) — deleting your own account is not
+organization-scoped at all, so there is no `organizationId` a policy could meaningfully resolve against. Mounted
+unscoped, the same way `/auth`, `/join-links` and `/membership-invitations` already are, for the identical
+reason each of those routers' own module comments gives. Ends every session belonging to the account
+(`sessions.revokeAllSessionsForAccount`, the same call `accounts.ts#disableAccount` already makes) and clears
+this browser's own cookie, then the caller (`pages/Account.tsx`) calls the same `onSignedOut` adapter
+`components/SignedInChrome.tsx`'s own sign-out button already triggers, threaded through `pages/Shell.tsx`
+unchanged.
+
+**The organization's own Danger zone lives in `components/Team.tsx`, not a dedicated "organization settings"
+screen.** WEB-69 (phase 42, one tabbed Organization-settings screen replacing Discord/Team/Usage/Jobs as four
+separate tabs) is still `Backlog` — not yet built — so "the organization's own screen" the brief pointed to
+does not exist yet. `Team.tsx` is the closest existing analogue: it is already owner-gated (the grant form),
+already the screen an owner uses to administer the organization directly, and already receives
+`organizationId`/`isOwner`. `pages/Shell.tsx` now also threads `organizationName` (resolved from
+`account.memberships`, already in hand — nothing new fetched), `navigate` and `refreshAccount`, the same pair
+`components/OrganizationList.tsx#handleLeave` already needs to move a caller off an organization they just
+left — deleting the organization currently active needs the identical fallback (a membership preferred over a
+connected-only relationship, `/account` when none is left). Revisit once WEB-69 ships: this Danger zone likely
+moves to whichever tab (or a new one) that consolidation gives an organization's own settings.
+
+**The three admin-console Danger zones are a new last section on each screen, not the header-row button
+`admin/OrganizationDetail.tsx` already uses for ADMIN-5.** `OrganizationDetail.tsx`'s own Delete sits beside
+the heading, because ADMIN-5 predates WEB-72's own "last section, visibly separated" text. Left unchanged
+(out of this slice's scope — it already has its own delete, the permanent tenant wipe) rather than restyled
+to match; the three *new* Danger zones (`admin/CourseDetail.tsx`, `ProjectDetail.tsx`, `AccountDetail.tsx`)
+follow WEB-72's text exactly, one `Admin.tsx#handleSoftDelete` shared across all three, gated on typing the
+entity's own name (`courseTitle`/`name`/`displayName`), server-side enforced (`apps/api/src/routes/admin.ts`'s
+own `softDeleteInputSchema`, the identical `confirmName` discipline `POST /organizations/:id/delete` (ADMIN-5)
+already holds itself to) rather than trusted to the panel's own disabled button alone.
+
+**WEB-73's Delete history control needs no typed-name gate.** Unlike WEB-72's four entity deletes, the SPEC
+text for WEB-73 says only "confirms first, naming the course" — a plain `confirm()`, not `prompt()`'s typed-name
+variant. The course itself is not being deleted, only one person's own history in it, so the heavier gate WEB-72
+reserves for an entity's own destruction was judged disproportionate here, matching the SPEC's own lighter
+wording exactly.
+
+**D-138's "an identity resolving to a soft-deleted person now resolves to a new person" does not apply to
+WEB-73's own delete.** `conversations.ts#softDeleteConversationsForPerson` (what `routes/chat.ts`'s new
+`DELETE .../messages` calls) tombstones only the conversation rows for `(courseId, personId)` — it never
+touches the `people` row itself, unlike `people.ts#softDeletePerson` (a different, whole-person delete this
+slice does not expose anywhere). D-138's "new person" behaviour is `resolvePersonByIdentity`'s own reaction to
+a soft-deleted *person*; the web chat surface does not even call that function (`routes/chat.ts`'s own module
+comment, D-37: it resolves through `people.resolveIdentity`, read-only, since a web caller already proved their
+identity by signing in). What D-138 *does* connect to here is the sibling fix in the same round: `conversations`'
+own two partial unique indexes now exclude a tombstoned row, so `getOrCreateConversation` can open a fresh
+conversation for the same `(course, person, surface)` slot immediately after a history delete — the "blocked at
+the database level" limitation `conversations.ts#softDeleteConversationsForPerson`'s own doc comment used to
+name, and now no longer does. Proven directly: `apps/api/tests/routes/chat.test.ts` asserts a follow-up
+question after deleting history is answered on a fresh conversation, by the same person, and that deleting
+twice in a row is a harmless no-op the second time.

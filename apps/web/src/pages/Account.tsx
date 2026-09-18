@@ -49,13 +49,33 @@
  * both re-read `GET /auth/me` afterward (that file's own module comment on
  * why), and this screen has no `refreshSession` of its own to hand it —
  * `pages/Shell.tsx` threads through whatever `App.tsx` gave it, unchanged.
+ *
+ * WEB-72/DATA-7 — a Danger zone, last on the screen, holding this account's
+ * own delete and nothing else: the same typed-name gate `useModal()`'s
+ * `prompt` already applies to a course/project (`components/CourseRows.tsx`/
+ * `hooks/useProjectMenu.tsx`), typed against `account.email` — the one
+ * identifier this screen actually shows (this component has no
+ * `displayName` field to type against, unlike the console's own
+ * `AccountDetail.tsx`). Deleting your own account is deleting the thing
+ * you are signed in *as* — `deleteAccount` (`api/client.ts`) ends every
+ * session belonging to it server-side, and `onSignedOut` (the same prop
+ * `components/SignedInChrome.tsx`'s own sign-out button already triggers,
+ * threaded through `pages/Shell.tsx` unchanged) is what actually moves this
+ * browser off a screen it can no longer read.
  */
 
+import { useState } from 'react'
+
+import { ApiError, deleteAccount } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
+import { Button } from '../components/Button.js'
+import { ErrorMessage } from '../components/ErrorMessage.js'
+import { useModal } from '../components/modal/ModalProvider.js'
 import {
   OrganizationList,
   type OrganizationListRow,
 } from '../components/OrganizationList.js'
+import { DeleteIcon } from '../icons.js'
 import type { Route } from '../routing/route.js'
 
 export interface AccountProps {
@@ -66,6 +86,8 @@ export interface AccountProps {
   navigate: (route: Route, options?: { replace?: boolean }) => void
   /** WEB-57/WEB-58 — `App.tsx`'s own `refreshSession`, threaded through `pages/Shell.tsx` unchanged; passed straight to `OrganizationList` (this file's own module comment on why). */
   refreshAccount: () => Promise<AccountSummary | undefined>
+  /** WEB-72/DATA-7 — `App.tsx`'s own sign-out adapter, threaded through `pages/Shell.tsx` unchanged (this file's own module comment on why deleting this account needs it). */
+  onSignedOut: () => void
 }
 
 export function Account({
@@ -74,7 +96,49 @@ export function Account({
   onSwitchOrganization,
   navigate,
   refreshAccount,
+  onSignedOut,
 }: AccountProps) {
+  const { prompt } = useModal()
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<ApiError | undefined>(
+    undefined
+  )
+
+  // WEB-72/DATA-7 — deleting the account signed in as this browser: asks
+  // first, naming the account and what deleting it means, gated on typing
+  // its own email exactly (`account.email` — the same typed-name discipline
+  // `components/CourseRows.tsx#handleDelete` already applies to a course).
+  // Reversible for the deployment's retention window, then permanent.
+  const handleDelete = async () => {
+    const typed = await prompt({
+      title: `Delete your account?`,
+      description:
+        'This deletes your account. It is reversible for a while, and permanent ' +
+        'after that. You will be signed out immediately. Type your email to confirm.',
+      label: 'Email',
+      placeholder: account.email,
+      confirmLabel: 'Delete account',
+      destructive: true,
+      validate: (value) =>
+        value === account.email
+          ? undefined
+          : 'Type your email exactly to confirm.',
+    })
+    if (typed === undefined) return
+
+    setDeleteError(undefined)
+    setDeleting(true)
+    try {
+      await deleteAccount()
+      onSignedOut()
+    } catch (caught) {
+      if (caught instanceof ApiError) setDeleteError(caught)
+      else throw caught
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const rows: OrganizationListRow[] = [
     ...account.memberships.map((membership) => ({
       organizationId: membership.organizationId,
@@ -113,6 +177,30 @@ export function Account({
           actionLabel="Switch"
           refreshAccount={refreshAccount}
         />
+      </section>
+
+      {/* WEB-72 — the last section on the screen, visibly separated,
+          holding this account's own delete and nothing else. The same
+          `border-danger-600 bg-danger-50 text-danger-700` shape
+          `components/ErrorMessage.tsx`/`pages/Usage.tsx` already give a
+          danger-scale panel — this app defines no `danger-900`/`danger-200`
+          shade (`style.css`'s own three-shade semantic scale). */}
+      <section
+        aria-label="Danger zone"
+        className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
+      >
+        <h2 className="text-section-title font-semibold text-danger-700">
+          Danger zone
+        </h2>
+        {deleteError && <ErrorMessage error={deleteError} />}
+        <Button
+          variant="destructive"
+          icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+          onClick={() => void handleDelete()}
+          disabled={deleting}
+        >
+          {deleting ? 'Deleting…' : 'Delete account'}
+        </Button>
       </section>
     </div>
   )

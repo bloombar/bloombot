@@ -15,6 +15,15 @@
  * Fetched with `fetchAdminAccount(id)`; `NotFound` renders for
  * `account_not_found` (404), the same treatment every other detail screen
  * in this console already gives an unknown id.
+ *
+ * WEB-72/DATA-7 — a Danger zone, last on the screen: a platform
+ * administrator's own soft-delete, reversible for the deployment's
+ * retention window, then permanent. `Admin.tsx#handleSoftDelete` gates it
+ * on typing the account's own `displayName` — never `null`
+ * (`components/Team.tsx`'s own module comment on why an account's
+ * `displayName` always exists, unlike a student person's) — the same
+ * typed-name discipline `Admin.tsx#handleDelete` (ADMIN-5) already applies
+ * to an organization.
  */
 
 import type { AdminAccountDetail } from '../../api/types.js'
@@ -26,6 +35,7 @@ import {
   SkeletonLine,
   SkeletonRow,
 } from '../../components/Skeleton.js'
+import { DeleteIcon } from '../../icons.js'
 import type { Route } from '../../routing/route.js'
 import { NotFound } from '../NotFound.js'
 import { formatBySurface, formatMicros, ReadOnlyField } from './shared.js'
@@ -35,7 +45,9 @@ export function AccountDetail({
   account,
   notFound,
   failed,
+  deletingId,
   navigate,
+  onDelete,
   onBack,
 }: {
   accountId: string
@@ -43,7 +55,10 @@ export function AccountDetail({
   /** ADMIN-11 — this account id 404'd, distinct from `failed`. */
   notFound: boolean
   failed: boolean
+  /** WEB-72/DATA-7 — the account id currently mid-delete, the same `deletingId` shape `admin/OrganizationDetail.tsx` already uses for ADMIN-5. */
+  deletingId: string | undefined
   navigate: (route: Route, options?: { replace?: boolean }) => void
+  onDelete: (accountId: string, displayName: string) => void
   onBack: () => void
 }) {
   if (notFound) {
@@ -345,6 +360,25 @@ export function AccountDetail({
             ))}
           </ul>
         )}
+      </section>
+
+      {/* WEB-72 — the last section on the screen, visibly separated,
+          holding this account's own delete and nothing else. */}
+      <section
+        aria-label="Danger zone"
+        className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
+      >
+        <h3 className="text-section-title font-semibold text-danger-700">
+          Danger zone
+        </h3>
+        <Button
+          variant="destructive"
+          icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+          onClick={() => onDelete(account.accountId, account.displayName)}
+          disabled={deletingId === account.accountId}
+        >
+          {deletingId === account.accountId ? 'Deleting…' : 'Delete account'}
+        </Button>
       </section>
     </div>
   )

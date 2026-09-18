@@ -99,6 +99,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         'projects.delete',
         // PROJ-6 — added by this slice.
         'projects.rename',
+        // WEB-72/DATA-7 — added by this slice.
+        'projects.softDelete',
         'projects.list',
         'projects.duplicate',
         'courses.save',
@@ -109,6 +111,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         // PROJ-8 — added by this slice.
         'courses.previewDelete',
         'courses.delete',
+        // WEB-72/DATA-7 — added by this slice.
+        'courses.softDelete',
         'courses.list',
         'courses.export',
         'courses.get',
@@ -164,6 +168,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         'transcripts.listAccessLog',
         // WEB-57 — added by this slice.
         'organizations.rename',
+        // WEB-72/DATA-7 — added by this slice.
+        'organizations.softDelete',
       ].sort()
     )
 

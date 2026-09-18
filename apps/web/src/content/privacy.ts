@@ -15,6 +15,15 @@
  * honest version, and it is also the one that does not have to be walked back
  * later.
  *
+ * **The platform-administrator console is described as it actually is.** An
+ * earlier version of this text said that console "does not display any course,
+ * student or message", which stopped being true when the console gained
+ * organization, project, course and account screens (SPEC §45, ADMIN-7..ADMIN-14):
+ * it now shows course settings and the people on the platform by name and email.
+ * Conversations are still genuinely out of its reach, so that is the one limit
+ * this section still claims — and it is claimed narrowly, because it is the only
+ * part of the old sentence the software still honours.
+ *
  * **Google user data gets its own section** ("Google account data", below),
  * spelled out at the level of detail Google's own OAuth branding review asks
  * for (support.google.com/cloud/answer/13806988): what Google Sign-In gives
@@ -30,7 +39,7 @@ export const privacyDocument: StaticDocument = {
   title: 'Privacy policy',
   summary:
     'What Bloombot records about instructors and students, why, and who can see it.',
-  updated: '8 September 2026',
+  updated: '18 September 2026',
   body: `
 Bloombot ("the service") is operated by ${OPERATOR.name} ("we", "us"). It
 answers students' course questions on Discord and on the web, and gives
@@ -83,9 +92,19 @@ Two limits apply to that, and both are real:
   every instructor in it.
 
 Platform administrators — a short, named list configured by the operator — can
-reach an administration console covering organizations, their usage and the
-platform's health. That console does not display any course, student or
-message.
+reach an administration console covering the whole platform. It shows the
+organizations on it; the projects and courses inside them, including each
+course's settings, instructions and the material attached to it; and the people
+on the platform — instructors and students alike — with their names, email
+addresses, the courses they belong to, the Discord or web accounts they have
+been recognised by, and what each has cost to serve. Running the service means
+knowing who is on it, what it is doing and what it is spending, and that console
+is where an operator reads it.
+
+**Conversations are the exception, and they stay out of reach there.** No
+question a student asked and no answer the service gave is shown anywhere in
+that console, or reachable through it. A platform administrator can see that a
+student is enrolled in a course; they cannot see what that student asked it.
 
 ## AI processing
 
@@ -105,7 +124,9 @@ govern what they do with it in transit.
 We do not sell this data, and we do not use it for advertising or behavioural
 profiling. It leaves the service in exactly three directions: to the model
 provider as described above, to Discord (because that is where the
-conversation is happening), and to the mail relay that sends a sign-in link.
+conversation is happening), and to the mail relay that carries this service's
+own email — sign-in links, and operational notices to the operator such as
+telling them a new course is waiting to be approved.
 
 ## Google account data
 

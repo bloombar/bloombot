@@ -93,17 +93,21 @@ are used for, and it means:
   expectations do not allow that, this service is not suitable for your course.
 - **You are responsible for the material you attach** to a course and for
   having the rights to it.
-- **Conversations are kept indefinitely, and cannot be deleted per student.**
-  See the [Privacy policy](/privacy). Agreeing to these terms means accepting
-  that as it stands today.
+- **Nothing expires on its own, but everything can be deleted.** A course's
+  conversations stay until somebody deletes them. You can delete a course, a
+  project or the organization; a student can delete their own history in your
+  course; an account holder can delete their account. A deletion is reversible
+  for 30 days and permanent after that. See the [Privacy policy](/privacy) for
+  what a deletion does and what it leaves behind.
 - **We can reach everything the service stores for your course**, because we
   run the server and the database it lives on. We offer you no privacy
   guarantee against that, and neither should you offer your students one. The
   [Privacy policy](/privacy) says so in full.
 - **Do not use the service with students under 13**, and tell your students not
   to type information about their health, immigration status, or sexual
-  orientation or gender identity into it. The service stores what it is told,
-  indefinitely, and cannot be made to forget one student's part of it.
+  orientation or gender identity into it. The service stores what it is told and
+  keeps it until it is deleted; deleting afterwards is not the same as never
+  having sent it to the AI provider in the first place.
 
 ### Student records, FERPA, and whose decision this is
 
@@ -138,7 +142,10 @@ provider, and instructor and operator access to what is stored.
 
 An institution that needs a written data protection agreement, a FERPA addendum,
 or a completed HECVAT before adopting the service should write to
-${OPERATOR.contactEmail} before its students start using it.
+${OPERATOR.contactEmail} before its students start using it. An institution that
+needs something deleted — one student's records, a course, or everything
+belonging to it — may ask at the same address, and the
+[Privacy policy](/privacy) describes what the service can delete on its own.
 
 ## AI-generated content
 

@@ -308,7 +308,10 @@ describe('enrolments repo (ENRL-1..6)', () => {
     // `POST` handler is what decides whether to call `enrolViaSelfEnrolment`
     // off the back of one), so they are listed here too rather than this
     // test narrowing to a subset that would stop noticing a *real* new
-    // enrolling function landing beside them unchecked.
+    // enrolling function landing beside them unchecked. ADMIN-7/ADMIN-8/
+    // ADMIN-11 added two more reads — `countActiveEnrolmentsByCourse`/
+    // `listEnrolmentsForPeople` — the same class, listed here for the same
+    // reason.
     expect(Object.keys(enrolments).sort()).toEqual(
       [
         'enrolViaDiscordRole',
@@ -325,6 +328,8 @@ describe('enrolments repo (ENRL-1..6)', () => {
         'listEnrolmentsForCourse',
         'resolveChatAdmission',
         'listChatAdmittedCourses',
+        'countActiveEnrolmentsByCourse',
+        'listEnrolmentsForPeople',
       ].sort()
     )
   })

@@ -20,11 +20,13 @@ import request from 'supertest'
 import { createSession } from '@bloombot/auth'
 import {
   accounts,
+  costLedger,
   courseApproval,
   courseAttachments,
   courseJoinLinks,
   courseWebSources,
   createFilesystemAttachmentStorage,
+  enrolments,
   memberships,
   organizations,
   people,
@@ -219,6 +221,125 @@ function seedCourseWithSettings(db: import('@bloombot/db').Database) {
   )
 
   return { organizationId, courseId, personId: person.id, joinLinkSecretHash }
+}
+
+/**
+ * ADMIN-7..11's own tenant: an organization owned by one account, with an
+ * active project holding one enabled course and an archived project holding
+ * a second (disabled) course — so the organization/project reads below have
+ * something to prove they nest courses correctly under the right project,
+ * archived or not. One person is enrolled in the active course, connected to
+ * a real account (so ADMIN-9's own `accountId` link, and ADMIN-11's own
+ * enrolments list, both have something to find), with one cost-ledger entry
+ * recorded against them.
+ */
+function seedConsoleTenant(db: import('@bloombot/db').Database) {
+  const organizationId = randomUUID()
+  organizations.createOrganization(
+    organizationId,
+    { name: 'Console Org', isPersonal: false },
+    db
+  )
+  const owner = accounts.createAccount(
+    organizationId,
+    {
+      email: `owner-${randomUUID()}@example.edu`,
+      displayName: 'Owner',
+      role: 'owner',
+    },
+    db
+  )
+
+  const activeProject = projectsRepo.createProject(
+    organizationId,
+    { name: 'Fall 2026' },
+    db
+  )
+  const activeCourseResult = coursesRepo.createCourse(
+    organizationId,
+    {
+      projectId: activeProject.id,
+      title: 'Course A',
+      enabled: true,
+      adminsRole: 'admins-a',
+      studentsRole: 'students-a',
+      categories: [],
+    },
+    db
+  )
+  if (!activeCourseResult.ok) throw new Error('seed course creation failed')
+  const courseId = activeCourseResult.course.id
+
+  const archivedProject = projectsRepo.createProject(
+    organizationId,
+    { name: 'Spring 2020' },
+    db
+  )
+  projectsRepo.archiveProject(organizationId, archivedProject.id, db)
+  const archivedCourseResult = coursesRepo.createCourse(
+    organizationId,
+    {
+      projectId: archivedProject.id,
+      title: 'Course B',
+      enabled: false,
+      adminsRole: 'admins-b',
+      studentsRole: 'students-b',
+      categories: [],
+    },
+    db
+  )
+  if (!archivedCourseResult.ok) throw new Error('seed course creation failed')
+
+  const studentAccount = accounts.createAccount(
+    organizationId,
+    {
+      email: `student-${randomUUID()}@example.edu`,
+      displayName: 'Student One',
+      role: 'assistant',
+    },
+    db
+  )
+  const person = people.createPerson(
+    organizationId,
+    { displayName: 'Student One', email: 'student1@example.edu' },
+    db
+  )
+  people.connectIdentity(
+    organizationId,
+    person.id,
+    { surface: 'web', externalId: studentAccount.id },
+    db
+  )
+  enrolments.enrolViaJoinLink(
+    organizationId,
+    { courseId, personId: person.id },
+    db
+  )
+  costLedger.recordCostLedgerEntry(
+    organizationId,
+    {
+      courseId,
+      personId: person.id,
+      model: 'gpt-5',
+      inputTokens: 10,
+      outputTokens: 20,
+      costMicros: 1000,
+      measurement: 'measured',
+      surface: 'web',
+    },
+    db
+  )
+
+  return {
+    organizationId,
+    ownerId: owner.id,
+    activeProjectId: activeProject.id,
+    archivedProjectId: archivedProject.id,
+    courseId,
+    archivedCourseId: archivedCourseResult.course.id,
+    personId: person.id,
+    studentAccountId: studentAccount.id,
+  }
 }
 
 describe('ADMIN-4 — a platform administrator sees tenants, not conversations', () => {
@@ -949,5 +1070,443 @@ describe('ADMIN-6 — a platform administrator reads a course’s settings, read
 
     expect(response.status).toBe(404)
     expect(response.body).toEqual({ error: 'course_not_found' })
+  })
+})
+
+describe('ADMIN-7 — an organization has its own console screen', () => {
+  it('lists its projects, each project’s courses, per-course enrolment counts and cost', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/organizations/${seed.organizationId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    const body = response.body as {
+      organizationId: string
+      name: string
+      isPersonal: boolean
+      usage: { totalCostMicros: number; callCount: number }
+      owners: { accountId: string }[]
+      projects: {
+        projectId: string
+        archivedAt: number | null
+        courses: {
+          courseId: string
+          title: string
+          enabled: boolean
+          enrolmentCount: number
+          totalCostMicros: number
+        }[]
+      }[]
+    }
+
+    expect(body.organizationId).toBe(seed.organizationId)
+    expect(body.name).toBe('Console Org')
+    expect(body.isPersonal).toBe(false)
+    expect(body.usage.totalCostMicros).toBe(1000)
+    expect(body.usage.callCount).toBe(1)
+    expect(body.owners).toEqual([
+      expect.objectContaining({ accountId: seed.ownerId }),
+    ])
+
+    const activeProject = body.projects.find(
+      (project) => project.projectId === seed.activeProjectId
+    )
+    expect(activeProject?.archivedAt).toBeNull()
+    expect(activeProject?.courses).toEqual([
+      expect.objectContaining({
+        courseId: seed.courseId,
+        title: 'Course A',
+        enabled: true,
+        enrolmentCount: 1,
+        totalCostMicros: 1000,
+      }),
+    ])
+
+    const archivedProject = body.projects.find(
+      (project) => project.projectId === seed.archivedProjectId
+    )
+    expect(archivedProject?.archivedAt).not.toBeNull()
+    expect(archivedProject?.courses).toEqual([
+      expect.objectContaining({
+        courseId: seed.archivedCourseId,
+        title: 'Course B',
+        enabled: false,
+        enrolmentCount: 0,
+        totalCostMicros: 0,
+      }),
+    ])
+  })
+
+  it('404s on an organization id that does not exist', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/organizations/${randomUUID()}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'organization_not_found' })
+  })
+
+  it('refuses a signed-out caller (401) and a non-administrator (403)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { organizationId } = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const signedOut = await request(app)
+      .get(`/admin/organizations/${organizationId}`)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(signedOut.status).toBe(401)
+
+    const notAdmin = await request(app)
+      .get(`/admin/organizations/${organizationId}`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(notAdmin.status).toBe(403)
+  })
+})
+
+describe('ADMIN-8 — a project has its own console screen', () => {
+  it('lists its courses, each with approval state, enrolment count and usage, and its organization', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/projects/${seed.activeProjectId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      projectId: seed.activeProjectId,
+      name: 'Fall 2026',
+      organizationId: seed.organizationId,
+      organizationName: 'Console Org',
+      archivedAt: null,
+      courses: [
+        {
+          courseId: seed.courseId,
+          title: 'Course A',
+          enabled: true,
+          enrolmentCount: 1,
+          totalCostMicros: 1000,
+        },
+      ],
+    })
+  })
+
+  it('404s on a project id that does not exist', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/projects/${randomUUID()}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'project_not_found' })
+  })
+
+  it('refuses a signed-out caller (401) and a non-administrator (403)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const signedOut = await request(app)
+      .get(`/admin/projects/${seed.activeProjectId}`)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(signedOut.status).toBe(401)
+
+    const notAdmin = await request(app)
+      .get(`/admin/projects/${seed.activeProjectId}`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(notAdmin.status).toBe(403)
+  })
+})
+
+describe('ADMIN-9 — a course’s console screen shows the course and the people in it', () => {
+  it('lists enrolled people with their own usage, and still returns every field the response carried before', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, courseId } = seedCourseWithSettings(testDb.db)
+    const person = people.createPerson(
+      organizationId,
+      { displayName: 'Enrolled Student', email: 'enrolled@example.edu' },
+      testDb.db
+    )
+    const account = accounts.createAccount(
+      organizationId,
+      {
+        email: `linked-${randomUUID()}@example.edu`,
+        displayName: 'Enrolled Student',
+        role: 'assistant',
+      },
+      testDb.db
+    )
+    people.connectIdentity(
+      organizationId,
+      person.id,
+      { surface: 'web', externalId: account.id },
+      testDb.db
+    )
+    enrolments.enrolViaJoinLink(
+      organizationId,
+      { courseId, personId: person.id },
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      organizationId,
+      {
+        courseId,
+        personId: person.id,
+        model: 'gpt-5',
+        inputTokens: 5,
+        outputTokens: 5,
+        costMicros: 750,
+        measurement: 'measured',
+        surface: 'discord',
+      },
+      testDb.db
+    )
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    // Every field the ADMIN-6 test above already asserts is still here —
+    // widening this response must not drop or rename anything the panel
+    // already reads.
+    expect(response.body).toMatchObject({
+      courseId,
+      courseTitle: 'Intro to Botany',
+      enabled: true,
+      organizationId,
+      organizationName: 'Settings Tenant',
+      projectName: 'Spring 2027',
+      adminsRole: 'admins-botany',
+      studentsRole: 'students-botany',
+      model: 'gpt-5',
+      instructions: 'Answer only from the syllabus.',
+      attachments: [
+        { filename: 'syllabus.pdf', sizeBytes: 4096, status: 'ready' },
+      ],
+      webSources: [{ domain: 'botany.example.edu' }],
+      usage: { totalCostMicros: 750, callCount: 1 },
+      people: [
+        {
+          personId: person.id,
+          displayName: 'Enrolled Student',
+          email: 'enrolled@example.edu',
+          accountId: account.id,
+          totalCostMicros: 750,
+          callCount: 1,
+        },
+      ],
+    })
+    const body = response.body as { approvalEvents: unknown[] }
+    expect(Array.isArray(body.approvalEvents)).toBe(true)
+  })
+
+  it('never names a message or a conversation, even once people are listed', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, courseId } = seedCourseWithSettings(testDb.db)
+    const person = people.createPerson(
+      organizationId,
+      { displayName: 'Enrolled Student' },
+      testDb.db
+    )
+    enrolments.enrolViaJoinLink(
+      organizationId,
+      { courseId, personId: person.id },
+      testDb.db
+    )
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    const serialized = JSON.stringify(response.body)
+    expect(serialized).not.toMatch(/conversationId|messageId/i)
+  })
+})
+
+describe('ADMIN-10 — the console lists the platform’s accounts', () => {
+  it('lists every account, newest first, with organization counts and totals', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get('/admin/accounts')
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    const body = response.body as {
+      accounts: {
+        accountId: string
+        createdAt: number
+        organizationCount: number
+        totalCostMicros: number
+      }[]
+    }
+    expect(Array.isArray(body.accounts)).toBe(true)
+    // Newest-first.
+    for (let i = 1; i < body.accounts.length; i += 1) {
+      expect(body.accounts[i - 1]?.createdAt).toBeGreaterThanOrEqual(
+        body.accounts[i]?.createdAt ?? 0
+      )
+    }
+    const owner = body.accounts.find((row) => row.accountId === seed.ownerId)
+    expect(owner?.organizationCount).toBe(1)
+    const student = body.accounts.find(
+      (row) => row.accountId === seed.studentAccountId
+    )
+    expect(student?.totalCostMicros).toBe(1000)
+  })
+
+  it('refuses a signed-out caller (401) and a non-administrator (403)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const signedOut = await request(app)
+      .get('/admin/accounts')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(signedOut.status).toBe(401)
+
+    const notAdmin = await request(app)
+      .get('/admin/accounts')
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(notAdmin.status).toBe(403)
+  })
+})
+
+describe('ADMIN-11 — an account has its own console screen', () => {
+  it('carries memberships, connected organizations, people with identities, enrolments and per-course usage', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/accounts/${seed.studentAccountId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    const body = response.body as {
+      accountId: string
+      memberships: { organizationId: string; role: string }[]
+      connectedOrganizations: { organizationId: string; personId: string }[]
+      people: {
+        personId: string
+        organizationId: string
+        identities: { surface: string; externalId: string }[]
+      }[]
+      enrolments: { courseId: string; courseTitle: string }[]
+      usage: {
+        totalCostMicros: number
+        callCount: number
+        byCourse: { courseId: string; totalCostMicros: number }[]
+      }
+    }
+
+    expect(body.accountId).toBe(seed.studentAccountId)
+    expect(body.memberships).toEqual([
+      expect.objectContaining({
+        organizationId: seed.organizationId,
+        role: 'assistant',
+      }),
+    ])
+    expect(body.connectedOrganizations).toEqual([
+      expect.objectContaining({
+        organizationId: seed.organizationId,
+        personId: seed.personId,
+      }),
+    ])
+    expect(body.people).toEqual([
+      expect.objectContaining({
+        personId: seed.personId,
+        organizationId: seed.organizationId,
+        identities: [
+          expect.objectContaining({
+            surface: 'web',
+            externalId: seed.studentAccountId,
+          }),
+        ],
+      }),
+    ])
+    expect(body.enrolments).toEqual([
+      expect.objectContaining({
+        courseId: seed.courseId,
+        courseTitle: 'Course A',
+      }),
+    ])
+    expect(body.usage.totalCostMicros).toBe(1000)
+    expect(body.usage.callCount).toBe(1)
+    expect(body.usage.byCourse).toEqual([
+      expect.objectContaining({
+        courseId: seed.courseId,
+        totalCostMicros: 1000,
+      }),
+    ])
+  })
+
+  it('404s on an account id that does not exist', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/accounts/${randomUUID()}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'account_not_found' })
+  })
+
+  it('refuses a signed-out caller (401) and a non-administrator (403)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const signedOut = await request(app)
+      .get(`/admin/accounts/${seed.studentAccountId}`)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(signedOut.status).toBe(401)
+
+    const notAdmin = await request(app)
+      .get(`/admin/accounts/${seed.studentAccountId}`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(notAdmin.status).toBe(403)
   })
 })

@@ -781,6 +781,85 @@ export interface AdminCourseWebSource {
   domain: string
 }
 
+/** ADMIN-7/ADMIN-8/ADMIN-11 — the least an account needs to be linked to from another entity's own screen. Mirrors `apps/api`'s own `AdminAccountRef` by hand. */
+export interface AdminAccountRef {
+  accountId: string
+  email: string
+  displayName: string
+}
+
+/** ADMIN-7/ADMIN-8 — one course as it appears inside a project's or an organization's own console screen. Mirrors `apps/api`'s own `AdminCourseBrief` by hand. */
+export interface AdminCourseBrief {
+  courseId: string
+  title: string
+  enabled: boolean
+  aiApprovedAt: number | null
+  enrolmentCount: number
+  totalCostMicros: number
+}
+
+/** ADMIN-7 — `GET /admin/organizations/:organizationId`'s own shape: an organization's identity, its usage, the accounts that own it, its full membership, and every project it holds, nested with that project's own courses. Mirrors `apps/api`'s own `AdminOrganizationDetail` by hand. */
+export interface AdminOrganizationDetail {
+  organizationId: string
+  name: string
+  isPersonal: boolean
+  spendingCapMicros: number | null
+  createdAt: number
+  usage: {
+    totalCostMicros: number
+    callCount: number
+    hasEstimated: boolean
+    bySurface: CostBySurface[]
+  }
+  owners: AdminAccountRef[]
+  members: {
+    accountId: string
+    email: string
+    displayName: string
+    role: string
+    grantedAt: number | null
+  }[]
+  projects: {
+    projectId: string
+    name: string
+    archivedAt: number | null
+    createdAt: number
+    courses: AdminCourseBrief[]
+  }[]
+}
+
+/** ADMIN-8 — `GET /admin/projects/:projectId`'s own shape. Mirrors `apps/api`'s own `AdminProjectDetail` by hand. */
+export interface AdminProjectDetail {
+  projectId: string
+  name: string
+  organizationId: string
+  organizationName: string
+  archivedAt: number | null
+  createdAt: number
+  courses: AdminCourseBrief[]
+}
+
+/** ADMIN-9 — one entry of a course's own approval history, the acting account's email resolved. Mirrors `apps/api`'s own `AdminCourseApprovalEvent` by hand. */
+export interface AdminCourseApprovalEvent {
+  id: string
+  action: 'approve' | 'revoke' | 'auto-approve'
+  accountId: string | null
+  accountEmail: string | null
+  createdAt: number
+}
+
+/** ADMIN-9 — one person enrolled in the course, with their own usage in it and a link to their console account when they are reachable as one. Mirrors `apps/api`'s own `AdminCoursePerson` by hand. */
+export interface AdminCoursePerson {
+  personId: string
+  displayName: string | null
+  email: string | null
+  enroledAt: number
+  connectedAt: number | null
+  accountId: string | null
+  totalCostMicros: number
+  callCount: number
+}
+
 /**
  * ADMIN-6 — `GET /admin/courses/:courseId`'s own shape: one course's
  * settings, read-only, grouped by `pages/Admin.tsx` into General, AI and
@@ -814,6 +893,104 @@ export interface AdminCourseDetail {
   aiApprovedByAccountId: string | null
   aiApprovedByEmail: string | null
   aiApprovalDecidedAt: number | null
+  // ADMIN-9's own widening from ADMIN-6's settings-only read.
+  approvalEvents: AdminCourseApprovalEvent[]
+  usage: {
+    totalCostMicros: number
+    callCount: number
+    bySurface: CostBySurface[]
+  }
+  people: AdminCoursePerson[]
+}
+
+/** ADMIN-10 — one row of `GET /admin/accounts`'s own list. Mirrors `apps/api`'s own `AdminAccountSummary` by hand. */
+export interface AdminAccountSummary {
+  accountId: string
+  email: string
+  displayName: string
+  firstName: string | null
+  lastName: string | null
+  createdAt: number
+  disabledAt: number | null
+  isPlatformAdministrator: boolean
+  organizationCount: number
+  totalCostMicros: number
+}
+
+export interface AdminAccountsResponse {
+  accounts: AdminAccountSummary[]
+}
+
+/** ADMIN-11 — one organization `AdminAccountDetail.memberships` names. Mirrors `apps/api`'s own `AdminAccountMembership` by hand. */
+export interface AdminAccountMembership {
+  organizationId: string
+  organizationName: string
+  role: string
+  grantedAt: number | null
+}
+
+/** ADMIN-11 — one organization `AdminAccountDetail.connectedOrganizations` names — a proven identity, not a membership. Mirrors `apps/api`'s own `AdminAccountConnectedOrganization` by hand. */
+export interface AdminAccountConnectedOrganization {
+  organizationId: string
+  organizationName: string
+  personId: string
+}
+
+/** ADMIN-11 — one person record (PPL-1) `AdminAccountDetail.people` names, with every identity it has been proven on (PPL-2). Mirrors `apps/api`'s own `AdminAccountPerson` by hand. */
+export interface AdminAccountPerson {
+  personId: string
+  organizationId: string
+  organizationName: string
+  displayName: string | null
+  email: string | null
+  githubHandle: string | null
+  connectedAt: number | null
+  createdAt: number
+  identities: { surface: string; externalId: string; createdAt: number }[]
+}
+
+/** ADMIN-11 — one course `AdminAccountDetail.enrolments` names. Mirrors `apps/api`'s own `AdminAccountEnrolment` by hand. */
+export interface AdminAccountEnrolment {
+  courseId: string
+  courseTitle: string
+  projectId: string
+  projectName: string
+  organizationId: string
+  organizationName: string
+  enroledAt: number
+}
+
+/** ADMIN-11 — an account's own usage across every organization. Mirrors `@bloombot/db`'s own `costLedger.AccountUsageSummary` by hand. */
+export interface AdminAccountUsageSummary {
+  totalCostMicros: number
+  callCount: number
+  hasEstimated: boolean
+  bySurface: CostBySurface[]
+  byCourse: {
+    courseId: string
+    courseTitle: string
+    organizationId: string
+    totalCostMicros: number
+    callCount: number
+  }[]
+  lastActiveAt: number | null
+}
+
+/** ADMIN-11 — `GET /admin/accounts/:accountId`'s own shape. Mirrors `apps/api`'s own `AdminAccountDetail` by hand. */
+export interface AdminAccountDetail {
+  accountId: string
+  email: string
+  displayName: string
+  firstName: string | null
+  lastName: string | null
+  createdAt: number
+  disabledAt: number | null
+  isPlatformAdministrator: boolean
+  memberships: AdminAccountMembership[]
+  connectedOrganizations: AdminAccountConnectedOrganization[]
+  people: AdminAccountPerson[]
+  enrolments: AdminAccountEnrolment[]
+  usage: AdminAccountUsageSummary
 }
 
 /** ADMIN-5's own "names exactly what will be deleted before it happens". */

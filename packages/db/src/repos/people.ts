@@ -571,6 +571,20 @@ export function listWebIdentitiesForPeople(
  * (so this caller's own, now-orphaned person row is undone too), and the
  * winner's person is looked up and returned instead of a raw driver error
  * escaping.
+ *
+ * DATA-7 rework, must-fix 2 — the race above is not the only way that same
+ * `SQLITE_CONSTRAINT_UNIQUE` fires: `resolveIdentity` filters on
+ * `people.deletedAt` (DATA-9), so a soft-deleted person's own identity row
+ * still occupies `person_identities_org_surface_external_unique` while
+ * `resolveIdentity` reports nobody holds it — this function's own insert
+ * above then collides with a row `resolveIdentity` cannot see, and the
+ * "look up the winner" recovery below finds nothing either, for the same
+ * reason. Decided in `docs/DECISIONS.md`: the identity resolves to a *new*
+ * person, leaving the deleted one exactly as deleted as it was — the same
+ * "deleted means gone from the product" reasoning DATA-9 already gives every
+ * other read in this package, applied to identity resolution rather than
+ * left to throw a raw driver error at whichever surface (Discord, web, MCP)
+ * happened to be the first to re-resolve a deleted person's old identity.
  */
 export function resolvePersonByIdentity(
   organizationId: string,
@@ -611,11 +625,66 @@ export function resolvePersonByIdentity(
       return person
     })
   } catch (error) {
-    if (isUniqueConstraintError(error)) {
-      const winner = resolveIdentity(organizationId, identity, db)
-      if (winner) return winner
+    if (!isUniqueConstraintError(error)) throw error
+
+    const winner = resolveIdentity(organizationId, identity, db)
+    if (winner) return winner
+
+    // Not the ordinary race — read the identity row back unfiltered (the
+    // same "a restore has to see what every other read hides" exception
+    // this package's other tombstone reads already carry) to confirm this
+    // really is a soft-deleted owner, not some other collision this
+    // function has not seen before.
+    const identityRow = db
+      .select()
+      .from(personIdentities)
+      .where(
+        and(
+          eq(personIdentities.organizationId, organizationId),
+          eq(personIdentities.surface, identity.surface),
+          eq(personIdentities.externalId, identity.externalId)
+        )
+      )
+      .get()
+    const currentOwner = identityRow
+      ? db
+          .select({ deletedAt: people.deletedAt })
+          .from(people)
+          .where(eq(people.id, identityRow.personId))
+          .get()
+      : undefined
+    if (!identityRow || !currentOwner || currentOwner.deletedAt === null) {
+      throw error
     }
-    throw error
+
+    // The identity's current owner is a tombstone: re-point the one
+    // `person_identities` row this surface/external id can ever have
+    // (`person_identities_org_surface_external_unique`) at a brand-new
+    // person, rather than resurrecting the deleted one or leaving this
+    // caller with a raw driver error.
+    return writeTransaction(db, (tx) => {
+      const person = tx
+        .insert(people)
+        .values({
+          id: crypto.randomUUID(),
+          organizationId,
+          displayName: null,
+          email: null,
+          firstName: null,
+          lastName: null,
+          githubHandle: null,
+          createdAt: Date.now(),
+        })
+        .returning()
+        .get()
+
+      tx.update(personIdentities)
+        .set({ personId: person.id })
+        .where(eq(personIdentities.id, identityRow.id))
+        .run()
+
+      return person
+    })
   }
 }
 

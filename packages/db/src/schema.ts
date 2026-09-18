@@ -72,34 +72,51 @@ export const organizations = sqliteTable('organizations', {
 // organization through `memberships` — which is why `getAccountByEmail` (in
 // `repos/accounts.ts`) is one of the two documented TEN-2 exceptions: an
 // account has to be found before any organization is known at all.
-export const accounts = sqliteTable('accounts', {
-  id: text('id').primaryKey(),
-  // Stored lowercased by the repo layer (`repos/accounts.ts`) so `email`
-  // uniqueness cannot be bypassed by case alone.
-  email: text('email').notNull().unique(),
-  displayName: text('display_name').notNull(),
-  // AUTH-7 — filled only from a Google ID token's `given_name`/`family_name`
-  // claims, fill-only (never overwritten once set) the same as `people`'s
-  // own roster fields — `repos/accounts.ts#setAccountNames`. `null` for an
-  // account that has never signed in with Google (email magic-link sign-in
-  // supplies no name claim to fill these from).
-  firstName: text('first_name'),
-  lastName: text('last_name'),
-  // Set to disable sign-in without deleting the account or anything it owns.
-  // Not a tombstone (DATA-7's own text is explicit about this): a disabled
-  // account still exists, still shows up to a platform administrator, and
-  // is not what this slice's `deletedAt` means.
-  disabledAt: integer('disabled_at'),
-  // DATA-7 — the tombstone, the same pair `organizations` above carries and
-  // for the same reason (see that column's own comment). Self-referencing:
-  // an account can be deleted by another account (a platform administrator
-  // deleting somebody else's), so this is not the row's own id.
-  deletedAt: integer('deleted_at'),
-  deletedByAccountId: text('deleted_by_account_id').references(
-    (): AnySQLiteColumn => accounts.id
-  ),
-  createdAt: integer('created_at').notNull(),
-})
+export const accounts = sqliteTable(
+  'accounts',
+  {
+    id: text('id').primaryKey(),
+    // Stored lowercased by the repo layer (`repos/accounts.ts`) so `email`
+    // uniqueness cannot be bypassed by case alone. DATA-7 rework, must-fix
+    // 1 — no longer `.unique()` (a plain, table-wide unique column): that
+    // left a soft-deleted account's own email permanently unusable by
+    // anyone else, the same shape `projects_org_name_active_unique` and
+    // `conversations`' own two indexes were both found to have — moved to
+    // the partial unique index below instead, so a deleted account's email
+    // frees up the moment it is deleted, the same as a project's name does.
+    email: text('email').notNull(),
+    displayName: text('display_name').notNull(),
+    // AUTH-7 — filled only from a Google ID token's `given_name`/`family_name`
+    // claims, fill-only (never overwritten once set) the same as `people`'s
+    // own roster fields — `repos/accounts.ts#setAccountNames`. `null` for an
+    // account that has never signed in with Google (email magic-link sign-in
+    // supplies no name claim to fill these from).
+    firstName: text('first_name'),
+    lastName: text('last_name'),
+    // Set to disable sign-in without deleting the account or anything it owns.
+    // Not a tombstone (DATA-7's own text is explicit about this): a disabled
+    // account still exists, still shows up to a platform administrator, and
+    // is not what this slice's `deletedAt` means.
+    disabledAt: integer('disabled_at'),
+    // DATA-7 — the tombstone, the same pair `organizations` above carries and
+    // for the same reason (see that column's own comment). Self-referencing:
+    // an account can be deleted by another account (a platform administrator
+    // deleting somebody else's), so this is not the row's own id.
+    deletedAt: integer('deleted_at'),
+    deletedByAccountId: text('deleted_by_account_id').references(
+      (): AnySQLiteColumn => accounts.id
+    ),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    // DATA-7 rework, must-fix 1 — partial, not plain: unique only among
+    // accounts that are not soft-deleted, so a deleted account's email is
+    // free to reuse (this table's own `email` column comment).
+    uniqueIndex('accounts_email_active_unique')
+      .on(table.email)
+      .where(sql`${table.deletedAt} is null`),
+  ]
+)
 
 // The roles a membership can hold. A single source for the TypeScript `enum`
 // column below and the `CHECK` constraint that backs it, so the two can never
@@ -236,9 +253,16 @@ export const projects = sqliteTable(
     // than trust an application check" approach `discordServerBindings`
     // takes for TEN-3 — and a partial unique index is portable SQL Postgres
     // supports too (D-2), so this does not become a rewrite later.
+    // DATA-7 rework, must-fix 1 — also excludes a soft-deleted project:
+    // `archivedAt IS NULL` alone left a tombstoned project's name still
+    // occupying this index (a soft delete never touches `archivedAt`), so a
+    // name freed by deleting its project was still refused here while
+    // `repos/projects.ts#findActiveProjectConflict`'s own pre-check (already
+    // filtered on `deletedAt`) reported no conflict at all — a name the
+    // application thought was free, the database still rejected.
     uniqueIndex('projects_org_name_active_unique')
       .on(table.organizationId, table.name)
-      .where(sql`${table.archivedAt} is null`),
+      .where(sql`${table.archivedAt} is null and ${table.deletedAt} is null`),
   ]
 )
 
@@ -566,12 +590,19 @@ export const conversations = sqliteTable(
     lastMessageAt: integer('last_message_at').notNull(),
   },
   (table) => [
+    // DATA-7 rework, must-fix 1 — both partial indexes below also exclude a
+    // soft-deleted conversation, the same "widen the predicate, not the
+    // pre-check" fix `projects_org_name_active_unique` gets above: a
+    // soft-deleted conversation never touches `surface`, so it still
+    // occupied this slot and refused `getOrCreateConversation` from ever
+    // opening a fresh conversation for the same (course, person, surface)
+    // after the old one was deleted.
     uniqueIndex('conversations_org_course_person_unscoped_unique')
       .on(table.organizationId, table.courseId, table.personId)
-      .where(sql`${table.surface} is null`),
+      .where(sql`${table.surface} is null and ${table.deletedAt} is null`),
     uniqueIndex('conversations_org_course_person_surface_unique')
       .on(table.organizationId, table.courseId, table.personId, table.surface)
-      .where(sql`${table.surface} is not null`),
+      .where(sql`${table.surface} is not null and ${table.deletedAt} is null`),
     check(
       'conversations_surface_check',
       sql`${table.surface} is null or ${table.surface} in ('discord', 'web', 'mcp')`

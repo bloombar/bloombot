@@ -355,7 +355,14 @@ export function listEnrolmentsForCourse(
     .where(
       and(
         eq(enrolments.organizationId, organizationId),
-        eq(enrolments.courseId, courseId)
+        eq(enrolments.courseId, courseId),
+        // DATA-9 rework finding (soft-delete-convention.test.ts's own
+        // whitespace-tolerant `Join(` match, DATA-7 rework must-fix 3) — a
+        // soft-deleted person answers no question, including "who is
+        // enrolled in this course": their row was reachable only because
+        // this multi-line `innerJoin` was never actually scanned by the
+        // convention test before this rework tightened it.
+        isNull(people.deletedAt)
       )
     )
     .orderBy(asc(people.displayName), asc(enrolments.personId))

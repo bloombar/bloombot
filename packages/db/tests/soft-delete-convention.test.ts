@@ -44,17 +44,30 @@ const DELETABLE_TABLES = [
 //
 //  - organizations.ts#previewOrganizationDeletion / deletions.ts#previewCourseDeletion /
 //    deletions.ts#previewProjectDeletion / deletions.ts#deleteCourse /
-//    deletions.ts#deleteProject: ADMIN-5/PROJ-8/PROJ-9's own hard, permanent
-//    wipe — counts and removes every row a tenant/course/project owns,
-//    including one already marked deleted, since a soft-deleted course must
-//    still be physically gone once its whole organization is wiped. This
-//    slice does not change that operation; DATA-8's later sweep is what
-//    eventually reuses something like it for what soft-delete leaves behind.
+//    deletions.ts#deleteProject / deletions.ts#emptyCourse: ADMIN-5/PROJ-8/PROJ-9's
+//    own hard, permanent wipe — counts and removes every row a
+//    tenant/course/project owns, including one already marked deleted,
+//    since a soft-deleted course must still be physically gone once its
+//    whole organization is wiped. `emptyCourse` is `deleteCourse`'s and
+//    `deleteProject`'s own private helper (DATA-7 rework must-fix 3: this
+//    allowlist entry is new, but the behaviour is not — before this rework
+//    tightened the convention test to scan private helpers too,
+//    `emptyCourse`'s own unfiltered read was folded into whichever exported
+//    function's body happened to precede it, which already carried this
+//    same allowlist entry). This slice does not change that operation;
+//    DATA-8's later sweep is what eventually reuses something like it for
+//    what soft-delete leaves behind.
 //  - organizations.ts#restoreOrganization / projects.ts#restoreProject /
-//    courses.ts#restoreCourse / conversations.ts#restoreConversationsForPerson:
-//    DATA-9's own "a restore" exception — a restore has to find the exact
-//    tombstoned row it is meant to un-mark, which every other read in this
-//    package exists to hide.
+//    courses.ts#restoreCourse / people.ts#restorePerson /
+//    conversations.ts#restoreConversationsForPerson: DATA-9's own "a
+//    restore" exception — a restore has to find the exact tombstoned row it
+//    is meant to un-mark, which every other read in this package exists to
+//    hide. `restorePerson` (DATA-7 rework cheap-fix 4) previously passed
+//    this test only by accident — its own `UPDATE ... WHERE` happens to
+//    mention `people.deletedAt` — rather than by being named here the way
+//    every sibling restore already was; added so this allowlist is an
+//    accurate inventory of the deliberate exceptions, not a list some of
+//    which merely happen not to trip the heuristic.
 //  - people.ts#mergePeople: LINK-4's own combination of two people's rows —
 //    it moves a loser's conversations onto the survivor (or combines the
 //    two transcripts, that function's own doc comment) regardless of
@@ -80,11 +93,12 @@ const ALLOWLIST: Record<string, string[]> = {
     'previewProjectDeletion',
     'deleteCourse',
     'deleteProject',
+    'emptyCourse',
   ],
   'projects.ts': ['restoreProject'],
   'courses.ts': ['restoreCourse'],
   'conversations.ts': ['restoreConversationsForPerson'],
-  'people.ts': ['mergePeople'],
+  'people.ts': ['mergePeople', 'restorePerson'],
   'cost-ledger.ts': ['getAccountUsageSummary'],
   'roster-import-acknowledgements.ts': ['listAcknowledgementsForAccount'],
 }
@@ -96,18 +110,34 @@ interface ExportedFunction {
 }
 
 /**
- * Every top-level exported function in a TS source file, in both the
- * `export function foo(...)` and `export const foo = (...) => ...` shapes —
- * the same two shapes `tests/tenant-scoping-convention.test.ts`'s own
- * `exportedFunctions` already recognises, duplicated here rather than
- * imported: that file's version is module-private, and a shared helper
- * across two convention tests is more coupling than either buys back.
+ * Every top-level function in a TS source file — exported *and* private —
+ * in the three shapes this package's own `src/repos/**` actually uses:
+ * `export function foo(...)`, `export const foo = (...) => ...`, and a
+ * private `function foo(...)` (verified against every repo file, DATA-7
+ * rework must-fix 3: none currently declares a private top-level `const foo
+ * = (...) =>`, so that fourth shape is not matched here — a repo file that
+ * later adds one would need this list extended, the same way
+ * `tests/tenant-scoping-convention.test.ts`'s own `exportedFunctions` would).
+ *
+ * DATA-7 rework, must-fix 3 — this used to match only the two `export`
+ * shapes, which left every *private* helper unscanned: one declared before
+ * this file's first `export function` was skipped outright (nothing found
+ * it as a boundary to start a body at), and one declared *between* two
+ * exported functions was folded into the preceding export's own body (the
+ * old code walked only the exported matches, so a private helper's own code
+ * was silently treated as more of whichever export came before it) — either
+ * way, an unfiltered read inside a private helper was invisible to this
+ * test. Anchored to the start of a line (`^`, with `m`) rather than matched
+ * anywhere in the source, so a nested callback or inner function — always
+ * indented in this codebase's own formatting — is not mistaken for a second
+ * top-level declaration that would corrupt every boundary computed after it.
  */
-function exportedFunctions(source: string): ExportedFunction[] {
+function topLevelFunctions(source: string): ExportedFunction[] {
   const found: ExportedFunction[] = []
   const patterns = [
-    /export (?:async )?function (\w+)\(/g,
-    /export const (\w+) = (?:async )?\(/g,
+    /^export (?:async )?function (\w+)\(/gm,
+    /^export const (\w+) = (?:async )?\(/gm,
+    /^function (\w+)\(/gm,
   ]
   for (const pattern of patterns) {
     let match: RegExpExecArray | null
@@ -151,9 +181,9 @@ describe('DATA-9 — repo reads of a deletable table exclude what is marked dele
   })
 
   for (const file of files) {
-    it(`${file}: every exported function reading a deletable table also mentions that table's own deletedAt, except the allowlisted exceptions`, () => {
+    it(`${file}: every top-level function (exported or private) reading a deletable table also mentions that table's own deletedAt, except the allowlisted exceptions`, () => {
       const source = readFileSync(`${REPOS_DIR}/${file}`, 'utf8')
-      const fns = exportedFunctions(source)
+      const fns = topLevelFunctions(source)
       const allowedInThisFile = ALLOWLIST[file] ?? []
 
       for (const [i, fn] of fns.entries()) {
@@ -163,11 +193,16 @@ describe('DATA-9 — repo reads of a deletable table exclude what is marked dele
 
         for (const table of DELETABLE_TABLES) {
           const aliases = tableAliases(source, table)
-          const readsTable = aliases.some(
-            (alias) =>
-              body.includes(`.from(${alias})`) ||
-              body.includes(`Join(${alias},`)
-          )
+          // DATA-7 rework, must-fix 3 — `\s*` (matching a newline too, with
+          // no `s` flag needed since `\s` already covers it) rather than a
+          // literal `.from(${alias})` substring: Prettier is free to break
+          // a long `.from(\n  someTable\n)` across lines, and the old
+          // substring check missed every case where it had.
+          const readsTable = aliases.some((alias) => {
+            const fromPattern = new RegExp(`\\.from\\(\\s*${alias}\\b`)
+            const joinPattern = new RegExp(`Join\\(\\s*${alias}\\s*,`)
+            return fromPattern.test(body) || joinPattern.test(body)
+          })
           if (!readsTable) continue
 
           const mentionsDeletedAt = aliases.some((alias) =>
@@ -185,9 +220,9 @@ describe('DATA-9 — repo reads of a deletable table exclude what is marked dele
   it('the allowlist names only functions that actually exist', () => {
     for (const [file, names] of Object.entries(ALLOWLIST)) {
       const source = readFileSync(`${REPOS_DIR}/${file}`, 'utf8')
-      const exported = exportedFunctions(source).map((fn) => fn.name)
+      const found = topLevelFunctions(source).map((fn) => fn.name)
       for (const name of names) {
-        expect(exported).toContain(name)
+        expect(found).toContain(name)
       }
     }
   })

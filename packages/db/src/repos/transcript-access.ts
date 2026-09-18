@@ -317,7 +317,14 @@ export function listPeopleWithTranscript(
     .where(
       and(
         eq(messages.organizationId, organizationId),
-        eq(messages.courseId, courseId)
+        eq(messages.courseId, courseId),
+        // DATA-9 rework finding (soft-delete-convention.test.ts's own
+        // whitespace-tolerant `Join(` match, DATA-7 rework must-fix 3) — a
+        // soft-deleted person's own transcript is not offered in the
+        // panel's student dropdown either; this multi-line `innerJoin` was
+        // never actually scanned by the convention test before this rework
+        // tightened it.
+        isNull(people.deletedAt)
       )
     )
     .orderBy(asc(people.displayName), asc(messages.personId))

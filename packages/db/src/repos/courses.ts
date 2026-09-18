@@ -347,8 +347,16 @@ function findCourseNameConflict(
             )
           : isNull(projects.archivedAt),
         // DATA-9 — a soft-deleted course names nothing to collide with
-        // either.
-        isNull(courses.deletedAt)
+        // either. `softDeleteProject` (`repos/projects.ts`) always cascades
+        // to every live course it owns with the same timestamp, so
+        // `courses.deletedAt` alone already excludes a course whose project
+        // was deleted — `projects.deletedAt` here is belt-and-braces on top
+        // of that invariant (the same "not only trusted to have been
+        // excluded upstream" reasoning `people.ts#listPeopleForAccount`
+        // already documents for its own second filter), not a distinct
+        // case this query needs to reach on its own.
+        isNull(courses.deletedAt),
+        isNull(projects.deletedAt)
       )
     )
     .all()

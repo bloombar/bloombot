@@ -80,7 +80,12 @@ function findActiveProjectConflict(
         eq(projects.organizationId, organizationId),
         eq(projects.name, name),
         isNull(projects.archivedAt),
-        // DATA-9 — a soft-deleted project's name is free to reuse.
+        // DATA-9 — a soft-deleted project is not a candidate conflict here
+        // either; the actual "is this name free" invariant lives in the
+        // database now, on `projects_org_name_active_unique` (`schema.ts`,
+        // DATA-7 rework must-fix 1) — that index's own `WHERE` excludes a
+        // soft-deleted row too, so this pre-check and what the index
+        // actually enforces agree.
         isNull(projects.deletedAt)
       )
     )

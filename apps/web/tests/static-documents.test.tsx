@@ -211,12 +211,50 @@ describe('/privacy and /terms (published legal documents)', () => {
       )
     })
 
-    it('still claims the one limit the console does honour: no conversations', () => {
+    // The console cannot reach a transcript today (ADMIN-4), and an earlier
+    // version of this policy said so. That is a boundary a future release may
+    // move — platform-wide transcript access is a feature the operator may
+    // choose to add — so the policy deliberately does not promise it. It goes
+    // further, because it has to: whatever any screen shows, an operator or
+    // developer holds the server and the database file and can read every
+    // record in it. These stop either promise from being written back in.
+    it('promises no limit on what an operator can see, transcripts included', () => {
       const body = flat(privacyDocument.body)
+      const forbidden = [
+        /conversations are the exception/i,
+        /cannot see what that student asked/i,
+        /(?:console|administrators?) (?:does |do )?not (?:display|show|reach)[^.]*(?:message|conversation|transcript)/i,
+        /(?:message|conversation|transcript)s? (?:are|is|stay|remain)[^.]*(?:out of reach|beyond the reach)/i,
+      ]
+      for (const pattern of forbidden) {
+        expect(body).not.toMatch(pattern)
+      }
+    })
+
+    it('says the operator holds the server and database and can read every record', () => {
+      const body = flat(privacyDocument.body)
+      expect(body).toMatch(/hold the server it runs on and the database file/i)
       expect(body).toMatch(
-        /No question a student asked and no answer the service gave is shown anywhere in that console/i
+        /reaches every record the service keeps, students' conversations included/i
       )
-      expect(body).toMatch(/they cannot see what that student asked it/i)
+      expect(body).toMatch(
+        /makes no promise of privacy from the people who operate the service, for any data it holds/i
+      )
+    })
+
+    it("does not offer the Security section's measures as protection from the operator", () => {
+      expect(flat(privacyDocument.body)).toMatch(
+        /guard the service against people outside it\. They are not, and are not offered as, protection against the people who run it/i
+      )
+    })
+
+    it('warns an instructor in the terms that the operator can reach their course data', () => {
+      expect(flat(termsDocument.body)).toMatch(
+        /We can reach everything the service stores for your course/i
+      )
+      expect(flat(termsDocument.body)).toMatch(
+        /no privacy guarantee against that/i
+      )
     })
 
     it('discloses that instructors can read student conversations', () => {

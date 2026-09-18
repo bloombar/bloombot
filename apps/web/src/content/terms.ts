@@ -5,16 +5,18 @@
  * than from a template.
  *
  * Like the privacy policy it deliberately withholds the promises the software
- * cannot keep: no availability commitment, no deletion right, and an explicit
- * statement that this is a pilot. See `privacy.ts`'s own module comment for
- * why that is the honest form rather than a gap to be filled in later.
+ * cannot keep: no availability commitment, no deletion right, no privacy
+ * guarantee against the operator (who holds the server and the database), and
+ * an explicit statement that this is a pilot. See `privacy.ts`'s own module
+ * comment for why that is the honest form rather than a gap to be filled in
+ * later.
  */
 import { OPERATOR, type StaticDocument } from './document.js'
 
 export const termsDocument: StaticDocument = {
   title: 'Terms & conditions',
   summary: 'The agreement between you and us for using Bloombot.',
-  updated: '8 September 2026',
+  updated: '18 September 2026',
   body: `
 
 These terms are an agreement between you and ${OPERATOR.name} ("we", "us")
@@ -71,6 +73,10 @@ are used for, and it means:
 - **Conversations are kept indefinitely, and cannot be deleted per student.**
   See the [Privacy policy](/privacy). Agreeing to these terms means accepting
   that as it stands today.
+- **We can reach everything the service stores for your course**, because we
+  run the server and the database it lives on. We offer you no privacy
+  guarantee against that, and neither should you offer your students one. The
+  [Privacy policy](/privacy) says so in full.
 
 ## AI-generated content
 

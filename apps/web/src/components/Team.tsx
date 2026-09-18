@@ -311,8 +311,26 @@ export function Team({
       // must-fix 1): a membership preferred over a connected-only
       // relationship, `/account` when neither is left.
       const freshAccount = await refreshAccount()
-      const fallback =
-        freshAccount?.memberships[0] ?? freshAccount?.connectedOrganizations[0]
+      // Belt and braces (review finding) — `organizationId` (the one this
+      // screen just deleted) is excluded here regardless of what
+      // `refreshAccount` came back with. `/auth/me` (`routes/auth.ts`)
+      // already excludes a soft-deleted organization at the query (DATA-9),
+      // so this should never actually match anything by the time this
+      // runs — but this navigation must stay correct even against a stale
+      // or slow-to-propagate response, not only a fast one, the same
+      // "the server refuses regardless, this only decides what is offered"
+      // discipline this file's own module comment already holds `isOwner`
+      // to, applied here to where the caller lands rather than to what is
+      // shown.
+      const remainingMemberships =
+        freshAccount?.memberships.filter(
+          (membership) => membership.organizationId !== organizationId
+        ) ?? []
+      const remainingConnected =
+        freshAccount?.connectedOrganizations.filter(
+          (connection) => connection.organizationId !== organizationId
+        ) ?? []
+      const fallback = remainingMemberships[0] ?? remainingConnected[0]
       navigate(
         fallback
           ? routeForTab(

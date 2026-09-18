@@ -618,11 +618,19 @@ describe('Team — Danger zone (WEB-72/DATA-7)', () => {
     listMemberships.mockResolvedValue([])
     softDeleteOrganization.mockResolvedValue({ id: 'org-1', name: 'Org One' })
     const navigate = vi.fn()
+    // Review finding — `refreshAccount` still names `org-1` (the one this
+    // screen is about to delete) alongside `org-2`, the same shape a stale
+    // or slow-to-propagate `/auth/me` response could have even though the
+    // real route excludes a soft-deleted organization at the query
+    // (DATA-9). `Team.tsx#handleDelete`'s own belt-and-braces filter is
+    // what this asserts: `org-2` is chosen, `org-1` — the thing just
+    // deleted — never is, regardless of what this mock returns.
     const refreshAccount = vi.fn().mockResolvedValue({
       id: 'account-1',
       email: 'owner@example.edu',
       isPlatformAdministrator: false,
       memberships: [
+        { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
         { organizationId: 'org-2', organizationName: 'Org Two', role: 'owner' },
       ],
       connectedOrganizations: [],
@@ -671,11 +679,18 @@ describe('Team — Danger zone (WEB-72/DATA-7)', () => {
     listMemberships.mockResolvedValue([])
     softDeleteOrganization.mockResolvedValue({ id: 'org-1', name: 'Org One' })
     const navigate = vi.fn()
+    // Review finding — `refreshAccount` still names `org-1` (the one just
+    // deleted), the identical stale-response shape the sibling test above
+    // exercises: with nothing else in either list, the belt-and-braces
+    // filter must still land on `/account`, not on the organization this
+    // screen just deleted.
     const refreshAccount = vi.fn().mockResolvedValue({
       id: 'account-1',
       email: 'owner@example.edu',
       isPlatformAdministrator: false,
-      memberships: [],
+      memberships: [
+        { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
+      ],
       connectedOrganizations: [],
     })
 

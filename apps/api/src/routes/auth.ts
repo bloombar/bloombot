@@ -22,13 +22,7 @@ import {
   type EmailSender,
   type GoogleIdTokenVerifier,
 } from '@bloombot/auth'
-import {
-  accounts,
-  memberships,
-  organizations,
-  people,
-  type Database,
-} from '@bloombot/db'
+import { accounts, memberships, people, type Database } from '@bloombot/db'
 
 import { clearSessionCookie, setSessionCookie } from '../middleware/session.js'
 
@@ -188,12 +182,22 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
    * own `name` — `@bloombot/auth`'s `sign-in.ts` already names a personal
    * organization after the account that owns it, but nothing surfaced that
    * name anywhere a caller could read it back, so `OrganizationSwitcher.tsx`
-   * (`apps/web`) could only ever show an id. `getOrganizationById` per
-   * membership, not a join in `memberships.ts` itself: this route is the
-   * one place that needs an organization's name alongside its id, and
-   * TEN-2's own convention keeps a repo function scoped to one table's
-   * concern rather than reaching across into `organizations` for every
-   * caller whether or not it wants a name.
+   * (`apps/web`) could only ever show an id.
+   *
+   * WEB-72/DATA-7 rework (must-fix) — `memberships.listMembershipsForAccount`
+   * (bare rows, no join) used to be paired with a `getOrganizationById` call
+   * per membership here, exactly the shape that reaches this route once a
+   * soft-deleted organization can exist at all: `getOrganizationById`
+   * already excludes one (DATA-9), so a membership in a deleted organization
+   * fell back to its own raw UUID as `organizationName` and was still
+   * reported — the caller's own switcher could land them on an organization
+   * that answers every scoped read with 404. `memberships.ts#listMembershipsForAccountWithOrganizations`
+   * is the sibling this route now calls instead: the identical join, with
+   * `isNull(organizations.deletedAt)` already in its own `WHERE` (that
+   * function's own doc comment), so a deleted organization never reaches
+   * this response in the first place — not filtered out here, excluded at
+   * the query. `connectedOrganizations` (below) had the identical shape and
+   * gets the identical fix, for the identical reason.
    *
    * `email` (LINK-6): `pages/Connect.tsx` needs to name *the account signed
    * in*, not merely which organizations it belongs to — `accounts.getAccountById`
@@ -219,11 +223,15 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
    * `memberships` alone never named the institution's own organization for
    * them, so the panel's own switcher had nowhere to send them
    * (`docs/DECISIONS.md` D-44's own "Limits", closed here). Sourced from
-   * `people.listConnectedOrganizationsForAccount` — the same "which
-   * organization ids may this account reach" question `memberships`
-   * already answers for the administrative side — and filtered to exclude
-   * any organization already present in `memberships`, so the two lists
-   * never overlap and the panel does not have to cross-check them itself.
+   * `people.listConnectedOrganizationsWithNamesForAccount` (WEB-72/DATA-7
+   * rework — the same DATA-9 fix `memberships` above just got, one level
+   * down: that function's own `WHERE` already excludes both a soft-deleted
+   * person and a soft-deleted organization, `people.ts`'s own doc comment)
+   * — the same "which organization ids may this account reach" question
+   * `memberships` already answers for the administrative side — and
+   * filtered to exclude any organization already present in `memberships`,
+   * so the two lists never overlap and the panel does not have to
+   * cross-check them itself.
    */
   router.get('/me', (req, res) => {
     if (!req.session) {
@@ -245,34 +253,35 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
       })
       return
     }
-    const accountMemberships = memberships.listMembershipsForAccount(
-      req.session.accountId,
-      deps.db
-    )
+    // WEB-72/DATA-7 rework (must-fix) — the joined, DATA-9-filtered read:
+    // `organizationName` comes back already resolved, and a soft-deleted
+    // organization's own membership never appears here at all (this route's
+    // own doc comment above has the full reasoning).
+    const accountMemberships =
+      memberships.listMembershipsForAccountWithOrganizations(
+        req.session.accountId,
+        deps.db
+      )
     const membershipOrganizationIds = new Set(
       accountMemberships.map((membership) => membership.organizationId)
     )
     // LINK-10 — the connected-but-not-a-member organizations, excluding any
     // already reported above as a membership (this route's own doc comment
-    // on why the two lists never overlap).
+    // on why the two lists never overlap). The identical DATA-9-filtered,
+    // already-named read `accountMemberships` above just got.
     const connectedOrganizations = people
-      .listConnectedOrganizationsForAccount(req.session.accountId, deps.db)
+      .listConnectedOrganizationsWithNamesForAccount(
+        req.session.accountId,
+        deps.db
+      )
       .filter(
         (connection) =>
           !membershipOrganizationIds.has(connection.organizationId)
       )
-      .map((connection) => {
-        const organization = organizations.getOrganizationById(
-          connection.organizationId,
-          deps.db
-        )
-        return {
-          organizationId: connection.organizationId,
-          // Unreachable in practice — same fallback, same reason, as the
-          // membership mapping below.
-          organizationName: organization?.name ?? connection.organizationId,
-        }
-      })
+      .map((connection) => ({
+        organizationId: connection.organizationId,
+        organizationName: connection.organizationName,
+      }))
     res.status(200).json({
       account: {
         id: req.session.accountId,
@@ -280,21 +289,11 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
         // WEB-59 — live, per request (this route's own doc comment above),
         // never cached alongside the rest of the session.
         isPlatformAdministrator: isPlatformAdministrator(account.email),
-        memberships: accountMemberships.map((membership) => {
-          const organization = organizations.getOrganizationById(
-            membership.organizationId,
-            deps.db
-          )
-          return {
-            organizationId: membership.organizationId,
-            // Unreachable in practice — a membership's own foreign key
-            // guarantees its organization exists — but a session outlives
-            // neither, so this falls back rather than throwing on a race
-            // nothing in this codebase causes on purpose.
-            organizationName: organization?.name ?? membership.organizationId,
-            role: membership.role,
-          }
-        }),
+        memberships: accountMemberships.map((membership) => ({
+          organizationId: membership.organizationId,
+          organizationName: membership.organizationName,
+          role: membership.role,
+        })),
         connectedOrganizations,
       },
       supportContact: deps.supportContact ?? '',

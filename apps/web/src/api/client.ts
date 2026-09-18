@@ -489,7 +489,23 @@ export function deleteProject(
   )
 }
 
-/** WEB-72/DATA-7: delete a project — reversible for the deployment's retention window, then permanent. Only an existing owner of the organization may call this. Distinct from `deleteProject` above (PROJ-9's own permanent wipe). */
+/**
+ * WEB-72/DATA-7: delete a project — reversible for the deployment's
+ * retention window, then permanent. Only an existing owner of the
+ * organization may call this. Distinct from `deleteProject` above (PROJ-9's
+ * own permanent wipe).
+ *
+ * **No caller yet (cheap-fix, review).** WEB-72's own Danger-zone list names
+ * an account, an organization, a course and — through the console — a
+ * course, a project and an account again; it names no owner-facing screen
+ * for a *single* project the way `pages/CourseEditor.tsx` is one for a
+ * course. `projects.softDelete` (`@bloombot/actions`) is registered and
+ * tested at the action layer (`packages/actions/tests/soft-delete.test.ts`)
+ * regardless — the repo/action pair this slice's own brief asked for exists
+ * whether or not a screen calls it yet — this wrapper is kept alongside it
+ * so a future single-project screen has an existing, already-tested call to
+ * reach for rather than reinventing the same `dispatchAction` plumbing.
+ */
 export function softDeleteProject(
   organizationId: string,
   projectId: string

@@ -232,9 +232,16 @@ export function CourseRows({
             <li
               key={course.id}
               data-testid={`course-${course.id}`}
-              className="flex flex-col gap-2 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+              // WEB-71: a flex row on every viewport, not `flex-col` below
+              // `sm:` — the text column (`min-w-0`, just below) is what lets
+              // a long title/metadata line shrink and wrap *within its own
+              // column* instead of pushing Chat and the kebab onto a line of
+              // their own underneath it. `items-start` (not `items-center`)
+              // keeps the controls pinned to the row's top edge even once
+              // the metadata line wraps to two lines on a narrow phone.
+              className="flex items-start justify-between gap-3 rounded-md border border-neutral-200 p-4"
             >
-              <div className="flex flex-col gap-1">
+              <div className="flex min-w-0 flex-col gap-1">
                 <button
                   type="button"
                   onClick={() => onOpenCourse(course.id)}
@@ -277,7 +284,13 @@ export function CourseRows({
                   — {course.enabled ? 'enabled' : 'disabled'}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              {/* WEB-71: `shrink-0` — without it a flex child's default
+                  `flex-shrink: 1` lets Chat and the kebab give up their own
+                  width once the row runs out of room, squeezing a ~44px tap
+                  target smaller rather than letting the text column (which
+                  actually has somewhere to shrink to, via `min-w-0` above)
+                  give way first. */}
+              <div className="flex shrink-0 items-center gap-2">
                 {/* WEB-28: the one action on this row worth its own
                     control — opens a chat session for this course
                     directly. `aria-label` names the row, the same

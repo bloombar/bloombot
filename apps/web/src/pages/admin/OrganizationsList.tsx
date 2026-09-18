@@ -14,6 +14,13 @@
  * screen's own pre-ADMIN-12 shape) could not be middle-clicked, copied, or
  * opened in a new tab the way every other entity link in this console
  * already can (`AppLink.js`'s own module comment).
+ *
+ * ADMIN-15: this screen used to end with its own Courses/Users/Deletion
+ * history buttons, duplicating `AdminNav`'s own links to those same three
+ * destinations at the top of every console screen (WEB-54) — a click
+ * either way lands on the same address, so the footer row was a second,
+ * redundant way to reach somewhere the nav above it already reaches.
+ * Removed, along with the props that only ever fed it.
  */
 
 import type { AdminOrganizationsResponse } from '../../api/types.js'
@@ -31,9 +38,6 @@ export function OrganizationsList({
   deletingId,
   navigate,
   onDelete,
-  onViewDeletions,
-  onViewCourses,
-  onViewUsers,
 }: {
   data: AdminOrganizationsResponse | undefined
   /** True once the read this screen renders from has failed — the refusal itself is already on screen above (`Admin`'s own `ErrorMessage`), so this screen must not also claim to still be loading. Guards against a non-administrator seeing the 403 *and* a permanent "Loading…" underneath it. */
@@ -41,11 +45,6 @@ export function OrganizationsList({
   deletingId: string | undefined
   navigate: (route: Route, options?: { replace?: boolean }) => void
   onDelete: (organizationId: string, name: string) => void
-  onViewDeletions: () => void
-  /** WEB-53 — the console's own entry point into the Courses screen. */
-  onViewCourses: () => void
-  /** ADMIN-10 — the console's own entry point into the Users screen. */
-  onViewUsers: () => void
 }) {
   // ADMIN-12 — by organization name, over whatever `data.organizations`
   // has already fetched.
@@ -143,18 +142,6 @@ export function OrganizationsList({
           )}
         </>
       )}
-
-      <div className="flex gap-2">
-        <Button variant="secondary" onClick={onViewCourses}>
-          Courses
-        </Button>
-        <Button variant="secondary" onClick={onViewUsers}>
-          Users
-        </Button>
-        <Button variant="secondary" onClick={onViewDeletions}>
-          Deletion history
-        </Button>
-      </div>
     </>
   )
 }

@@ -255,9 +255,8 @@ describe('Admin (ADMIN-4)', () => {
     ])
 
     renderAdmin()
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Deletion history' })
-    )
+    const nav = await screen.findByRole('navigation', { name: 'Console' })
+    fireEvent.click(within(nav).getByRole('link', { name: 'Deletion history' }))
 
     expect(await screen.findByText('A Departed Tenant')).toBeInTheDocument()
   })
@@ -586,11 +585,15 @@ describe('Admin — WEB-53’s Courses screen', () => {
     ).toHaveAttribute('href', '/platform-admin/users/account-1')
   })
 
-  it('reached from the organizations list’s own Courses button', async () => {
+  // ADMIN-15: the organizations list's own Courses button is gone —
+  // reached through `AdminNav`'s own link instead, same as every other
+  // console destination.
+  it('reached from AdminNav’s own Courses link', async () => {
     fetchAdminCourses.mockResolvedValue({ courses: [PENDING_COURSE] })
 
     renderAdmin()
-    fireEvent.click(await screen.findByRole('button', { name: 'Courses' }))
+    const nav = await screen.findByRole('navigation', { name: 'Console' })
+    fireEvent.click(within(nav).getByRole('link', { name: 'Courses' }))
 
     expect(await screen.findByText('Web Design')).toBeInTheDocument()
   })
@@ -811,6 +814,22 @@ describe('Admin — WEB-54’s console navigation and health footer', () => {
 
     await screen.findByRole('navigation', { name: 'Console' })
     expect(screen.getAllByText('Bot')).toHaveLength(1)
+  })
+
+  // ADMIN-15: the organizations screen's own footer row (Courses / Users /
+  // Deletion history buttons) duplicated `AdminNav`'s own links to those
+  // same three destinations — removed here, while the nav above still
+  // carries all three.
+  it('renders no Courses/Users/Deletion history buttons of its own — AdminNav carries those links instead', async () => {
+    renderAdmin({ route: { kind: 'admin-organizations' } })
+
+    const nav = await screen.findByRole('navigation', { name: 'Console' })
+    for (const label of ['Courses', 'Users', 'Deletion history']) {
+      expect(within(nav).getByRole('link', { name: label })).toBeVisible()
+      expect(
+        screen.queryByRole('button', { name: label })
+      ).not.toBeInTheDocument()
+    }
   })
 
   // Code review finding: a refusal on one screen's own read used to
@@ -1382,11 +1401,15 @@ describe('Admin — ADMIN-10’s Users screen', () => {
     expect(list).toHaveTextContent('$0.50')
   })
 
-  it('reached from the organizations list’s own Users button', async () => {
+  // ADMIN-15: the organizations list's own Users button is gone — reached
+  // through `AdminNav`'s own link instead, same as every other console
+  // destination.
+  it('reached from AdminNav’s own Users link', async () => {
     fetchAdminAccounts.mockResolvedValue({ accounts: [] })
 
     renderAdmin()
-    fireEvent.click(await screen.findByRole('button', { name: 'Users' }))
+    const nav = await screen.findByRole('navigation', { name: 'Console' })
+    fireEvent.click(within(nav).getByRole('link', { name: 'Users' }))
 
     expect(await screen.findByText('No accounts yet.')).toBeInTheDocument()
   })

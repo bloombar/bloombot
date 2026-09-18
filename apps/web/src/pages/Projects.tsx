@@ -373,26 +373,34 @@ export function Projects({
                 data-testid={`project-${project.id}`}
                 className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"
               >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-2">
+                {/* WEB-71: a flex row on every viewport (not `flex-col`
+                    below `sm:`, as this header used to be) — `min-w-0` on
+                    the name column lets a long project name shrink and
+                    wrap within its own column, and `shrink-0` on the kebab
+                    keeps its ~44px tap target from being squeezed instead,
+                    which is what a phone-width wrap used to do to it. */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
                     <button
                       type="button"
                       onClick={() => onOpenProject(project)}
-                      className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+                      className="text-left text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
                     >
                       {project.name}
                     </button>
                     {project.archivedAt !== null && (
-                      <span className="text-xs text-neutral-500">
+                      <span className="shrink-0 text-xs text-neutral-500">
                         (archived)
                       </span>
                     )}
                   </div>
-                  <KebabMenu
-                    label={`Actions for "${project.name}"`}
-                    items={items}
-                    disabled={busy}
-                  />
+                  <div className="shrink-0">
+                    <KebabMenu
+                      label={`Actions for "${project.name}"`}
+                      items={items}
+                      disabled={busy}
+                    />
+                  </div>
                 </div>
 
                 {/* WEB-42: this project's own courses, indented beneath it

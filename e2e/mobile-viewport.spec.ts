@@ -32,9 +32,11 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
   accounts,
   closeDatabase,
+  courses,
   memberships,
   openDatabase,
   organizations,
+  projects,
 } from '@bloombot/db'
 
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
@@ -108,6 +110,162 @@ async function assertFocusDoesNotZoom(field: Locator, page: Page) {
   const after = await readScale()
   expect(after).toBe(before)
 }
+
+/**
+ * WEB-71: a row's own name and its controls (a kebab, a Chat button) must
+ * sit on the *same* line as each other at a phone width — not the name on
+ * one line and the controls wrapped onto a line of their own beneath it.
+ * A `toHaveCSS`/class assertion cannot tell those two apart (a row that
+ * still wraps can carry the same `shrink-0`/`min-w-0` classes as one that
+ * does not — only actual layout, read back from the browser, can), so this
+ * compares the two elements' own bounding boxes: if their y-ranges
+ * overlap, they are on the same row; if the control's box starts below the
+ * name's, the row has wrapped.
+ */
+async function assertOnSameRow(
+  name: Locator,
+  control: Locator,
+  description: string
+) {
+  const [nameBox, controlBox] = await Promise.all([
+    name.boundingBox(),
+    control.boundingBox(),
+  ])
+  if (!nameBox || !controlBox) {
+    throw new Error(`expected both ${description} elements to be visible`)
+  }
+  const overlaps =
+    nameBox.y < controlBox.y + controlBox.height &&
+    controlBox.y < nameBox.y + nameBox.height
+  expect(overlaps, `${description}: expected both on the same row`).toBe(true)
+}
+
+/** A project with one course, seeded directly against the e2e database — the same stand-in `routing.spec.ts`'s own `seedProjectAndCourse` uses, rather than driving the create-project/create-course UI a second time for a slice that is not about that UI. A deliberately long title on both records — the thing most likely to force the row-wrap WEB-71 fixes, per this file's own module comment on `assertOnSameRow`. */
+function seedProjectAndCourse(
+  organizationId: string,
+  suffix: string
+): { projectName: string; courseTitle: string } {
+  const projectName = `A Rather Long Project Name For Fall 2026 — ${suffix}`
+  const courseTitle = `An Equally Long Introductory Course Title — ${suffix}`
+  const db = openDatabase(E2E_DATABASE_PATH)
+  try {
+    const project = projects.createProject(
+      organizationId,
+      { name: projectName },
+      db
+    )
+    const created = courses.createCourse(
+      organizationId,
+      {
+        projectId: project.id,
+        title: courseTitle,
+        enabled: true,
+        adminsRole: `admins-${suffix}`,
+        studentsRole: `students-${suffix}`,
+        promptId: 'prompt-1',
+        categories: [],
+      },
+      db
+    )
+    if (!created.ok) throw new Error('setup failed: course creation refused')
+    return { projectName, courseTitle }
+  } finally {
+    closeDatabase(db)
+  }
+}
+
+test('a project row’s kebab, and a course row’s Chat button and kebab, stay on their own row’s own line at 360px and 400px — on both the organization screen and the project’s own screen (WEB-71)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web71-${suffix}@example.edu`
+
+  await signIn(page, email)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  const db = openDatabase(E2E_DATABASE_PATH)
+  let organizationId: string
+  try {
+    const account = accounts.getAccountByEmail(email, db)
+    if (!account) throw new Error('setup failed: account not found')
+    const [membership] = memberships.listMembershipsForAccount(account.id, db)
+    if (!membership) throw new Error('setup failed: no personal organization')
+    organizationId = membership.organizationId
+  } finally {
+    closeDatabase(db)
+  }
+  const { projectName, courseTitle } = seedProjectAndCourse(
+    organizationId,
+    suffix
+  )
+
+  for (const width of [360, 400]) {
+    // A reload (rather than merely resizing) picks the seeded project and
+    // course up fresh at each width — `Projects` fetches once on mount.
+    await page.setViewportSize({ width, height: 667 })
+    await page.reload()
+    await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+    // 1. The organization screen (`pages/Projects.tsx`) — a project row's
+    //    own name and kebab.
+    const projectNameButton = page.getByRole('button', {
+      name: projectName,
+      exact: true,
+    })
+    await expect(projectNameButton).toBeVisible()
+    await assertOnSameRow(
+      projectNameButton,
+      page.getByRole('button', { name: `Actions for "${projectName}"` }),
+      `project row at ${width}px`
+    )
+
+    // 2. The same screen's own course row, beneath the project (WEB-42) —
+    //    Chat and the kebab both carry the project's own name in their
+    //    label (`CourseRows.tsx`'s own doc comment on why).
+    const courseTitleButton = page.getByRole('button', {
+      name: courseTitle,
+      exact: true,
+    })
+    await expect(courseTitleButton).toBeVisible()
+    await assertOnSameRow(
+      courseTitleButton,
+      page.getByRole('button', {
+        name: `Chat about "${courseTitle}" in "${projectName}"`,
+      }),
+      `course row Chat button at ${width}px (organization screen)`
+    )
+    await assertOnSameRow(
+      courseTitleButton,
+      page.getByRole('button', {
+        name: `Actions for "${courseTitle}" in "${projectName}"`,
+      }),
+      `course row kebab at ${width}px (organization screen)`
+    )
+
+    // 3. The project's own screen (`pages/Courses.tsx`) — the identical
+    //    course row, reached by opening the project.
+    await projectNameButton.click()
+    const courseTitleButtonOnProjectScreen = page.getByRole('button', {
+      name: courseTitle,
+      exact: true,
+    })
+    await expect(courseTitleButtonOnProjectScreen).toBeVisible()
+    await assertOnSameRow(
+      courseTitleButtonOnProjectScreen,
+      page.getByRole('button', { name: `Chat about "${courseTitle}"` }),
+      `course row Chat button at ${width}px (project's own screen)`
+    )
+    await assertOnSameRow(
+      courseTitleButtonOnProjectScreen,
+      page.getByRole('button', { name: `Actions for "${courseTitle}"` }),
+      `course row kebab at ${width}px (project's own screen)`
+    )
+
+    // Back to the organization screen for the next width.
+    await page.getByRole('button', { name: '← Projects' }).click()
+    await expect(projectNameButton).toBeVisible()
+  }
+})
 
 test('the panel is readable on a phone: no screen overflows sideways, and no field zooms the page on focus (WEB-48)', async ({
   page,

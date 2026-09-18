@@ -56,7 +56,9 @@ export function CourseDetailView({
   failed: boolean
   decidingCourseId: string | undefined
   navigate: (route: Route, options?: { replace?: boolean }) => void
-  onApprove: (courseId: string) => void
+  // ADMIN-13 — the whole course, not only its id, the same shape
+  // `CoursesView`'s own `onApprove` takes.
+  onApprove: (course: { courseId: string; courseTitle: string }) => void
   onUnapprove: (course: { courseId: string; courseTitle: string }) => void
   onBack: () => void
 }) {
@@ -117,7 +119,7 @@ export function CourseDetailView({
         {course.aiApprovedAt === null ? (
           <Button
             variant="primary"
-            onClick={() => onApprove(course.courseId)}
+            onClick={() => onApprove(course)}
             disabled={deciding}
           >
             {deciding ? 'Approving…' : 'Approve'}

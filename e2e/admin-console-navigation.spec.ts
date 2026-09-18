@@ -141,7 +141,9 @@ test('a platform administrator moves from an organization to its project to its 
     await adminPage.goto('/platform-admin/organizations')
     const orgRow = adminPage.getByTestId(`admin-org-${organizationId}`)
     await expect(orgRow).toBeVisible()
-    await orgRow.getByRole('button', { name: expectedDisplayName }).click()
+    // ADMIN-12 — the row's own name is now a real link (`AppLink`), not a
+    // button.
+    await orgRow.getByRole('link', { name: expectedDisplayName }).click()
     await expect(adminPage).toHaveURL(
       `/platform-admin/organizations/${organizationId}`
     )

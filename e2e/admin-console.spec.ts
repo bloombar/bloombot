@@ -307,7 +307,9 @@ test('the admin console’s own screens are addressable — a cold deep link, pa
 
   // 2. Navigating in the console — clicking the organization's own name —
   //    moves the address bar to its own, shareable address.
-  await row.getByRole('button', { name: tenantName }).click()
+  // ADMIN-12 — the row's own name is now a real link (`AppLink`), not a
+  // button.
+  await row.getByRole('link', { name: tenantName }).click()
   await expect(page).toHaveURL(
     `/platform-admin/organizations/${organizationId}`
   )

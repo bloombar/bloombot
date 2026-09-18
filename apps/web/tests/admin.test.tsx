@@ -481,9 +481,7 @@ describe('Admin — WEB-33’s own screens', () => {
     fetchAdminOrganization.mockResolvedValue(ORG_DETAIL)
     renderAdmin()
 
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'A Real Tenant' })
-    )
+    fireEvent.click(await screen.findByRole('link', { name: 'A Real Tenant' }))
 
     expect(
       await screen.findByTestId('admin-org-detail-org-1')
@@ -577,18 +575,36 @@ describe('Admin — WEB-53’s Courses screen', () => {
     expect(await screen.findByText('Web Design')).toBeInTheDocument()
   })
 
-  it('approve runs immediately, with no confirmation, and refreshes the list', async () => {
+  // ADMIN-13: not destructive (an administrator can always Unapprove
+  // again), but still confirmed — a plain `confirm()` naming the course,
+  // never a typed-name prompt like ADMIN-5's own delete.
+  it('approve confirms first, naming the course, and sends nothing if cancelled', async () => {
+    fetchAdminCourses.mockResolvedValue({ courses: [PENDING_COURSE] })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Web Design')
+    expect(approveAdminCourse).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(approveAdminCourse).not.toHaveBeenCalled()
+  })
+
+  it('confirming approve sends the request and refreshes the list', async () => {
     fetchAdminCourses.mockResolvedValue({ courses: [PENDING_COURSE] })
     approveAdminCourse.mockResolvedValue({ approved: true })
 
     renderAdmin({ route: { kind: 'admin-courses' } })
     fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
 
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }))
+
     await waitFor(() =>
       expect(approveAdminCourse).toHaveBeenCalledWith('course-1')
     )
-    // Not destructive — no dialog opened for this direction.
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   // WEB-53's brief: Unapprove is the destructive direction and confirms
@@ -652,7 +668,7 @@ describe('Admin — WEB-53’s Courses screen', () => {
     })
 
     renderAdmin({ route: { kind: 'admin-courses' } })
-    fireEvent.click(await screen.findByRole('button', { name: 'Web Design' }))
+    fireEvent.click(await screen.findByRole('link', { name: 'Web Design' }))
 
     await waitFor(() =>
       expect(fetchAdminCourse).toHaveBeenCalledWith('course-1')
@@ -961,12 +977,18 @@ describe('Admin — ADMIN-6’s read-only course settings screen', () => {
     expect(await screen.findByText(/not found/i)).toBeInTheDocument()
   })
 
+  // ADMIN-13: the same confirmed approve as `CoursesView`'s own list,
+  // naming the course, from this screen too.
   it('approves from this screen and refreshes it, not only the list', async () => {
     fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
     approveAdminCourse.mockResolvedValue({ approved: true })
 
     renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
     fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(COURSE_DETAIL.courseTitle)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }))
 
     await waitFor(() =>
       expect(approveAdminCourse).toHaveBeenCalledWith('course-1')
@@ -975,6 +997,29 @@ describe('Admin — ADMIN-6’s read-only course settings screen', () => {
     // never fetched by this test at all.
     await waitFor(() => expect(fetchAdminCourse).toHaveBeenCalledTimes(2))
     expect(fetchAdminCourses).not.toHaveBeenCalled()
+  })
+
+  // ADMIN-13: the same confirmed unapprove as `CoursesView`'s own list,
+  // naming the course, from this screen too.
+  it('unapproves from this screen, naming the course, and sends nothing if cancelled', async () => {
+    fetchAdminCourse.mockResolvedValue({
+      ...COURSE_DETAIL,
+      aiApprovedAt: Date.now(),
+      aiApprovedByEmail: 'admin@bloombot.example',
+    })
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Unapprove' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(COURSE_DETAIL.courseTitle)
+    expect(unapproveAdminCourse).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unapprove' }))
+
+    await waitFor(() =>
+      expect(unapproveAdminCourse).toHaveBeenCalledWith('course-1')
+    )
   })
 
   // Must-fix, second review round: `currentCourseIdRef`'s own doc comment
@@ -1487,5 +1532,281 @@ describe('Admin — ADMIN-10’s Users nav item', () => {
       'aria-current',
       'page'
     )
+  })
+})
+
+// ADMIN-12 — a search field on every list screen, filtering the rows
+// already fetched (no new request), case-insensitively, over the field(s)
+// each screen's own brief names.
+describe('Admin — ADMIN-12’s console search', () => {
+  it('narrows organizations by name, case-insensitively, reports the match count, and clears', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [
+        {
+          organizationId: 'org-1',
+          organizationName: 'Acme University',
+          totalCostMicros: 0,
+          estimatedCostMicros: 0,
+          callCount: 0,
+          bySurface: [],
+        },
+        {
+          organizationId: 'org-2',
+          organizationName: 'Beta College',
+          totalCostMicros: 0,
+          estimatedCostMicros: 0,
+          callCount: 0,
+          bySurface: [],
+        },
+      ],
+      platformHealth: PLATFORM_HEALTH,
+    })
+
+    renderAdmin()
+
+    await screen.findByText('Beta College')
+    const field = screen.getByLabelText('Search organizations')
+    fireEvent.change(field, { target: { value: 'ACME' } })
+
+    expect(screen.getByText('Acme University')).toBeInTheDocument()
+    expect(screen.queryByText('Beta College')).not.toBeInTheDocument()
+    expect(screen.getByText('Showing 1 of 2 organizations')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(field).toHaveValue('')
+    expect(screen.getByText('Beta College')).toBeInTheDocument()
+  })
+
+  it('a search matching no organizations says so, not an empty list', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [
+        {
+          organizationId: 'org-1',
+          organizationName: 'Acme University',
+          totalCostMicros: 0,
+          estimatedCostMicros: 0,
+          callCount: 0,
+          bySurface: [],
+        },
+      ],
+      platformHealth: PLATFORM_HEALTH,
+    })
+
+    renderAdmin()
+    await screen.findByText('Acme University')
+    fireEvent.change(screen.getByLabelText('Search organizations'), {
+      target: { value: 'nonexistent' },
+    })
+
+    expect(
+      screen.getByText('No organizations match “nonexistent”.')
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('admin-organizations')).not.toBeInTheDocument()
+  })
+
+  it('narrows courses by title, project, organization or owner email, filtering both the pending and approved lists', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchAdminCourses.mockResolvedValue({
+      courses: [
+        {
+          courseId: 'course-1',
+          courseTitle: 'Web Design',
+          projectName: 'Fall 2026',
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          ownerEmails: ['owner@example.edu'],
+          createdAt: Date.now(),
+          aiApprovedAt: null,
+          aiApprovedByAccountId: null,
+          aiApprovedByEmail: null,
+        },
+        {
+          courseId: 'course-2',
+          courseTitle: 'History 101',
+          projectName: 'Winter 2026',
+          organizationId: 'org-2',
+          organizationName: 'Zeta Org',
+          ownerEmails: ['zeta-owner@example.edu'],
+          createdAt: Date.now(),
+          aiApprovedAt: null,
+          aiApprovedByAccountId: null,
+          aiApprovedByEmail: null,
+        },
+        {
+          courseId: 'course-3',
+          courseTitle: 'Intro to Bloom',
+          projectName: 'Spring 2027',
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          ownerEmails: ['owner@example.edu'],
+          createdAt: Date.now(),
+          aiApprovedAt: Date.now(),
+          aiApprovedByAccountId: 'admin-1',
+          aiApprovedByEmail: 'admin@bloombot.example',
+        },
+        {
+          courseId: 'course-4',
+          courseTitle: 'Chemistry',
+          projectName: 'Fall 2025',
+          organizationId: 'org-2',
+          organizationName: 'Zeta Org',
+          ownerEmails: ['zeta-owner@example.edu'],
+          createdAt: Date.now(),
+          aiApprovedAt: Date.now(),
+          aiApprovedByAccountId: 'admin-1',
+          aiApprovedByEmail: 'admin@bloombot.example',
+        },
+      ],
+    })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+    await screen.findByText('Chemistry')
+
+    fireEvent.change(screen.getByLabelText('Search courses'), {
+      target: { value: 'a real tenant' },
+    })
+
+    const pending = screen.getByTestId('admin-courses-pending')
+    expect(within(pending).getByText('Web Design')).toBeInTheDocument()
+    expect(within(pending).queryByText('History 101')).not.toBeInTheDocument()
+
+    const approved = screen.getByTestId('admin-courses-approved')
+    expect(within(approved).getByText('Intro to Bloom')).toBeInTheDocument()
+    expect(within(approved).queryByText('Chemistry')).not.toBeInTheDocument()
+
+    expect(screen.getByText('Showing 2 of 4 courses')).toBeInTheDocument()
+
+    // Also matches by owner email and by project name — not only title or
+    // organization.
+    fireEvent.change(screen.getByLabelText('Search courses'), {
+      target: { value: 'zeta-owner@example.edu' },
+    })
+    expect(screen.getByTestId('admin-courses-pending')).toHaveTextContent(
+      'History 101'
+    )
+    fireEvent.change(screen.getByLabelText('Search courses'), {
+      target: { value: 'Winter 2026' },
+    })
+    expect(screen.getByTestId('admin-courses-pending')).toHaveTextContent(
+      'History 101'
+    )
+  })
+
+  it('a search matching no courses says so for each list it empties, not an empty <ul>', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchAdminCourses.mockResolvedValue({
+      courses: [
+        {
+          courseId: 'course-1',
+          courseTitle: 'Web Design',
+          projectName: 'Fall 2026',
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          ownerEmails: [],
+          createdAt: Date.now(),
+          aiApprovedAt: null,
+          aiApprovedByAccountId: null,
+          aiApprovedByEmail: null,
+        },
+      ],
+    })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+    await screen.findByText('Web Design')
+    fireEvent.change(screen.getByLabelText('Search courses'), {
+      target: { value: 'nonexistent' },
+    })
+
+    expect(
+      screen.getByText('No pending courses match “nonexistent”.')
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('admin-courses-pending')
+    ).not.toBeInTheDocument()
+  })
+
+  it('narrows users by name or email', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchAdminAccounts.mockResolvedValue({
+      accounts: [
+        {
+          accountId: 'account-1',
+          email: 'owner@example.edu',
+          displayName: 'Owner One',
+          firstName: 'Owner',
+          lastName: 'One',
+          createdAt: Date.now(),
+          disabledAt: null,
+          isPlatformAdministrator: false,
+          organizationCount: 2,
+          totalCostMicros: 500_000,
+        },
+        {
+          accountId: 'account-2',
+          email: 'second@example.edu',
+          displayName: 'Second Person',
+          firstName: 'Second',
+          lastName: 'Person',
+          createdAt: Date.now(),
+          disabledAt: null,
+          isPlatformAdministrator: false,
+          organizationCount: 1,
+          totalCostMicros: 0,
+        },
+      ],
+    })
+
+    renderAdmin({ route: { kind: 'admin-accounts' } })
+    await screen.findByText('Second Person')
+
+    fireEvent.change(screen.getByLabelText('Search users'), {
+      target: { value: 'owner@example.edu' },
+    })
+    expect(screen.getByText('Owner One')).toBeInTheDocument()
+    expect(screen.queryByText('Second Person')).not.toBeInTheDocument()
+  })
+
+  it('narrows deletion history by organization name', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchTenantDeletions.mockResolvedValue([
+      {
+        id: 'deletion-1',
+        organizationId: 'org-1',
+        organizationName: 'A Departed Tenant',
+        deletedByAccountId: 'account-1',
+        summary: '{}',
+        deletedAt: Date.now(),
+      },
+      {
+        id: 'deletion-2',
+        organizationId: 'org-2',
+        organizationName: 'Another Departure',
+        deletedByAccountId: 'account-1',
+        summary: '{}',
+        deletedAt: Date.now(),
+      },
+    ])
+
+    renderAdmin({ route: { kind: 'admin-deletions' } })
+    await screen.findByText('Another Departure')
+
+    fireEvent.change(screen.getByLabelText('Search deletion history'), {
+      target: { value: 'departed' },
+    })
+    expect(screen.getByText('A Departed Tenant')).toBeInTheDocument()
+    expect(screen.queryByText('Another Departure')).not.toBeInTheDocument()
+    expect(screen.getByText('Showing 1 of 2 deletions')).toBeInTheDocument()
   })
 })

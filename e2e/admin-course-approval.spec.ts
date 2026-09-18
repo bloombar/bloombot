@@ -48,7 +48,7 @@ import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 
-test('a platform administrator approves a pending course, it answers, then unapproving brings the SURF-10 notice back (WEB-53, COST-8)', async ({
+test('a platform administrator approves a pending course, it answers, then unapproving brings the SURF-10 notice back (WEB-53, COST-8, ADMIN-13)', async ({
   page,
   browser,
 }) => {
@@ -160,6 +160,13 @@ test('a platform administrator approves a pending course, it answers, then unapp
     // "approve"), the same trap this file's own `projectName, exact: true`
     // above (`:73`) already guards against for a different pair of names.
     await pendingRow
+      .getByRole('button', { name: 'Approve', exact: true })
+      .click()
+    // ADMIN-13 — Approve confirms too now, naming the course, before
+    // anything is sent.
+    const approveDialog = adminPage.getByRole('dialog')
+    await expect(approveDialog).toContainText(courseTitle)
+    await approveDialog
       .getByRole('button', { name: 'Approve', exact: true })
       .click()
     // The row moves out of "Pending approval" once the read refreshes —

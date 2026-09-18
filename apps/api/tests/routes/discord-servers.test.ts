@@ -153,6 +153,42 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
     })
   })
 
+  // WEB-68 — the install callback already reads `ADMIN_GUILD.name` from the
+  // same `userGuilds` lookup that proves the caller administers the guild
+  // (TEN-4, above); this asserts it is persisted on the binding rather than
+  // discarded, so the Discord screen can name the server without a second
+  // Discord call.
+  it('WEB-68: persists the guild name read from Discord onto the binding', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const fakeDiscord = createFakeDiscordRestClient({
+      userGuilds: [ADMIN_GUILD],
+      botGuilds: [BOT_MEMBER_GUILD],
+    })
+    const app = await buildTestApp(testDb.db, {
+      discordRestClient: fakeDiscord,
+    })
+    const { state } = await beginInstall(
+      app,
+      caller.organizationId,
+      caller.cookieHeader
+    )
+
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/discord-servers/install/callback`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ code: 'the-code', state, guildId: 'guild-1' })
+
+    expect(
+      discordServers.resolveDiscordServerBinding('guild-1', testDb.db)
+    ).toMatchObject({
+      serverName: ADMIN_GUILD.name,
+    })
+  })
+
   it('TEN-4: owner (rather than MANAGE_GUILD) also succeeds', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)

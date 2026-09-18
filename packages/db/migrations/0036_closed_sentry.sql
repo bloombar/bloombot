@@ -1,0 +1,1 @@
+ALTER TABLE `discord_server_bindings` ADD `server_name` text;

@@ -54,7 +54,9 @@ describe('InstallButton (WEB-4)', () => {
       writable: true,
     })
 
-    renderWithModal(<InstallButton organizationId="org-1" />)
+    renderWithModal(
+      <InstallButton organizationId="org-1" hasExistingServer={false} />
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Install to Discord' }))
 
     await waitFor(() => expect(assign).toHaveBeenCalled())
@@ -70,21 +72,35 @@ describe('InstallButton (WEB-4)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    renderWithModal(<InstallButton organizationId="org-1" />)
+    renderWithModal(
+      <InstallButton organizationId="org-1" hasExistingServer={false} />
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Install to Discord' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Not found, or you do not have access to it.'
     )
   })
+
+  // WEB-68 — installing again adds a server rather than replacing the one(s)
+  // already there, so the label says so once the caller reports one exists.
+  it('labels itself "Install to another Discord server" when one is already connected', () => {
+    renderWithModal(
+      <InstallButton organizationId="org-1" hasExistingServer={true} />
+    )
+    expect(
+      screen.getByRole('button', { name: 'Install to another Discord server' })
+    ).toBeInTheDocument()
+  })
 })
 
 describe('DiscordServerRow (TEN-9)', () => {
-  it('already installed: shows the server id and offers remove, behind a confirmation (WEB-15)', async () => {
+  it('no stored name: shows the server id and offers remove, behind a confirmation (WEB-15)', async () => {
     const onRemove = vi.fn()
     renderWithModal(
       <DiscordServerRow
         serverId="guild-42"
+        serverName={null}
         onRemove={onRemove}
         removing={false}
       />
@@ -99,5 +115,21 @@ describe('DiscordServerRow (TEN-9)', () => {
     })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(onRemove).toHaveBeenCalled())
+  })
+
+  // WEB-68 — a binding with a stored name shows it as the row's primary
+  // text, with the id kept alongside as secondary context, not as the
+  // headline.
+  it('WEB-68: a stored name shows as the primary text, with the id kept as secondary context', () => {
+    renderWithModal(
+      <DiscordServerRow
+        serverId="guild-42"
+        serverName="Study Hall"
+        onRemove={vi.fn()}
+        removing={false}
+      />
+    )
+    expect(screen.getByText('Study Hall')).toBeInTheDocument()
+    expect(screen.getByText('guild-42')).toBeInTheDocument()
   })
 })

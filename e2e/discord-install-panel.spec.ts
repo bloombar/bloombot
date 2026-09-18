@@ -96,13 +96,15 @@ test('a Discord binding this browser never installed still shows as installed af
 
   // The fetched binding is shown as installed — proves the panel reads what
   // is actually bound server-side rather than only this session's own
-  // memory of installing it. TEN-9 — "Install to Discord" is offered
+  // memory of installing it. TEN-9 — installing another is offered
   // alongside it too, now: an organization can bind more than one server,
   // so this screen no longer treats "already installed" and "offer to
-  // install" as mutually exclusive.
+  // install" as mutually exclusive. WEB-68 — and the label says so: with a
+  // server already bound, it reads "Install to another Discord server," not
+  // the bare "Install to Discord" it reads with none.
   await expect(page.getByText(guildId)).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Install to Discord' })
+    page.getByRole('button', { name: 'Install to another Discord server' })
   ).toBeVisible()
 
   // 4. Remove is reachable for this binding, the same WEB-15 confirmation

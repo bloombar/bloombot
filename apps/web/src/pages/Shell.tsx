@@ -179,7 +179,7 @@ type DiscordBindingState =
   // TEN-9 — every binding the organization has ever held (active or
   // removed, `discordServers.list`'s own shape — this panel narrows to
   // active-only itself, below, the same way it always has). Plural: an
-  // organization can now hold more than one at once, and `installedServerIds`
+  // organization can now hold more than one at once, and `installedServers`
   // (below) is what the render actually reads.
   | { status: 'ready'; bindings: DiscordServerBindingSummary[] }
   | { status: 'error'; error: ApiError }
@@ -426,17 +426,24 @@ function ShellInner({
   // never outlive the server-truth read that supersedes it. TEN-9 — plural,
   // and narrowed to *active* bindings here (`discordServers.list` itself
   // still returns every binding this organization has ever held, active or
-  // removed — `DiscordBindingState`'s own comment on why): every server id
-  // the Discord screen actually renders a row for.
-  const installedServerIds: string[] =
+  // removed — `DiscordBindingState`'s own comment on why): every active
+  // binding the Discord screen actually renders a row for. WEB-68 — carries
+  // `serverName` through rather than narrowing to just the id, so
+  // `DiscordServerRow` can name the row; `justInstalled` never carries a
+  // name (it is known synchronously, before any Discord read), so that
+  // fallback row is `null` until the real fetch resolves.
+  const installedServers: { serverId: string; serverName: string | null }[] =
     discordBindingState.status === 'ready'
       ? discordBindingState.bindings
           .filter(isActiveDiscordBinding)
-          .map((binding) => binding.serverId)
+          .map((binding) => ({
+            serverId: binding.serverId,
+            serverName: binding.serverName,
+          }))
       : discordBindingState.status === 'loading' &&
           justInstalled?.organizationId === activeOrganizationId &&
           !removedServerIds.has(justInstalled.serverId)
-        ? [justInstalled.serverId]
+        ? [{ serverId: justInstalled.serverId, serverName: null }]
         : []
 
   const handleRemove = async (serverId: string) => {
@@ -457,7 +464,7 @@ function ShellInner({
       // TEN-9 — marks just this one binding removed, leaving every other
       // active binding (and any removed history already fetched) alone,
       // when the fetch had already resolved. While it had not yet (the
-      // `justInstalled` fallback window — `installedServerIds`'s own
+      // `justInstalled` fallback window — `installedServers`'s own
       // comment above), there is nothing else known to preserve: the only
       // binding this render could have offered a Remove for is the one just
       // removed, so this becomes an empty, resolved list, the same as the
@@ -540,7 +547,7 @@ function ShellInner({
             Discord
           </h1>
           {discordBindingState.status === 'loading' &&
-          installedServerIds.length === 0 ? (
+          installedServers.length === 0 ? (
             // TEN-8: the lookup is in flight and `justInstalled` did not
             // already answer for this organization — rendering
             // `InstallButton` here would default to "Install," the exact
@@ -561,12 +568,13 @@ function ShellInner({
             // — an organization is no longer limited to the single
             // Install/Remove pair this screen used to be.
             <div className="flex flex-col gap-4">
-              {installedServerIds.length > 0 && (
+              {installedServers.length > 0 && (
                 <ul className="flex flex-col gap-2">
-                  {installedServerIds.map((serverId) => (
+                  {installedServers.map(({ serverId, serverName }) => (
                     <li key={serverId}>
                       <DiscordServerRow
                         serverId={serverId}
+                        serverName={serverName}
                         onRemove={() => void handleRemove(serverId)}
                         removing={removingServerId === serverId}
                       />
@@ -574,7 +582,12 @@ function ShellInner({
                   ))}
                 </ul>
               )}
-              <InstallButton organizationId={activeOrganizationId} />
+              {/* WEB-68 — labels itself "Install to another Discord server"
+                  once there is already at least one to add to. */}
+              <InstallButton
+                organizationId={activeOrganizationId}
+                hasExistingServer={installedServers.length > 0}
+              />
             </div>
           )}
           {error && <ErrorMessage error={error} />}

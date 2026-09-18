@@ -145,12 +145,14 @@ describe('runMigrations', () => {
       'secret_hash',
       'secret_nonce',
     ])
+    // WEB-68 — `server_name` added by this slice.
     expect(schema.discord_server_bindings).toEqual([
       'installed_at',
       'installed_by_account_id',
       'organization_id',
       'removed_at',
       'server_id',
+      'server_name',
     ])
     // FILE-6/MDL-9 — added by this slice.
     expect(schema.course_web_sources).toEqual([

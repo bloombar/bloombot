@@ -1887,6 +1887,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     installedByAccountId: 'account-1',
     installedAt: 0,
     removedAt: null,
+    serverName: null,
   }
   const BINDING_B: DiscordServerBindingSummary = {
     serverId: 'guild-b',
@@ -1894,6 +1895,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     installedByAccountId: 'account-1',
     installedAt: 0,
     removedAt: null,
+    serverName: null,
   }
 
   it('stays hidden when the organization holds zero or one active binding', async () => {

@@ -303,7 +303,15 @@ async function completeInstall(input: {
 
   const binding = discordServers.claimDiscordServerBinding(
     organizationId,
-    { serverId: guildId, installedByAccountId: consumed.accountId },
+    {
+      serverId: guildId,
+      installedByAccountId: consumed.accountId,
+      // WEB-68 — `guild` (above) is already the exact `userGuilds` entry
+      // this install is for; its `name` is persisted here rather than
+      // discarded, so the Discord screen can show it without a second
+      // Discord call on every page load.
+      serverName: guild.name,
+    },
     deps.db
   )
   // TEN-3: already actively bound to a different organization — refused the

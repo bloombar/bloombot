@@ -96,6 +96,77 @@ describe('discord-servers repo', () => {
     expect(binding?.removedAt).toBeNull()
   })
 
+  // WEB-68: a binding created without a `serverName` (every claim before
+  // this slice, and any caller that still omits it) reads back `null`
+  // rather than an empty string or a missing column — the fallback
+  // `apps/web`'s `DiscordServerRow` relies on.
+  it('claims a snowflake with no name and reads it back as null', () => {
+    testDb = createTestDatabase()
+    const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+    const serverId = '111111111111111121'
+
+    const binding = discordServers.claimDiscordServerBinding(
+      orgA,
+      { serverId, installedByAccountId: installerA.id },
+      testDb.db
+    )
+
+    expect(binding?.serverName).toBeNull()
+  })
+
+  // WEB-68: the name is recorded when the caller supplies one, and read
+  // back on a later listing — `apps/api`'s install callback is the one
+  // caller that does, from the guild summary it already read from Discord.
+  it('claims a snowflake with a name and stores it', () => {
+    testDb = createTestDatabase()
+    const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+    const serverId = '111111111111111131'
+
+    const binding = discordServers.claimDiscordServerBinding(
+      orgA,
+      {
+        serverId,
+        installedByAccountId: installerA.id,
+        serverName: 'Study Hall',
+      },
+      testDb.db
+    )
+
+    expect(binding?.serverName).toBe('Study Hall')
+    const [listed] = discordServers.listDiscordServerBindingsForOrganization(
+      orgA,
+      testDb.db
+    )
+    expect(listed?.serverName).toBe('Study Hall')
+  })
+
+  // WEB-68: re-claiming a released binding (TEN-3/TEN-6) is itself a
+  // reinstall, so it is one of the moments a name gets recorded or
+  // refreshed — `repos/discord-servers.ts`'s own comment on why.
+  it('records a name on re-claiming a released binding', () => {
+    testDb = createTestDatabase()
+    const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+    const serverId = '111111111111111141'
+
+    discordServers.claimDiscordServerBinding(
+      orgA,
+      { serverId, installedByAccountId: installerA.id },
+      testDb.db
+    )
+    discordServers.removeDiscordServerBinding(orgA, serverId, testDb.db)
+    const reclaimed = discordServers.claimDiscordServerBinding(
+      orgA,
+      {
+        serverId,
+        installedByAccountId: installerA.id,
+        serverName: 'Study Hall Renamed',
+      },
+      testDb.db
+    )
+
+    expect(reclaimed?.serverName).toBe('Study Hall Renamed')
+  })
+
   // TEN-4 (data-layer half): the foreign key on `installed_by_account_id`
   // only proves the account exists *somewhere* — it says nothing about
   // whether that account belongs to the organization doing the claiming. A

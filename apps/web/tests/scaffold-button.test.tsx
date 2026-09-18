@@ -46,6 +46,7 @@ function binding(
     installedByAccountId: 'account-1',
     installedAt: Date.now(),
     removedAt: null,
+    serverName: null,
     ...overrides,
   }
 }

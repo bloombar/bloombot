@@ -13552,3 +13552,32 @@ dead code an unused-export lint rule would have had to explain away rather than 
 could still reach. `pages/NotFound.tsx` itself is untouched — `pages/ProjectsPanel.tsx`, `pages/Chat.tsx` and
 `pages/Admin.tsx`'s four detail screens still render it directly, exactly as WEB-67's own last paragraph
 requires.
+
+## D-132 — `packages/db`/`apps/api`/`packages/actions`/`apps/web`: WEB-68 — a Discord binding's `server_name` is captured once, at install, and never backfilled
+
+**`discord_server_bindings.server_name` is nullable and populated only at claim time** — `apps/api`'s install
+callback already reads the guild's `name` from `userGuilds` (the same lookup TEN-4 uses to prove the caller
+administers it) and now passes it through to `claimDiscordServerBinding`/`ClaimDiscordServerBinding`, which
+this slice made accept it (optional, so every existing caller and every pre-slice binding still compiles and
+reads back `null`). Nothing calls Discord again to backfill a binding installed before this column existed —
+the brief's own "named by whatever the deployment does know about it rather than left blank" means the
+fallback is the id, in `apps/web`, not a fresh Discord read at rest. A binding gains a name only by being
+reinstalled, which re-claims it through the same code path (see below).
+
+**Re-claiming a released binding (TEN-3/TEN-6's own "any organization may re-claim it") also records the
+name it is claimed with, even when the binding already had one** — a reinstall is a legitimate moment to
+refresh a stale name (a guild renamed between installs), and there was no reason to special-case "already
+had a name" into a no-op when the caller-supplied name is, by construction, always at least as fresh as
+Discord's own answer at that moment.
+
+**`apps/web`'s `DiscordServerBindingSummary.serverName` is `string | null`, not optional** — every caller in
+this codebase already reads the full binding from `discordServers.list`, which always returns the column
+(possibly `null`); making it optional would have let a hand-built test fixture silently omit it instead of
+saying explicitly which case (named or not) it means, the same reasoning `removedAt` on the same interface
+already follows.
+
+**The install button's "another" label is a boolean prop (`hasExistingServer`), not the binding list
+itself** — `InstallButton` does not need to know which servers exist, only whether at least one active
+binding does; `pages/Shell.tsx` already computes `installedServers.length > 0` for the row list above it, so
+passing the derived boolean keeps `InstallButton`'s own props to what it actually branches on, rather than
+handing it a list to re-derive the same count from.

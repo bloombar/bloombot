@@ -15,14 +15,24 @@
  * honest version, and it is also the one that does not have to be walked back
  * later.
  *
- * **The platform-administrator console is described as it actually is.** An
- * earlier version of this text said that console "does not display any course,
- * student or message", which stopped being true when the console gained
- * organization, project, course and account screens (SPEC §45, ADMIN-7..ADMIN-14):
- * it now shows course settings and the people on the platform by name and email.
- * Conversations are still genuinely out of its reach, so that is the one limit
- * this section still claims — and it is claimed narrowly, because it is the only
- * part of the old sentence the software still honours.
+ * **The platform-administrator console is described as it actually is, and
+ * nothing is promised about where it will stop.** An earlier version of this
+ * text said that console "does not display any course, student or message",
+ * which stopped being true when the console gained organization, project,
+ * course and account screens (SPEC §45, ADMIN-7..ADMIN-14). A later version
+ * narrowed the claim to conversations, which the console genuinely cannot
+ * reach today (ADMIN-4) — but that is a boundary a future release may move, and
+ * a policy that had promised it would have to be walked back when it did. So
+ * this section now describes what an operator can see and declines to fence off
+ * any part of what the service holds. The software's own limit is a matter for
+ * the SPEC, not for a promise to students.
+ *
+ * The same reasoning runs one step further: whatever any screen shows, an
+ * operator or developer holds the server and the database file outright and can
+ * read every record in it. So the policy states that plainly and promises no
+ * privacy from the operator for any data the service keeps — and the Security
+ * section says explicitly that its measures guard against outsiders, not
+ * against the operator.
  *
  * **Google user data gets its own section** ("Google account data", below),
  * spelled out at the level of detail Google's own OAuth branding review asks
@@ -84,12 +94,16 @@ control panel has a transcripts screen for exactly this, with filtering by
 student and by date, and an export. If you are a student using this service,
 assume your instructor can read everything you asked it.
 
-Two limits apply to that, and both are real:
+Two things are true of a transcript read through the control panel, and both
+are real:
 
 - **Every transcript read and export is written to an access log** — who
   looked, at whose transcript, and when.
 - That access log is itself readable only by an organization's owner, not by
   every instructor in it.
+
+Both describe reads made through the panel. Neither constrains anyone holding
+the server or the database itself, as the next section explains.
 
 Platform administrators — a short, named list configured by the operator — can
 reach an administration console covering the whole platform. It shows the
@@ -101,10 +115,21 @@ been recognised by, and what each has cost to serve. Running the service means
 knowing who is on it, what it is doing and what it is spending, and that console
 is where an operator reads it.
 
-**Conversations are the exception, and they stay out of reach there.** No
-question a student asked and no answer the service gave is shown anywhere in
-that console, or reachable through it. A platform administrator can see that a
-student is enrolled in a course; they cannot see what that student asked it.
+That console is part of actively developed software, and what it covers changes
+as the platform does.
+
+Behind it, the people who build and run the service hold the server it runs on
+and the database file that stores everything described on this page. That access
+is what makes it possible to deploy a change, restore a backup, or work out why
+something broke — and it reaches every record the service keeps, students'
+conversations included. No part of the software limits it, and **this policy
+makes no promise of privacy from the people who operate the service, for any
+data it holds.** What a console screen happens to show changes what is
+convenient to look at; it does not change what is reachable.
+
+The practical assumption for anyone using this service is the one this page has
+already asked a student to make: what you type here is stored, and the people
+responsible for the service can read it.
 
 ## AI processing
 
@@ -197,6 +222,10 @@ stored hashed and short-lived. Session cookies are signed. Credentials the
 service needs live in server-side configuration and are never sent to a
 browser. Every request that reads or changes something checks that the
 account making it is allowed to.
+
+These measures guard the service against people outside it. They are not, and
+are not offered as, protection against the people who run it — see "Who can see
+a conversation" above.
 
 The service runs on a single server with a single database file, encrypted at
 rest to the extent the underlying server disk is. Backups are the operator's

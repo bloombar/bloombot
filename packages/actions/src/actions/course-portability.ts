@@ -43,7 +43,10 @@ import {
   ActionRefusedError,
 } from '../errors.js'
 import type { Action } from '../types.js'
-import { approveIfAdministratorOwned } from './courses.js'
+import {
+  approveIfAdministratorOwned,
+  enqueueCourseApprovalNotifyPending,
+} from './courses.js'
 
 type Project = NonNullable<ReturnType<typeof projects.getProject>>
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
@@ -245,7 +248,7 @@ export const importCourseAction: Action<
     if (!read.ok) refuseFile(read.reason)
     const exported = read.file.course
 
-    return db.transaction((tx): ImportCourseOutput => {
+    const output = db.transaction((tx): ImportCourseOutput => {
       // PORT-5 — resolved inside the transaction that writes the course, so
       // two imports landing at once cannot both be told the same suffix is
       // free (the same "check and write in one transaction" discipline
@@ -349,5 +352,17 @@ export const importCourseAction: Action<
         notCarried: read.file.notCarried,
       }
     })
+
+    // ADMIN-14 — the imported course landed pending, not administrator-owned
+    // (`enqueueCourseApprovalNotifyPending`'s own doc comment,
+    // `actions/courses.js`). Enqueued *after* the transaction above has
+    // committed, with the outer, non-transactional `db` — never `tx` itself,
+    // which `enqueueJob` (`@bloombot/db`) does not accept — the same
+    // "gathered inside the transaction, enqueued once it is durable"
+    // ordering that comment describes.
+    if (output.course.aiApprovedAt === null) {
+      enqueueCourseApprovalNotifyPending(organizationId, output.course.id, db)
+    }
+    return output
   },
 }

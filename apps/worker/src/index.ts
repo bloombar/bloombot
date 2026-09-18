@@ -35,6 +35,7 @@ import {
 import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { HandlerRegistry, runNextJob, type RetryPolicy } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
+import { buildEmailSender } from '@bloombot/mail'
 import type { FilesHttpOptions } from '@bloombot/openai'
 
 import {
@@ -47,6 +48,10 @@ import {
   createRemoveDeletedContentBytesHandler,
   REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
 } from './handlers/content-deletions.js'
+import {
+  createCourseApprovalNotificationHandler,
+  COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND,
+} from './handlers/course-approval-notifications.js'
 import {
   createDiscordScaffoldHandler,
   DISCORD_SCAFFOLD_JOB_KIND,
@@ -102,6 +107,24 @@ async function main(): Promise<void> {
     baseDelayMs: CONFIG.JOB_RETRY_BASE_DELAY_MS,
     backoffFactor: CONFIG.JOB_RETRY_BACKOFF_FACTOR,
   }
+  // ADMIN-14 — `courseApproval.notifyPending`'s own destination and link
+  // host, read once here alongside every other `CONFIG` value this process
+  // reads at startup, the same as `apps/api/src/index.ts` already does for
+  // itself. TEN-4: `publicAppUrl` is never hard-coded.
+  const supportContact = CONFIG.SUPPORT_CONTACT
+  const publicAppUrl = CONFIG.PUBLIC_APP_URL
+  const nodeEnv = CONFIG.NODE_ENV
+  // AUTH-5 — the real mail transport's non-secret configuration, the same
+  // shape `apps/api/src/index.ts` already reads; `MAIL_SMTP_USER`/
+  // `MAIL_SMTP_PASSWORD` are read directly just below, alongside this
+  // process's other credentials, for the same CFG-5 reason those are.
+  const smtp = {
+    host: CONFIG.MAIL_SMTP_HOST,
+    port: CONFIG.MAIL_SMTP_PORT,
+    from: CONFIG.MAIL_FROM,
+    user: process.env['MAIL_SMTP_USER'],
+    password: process.env['MAIL_SMTP_PASSWORD'],
+  }
   // SRV-6 — this process reaches Discord over REST with the same bot token
   // `apps/bot`'s gateway connection uses (`apps/bot`'s own module comment),
   // never a gateway connection of its own. `BOT_TOKEN` is the only one of
@@ -153,6 +176,18 @@ async function main(): Promise<void> {
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)
   runMigrations(db)
+
+  // ADMIN-14 — the same `@bloombot/mail#buildEmailSender` selection
+  // `apps/api/src/index.ts` already builds its own `EmailSender` with; see
+  // that function's own module comment for the full production/`MAIL_FILE`/
+  // SMTP ordering.
+  const emailSender = buildEmailSender(
+    nodeEnv,
+    'apps/worker',
+    process.env['MAIL_FILE'],
+    smtp,
+    logger
+  )
 
   // An opaque identifier for this process's own claims (`repos/jobs.ts`'s
   // `ClaimJob.owner`) — stable for the process's lifetime, so every claim
@@ -220,6 +255,19 @@ async function main(): Promise<void> {
     createRemoveDeletedContentBytesHandler({
       attachmentStorage,
       openaiHttpOptions,
+      logger,
+    })
+  )
+  // ADMIN-14 — this process's seventh handler: a course became pending
+  // approval, and the deployment's own support address (if configured)
+  // needs to hear about it (`handlers/course-approval-notifications.ts`'s
+  // own module comment).
+  handlers.register(
+    COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND,
+    createCourseApprovalNotificationHandler({
+      emailSender,
+      supportContact,
+      publicAppUrl,
       logger,
     })
   )

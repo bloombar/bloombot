@@ -110,9 +110,11 @@ export {
   unarchiveProjectAction,
 } from './projects.js'
 export {
+  COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND,
   deleteCourseAction,
   disableCourseAction,
   enableCourseAction,
+  enqueueCourseApprovalNotifyPending,
   getCourseAction,
   listCoursesAction,
   previewDeleteCourseAction,

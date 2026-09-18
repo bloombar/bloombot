@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   archiveProjectAction,
+  COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND,
   createProjectAction,
   deleteCourseAction,
   deleteProjectAction,
@@ -830,6 +831,12 @@ describe('courses.save (COST-8): a new course is approved automatically only whe
 
     expect(course.aiApprovedAt).not.toBeNull()
     expect(course.aiApprovedByAccountId).toBeNull()
+    // ADMIN-14 — approved on creation, so no support-address notification is
+    // needed: this course never became pending in the first place.
+    const queued = jobs.listJobsForOrganization(organizationId, 10, testDb.db)
+    expect(
+      queued.some((job) => job.kind === COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND)
+    ).toBe(false)
   })
 
   it('leaves a course created by a non-administrator in a non-administrator-owned organization pending', async () => {
@@ -859,6 +866,17 @@ describe('courses.save (COST-8): a new course is approved automatically only whe
     )
 
     expect(course.aiApprovedAt).toBeNull()
+    // ADMIN-14 — this course landed pending: `courses.save` must enqueue
+    // one `courseApproval.notifyPending` job naming it, so the support
+    // address hears about it (`docs/SPEC.md` §45).
+    const queued = jobs.listJobsForOrganization(organizationId, 10, testDb.db)
+    const notifyJob = queued.find(
+      (job) => job.kind === COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND
+    )
+    expect(notifyJob).toBeDefined()
+    expect(JSON.parse(notifyJob?.payload ?? '{}')).toMatchObject({
+      courseId: course.id,
+    })
   })
 
   it('approves a course landing in an organization a platform administrator owns, even when the actor creating it is not one', async () => {

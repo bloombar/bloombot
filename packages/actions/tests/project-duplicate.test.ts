@@ -10,12 +10,16 @@ import {
   conversations,
   courses,
   courseWebSources,
+  jobs,
   people,
   projects,
 } from '@bloombot/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { duplicateProjectAction } from '../src/actions/index.js'
+import {
+  COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND,
+  duplicateProjectAction,
+} from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
 import { ActionConflictError, ActionRefusedError } from '../src/errors.js'
 import {
@@ -115,6 +119,63 @@ describe('projects.duplicate', () => {
     expect(
       courses.getCourse(organizationId, source.course.id, testDb.db)
     ).toMatchObject({ title: 'Web Design', enabled: true })
+  })
+
+  // ADMIN-14 (`docs/SPEC.md` §45) — `projects.duplicate` never calls
+  // `approveIfAdministratorOwned` at all (`actions/courses.ts`'s own doc
+  // comment on `enqueueCourseApprovalNotifyPending`), so every course it
+  // creates is pending: one `courseApproval.notifyPending` job per
+  // duplicated course, naming that course.
+  it('enqueues one courseApproval.notifyPending job per duplicated course', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Fall 2026'
+    )
+    for (const title of ['Web Design', 'Intro to CS']) {
+      const created = courses.createCourse(
+        organizationId,
+        {
+          projectId,
+          title,
+          enabled: true,
+          adminsRole: `admins-${title}`,
+          studentsRole: `students-${title}`,
+          promptId: null,
+          instructions: null,
+          model: null,
+          vectorStoreId: null,
+          maxRequestsPerDay: null,
+          conversationScope: 'course',
+          categories: [],
+        },
+        testDb.db
+      )
+      if (!created.ok) throw new Error('setup failed: unexpected conflict')
+    }
+
+    const result = await dispatch(
+      duplicateProjectAction,
+      { projectId, name: 'Spring 2027' },
+      { organizationId, db: testDb.db }
+    )
+    expect(result.coursesCopied).toBe(2)
+
+    const copiedCourseIds = courses
+      .listCourses(organizationId, testDb.db, { projectId: result.project.id })
+      .map((course) => course.id)
+    expect(copiedCourseIds).toHaveLength(2)
+
+    const queued = jobs.listJobsForOrganization(organizationId, 10, testDb.db)
+    const notifyJobs = queued.filter(
+      (job) => job.kind === COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND
+    )
+    expect(notifyJobs).toHaveLength(2)
+    const notifiedCourseIds = notifyJobs.map(
+      (job) =>
+        (JSON.parse(job.payload ?? '{}') as { courseId: string }).courseId
+    )
+    expect(notifiedCourseIds.sort()).toEqual(copiedCourseIds.sort())
   })
 
   // PROJ-3 decision (`docs/DECISIONS.md`): a copied course carries the same

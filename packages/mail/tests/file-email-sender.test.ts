@@ -6,6 +6,10 @@
  * testing is not that it writes a file, but that it *refuses* to in
  * production, where writing sign-in links to disk on the box serving real
  * students is the exact failure the logging stand-in exists to avoid.
+ *
+ * ADMIN-14 — moved here from `apps/api/tests/file-email-sender.test.ts` when
+ * `FileEmailSender`/`buildEmailSender` moved into this package
+ * (`src/build-email-sender.ts`'s own module comment).
  */
 
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -14,8 +18,11 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { FileEmailSender } from '../src/file-email-sender.js'
-import { buildEmailSender, type SmtpEnv } from '../src/logging-email-sender.js'
+import {
+  buildEmailSender,
+  FileEmailSender,
+  type SmtpEnv,
+} from '../src/index.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
 
 // An `SmtpEnv` with nothing set — `smtp-email-sender.test.ts` covers the
@@ -85,6 +92,7 @@ describe('buildEmailSender', () => {
     expect(
       buildEmailSender(
         'development',
+        'apps/api',
         path,
         UNCONFIGURED_SMTP,
         createFakeLogger()
@@ -96,6 +104,7 @@ describe('buildEmailSender', () => {
     expect(
       buildEmailSender(
         'development',
+        'apps/api',
         undefined,
         UNCONFIGURED_SMTP,
         createFakeLogger()
@@ -111,6 +120,7 @@ describe('buildEmailSender', () => {
     expect(() =>
       buildEmailSender(
         'production',
+        'apps/api',
         path,
         UNCONFIGURED_SMTP,
         createFakeLogger()
@@ -119,6 +129,7 @@ describe('buildEmailSender', () => {
     expect(() =>
       buildEmailSender(
         'production',
+        'apps/api',
         undefined,
         UNCONFIGURED_SMTP,
         createFakeLogger()
@@ -136,6 +147,7 @@ describe('buildEmailSender', () => {
     const path = scratchFile()
     const sender = buildEmailSender(
       'production',
+      'apps/api',
       path,
       CONFIGURED_SMTP,
       createFakeLogger()

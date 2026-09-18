@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
+import { COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND } from '@bloombot/actions'
 import { createSession } from '@bloombot/auth'
 import {
   accounts,
@@ -28,6 +29,7 @@ import {
   courseWebSources,
   createFilesystemAttachmentStorage,
   enrolments,
+  jobs,
   memberships,
   organizations,
   people,
@@ -862,6 +864,16 @@ describe('WEB-53 — a platform administrator approves and unapproves courses', 
       action: 'revoke',
       accountId: admin.accountId,
     })
+
+    // ADMIN-14 — this unapprove was a genuine revoke (an approved course
+    // going pending), so it must enqueue one `courseApproval.notifyPending`
+    // job naming the course.
+    const queued = jobs.listJobsForOrganization(organizationId, 10, testDb.db)
+    const notifyJob = queued.find(
+      (job) => job.kind === COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND
+    )
+    expect(notifyJob).toBeDefined()
+    expect(JSON.parse(notifyJob?.payload ?? '{}')).toMatchObject({ courseId })
   })
 
   // Must-fix, first review round: a course that has *never been decided*
@@ -917,6 +929,20 @@ describe('WEB-53 — a platform administrator approves and unapproves courses', 
       accountId: admin.accountId,
     })
 
+    // ADMIN-14 — the first call actually called `revokeCourseApproval`
+    // (this test's own name), so it must enqueue one
+    // `courseApproval.notifyPending` job.
+    const queuedAfterFirst = jobs.listJobsForOrganization(
+      organizationId,
+      10,
+      testDb.db
+    )
+    expect(
+      queuedAfterFirst.filter(
+        (job) => job.kind === COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND
+      )
+    ).toHaveLength(1)
+
     // Now the course is already decided pending — a second unapprove is a
     // genuine no-op: 200, no further event.
     const second = await request(app)
@@ -930,6 +956,19 @@ describe('WEB-53 — a platform administrator approves and unapproves courses', 
         organizationId,
         courseId,
         testDb.db
+      )
+    ).toHaveLength(1)
+
+    // ADMIN-14 — the second call is the idempotent skip: still no second
+    // notification job.
+    const queuedAfterSecond = jobs.listJobsForOrganization(
+      organizationId,
+      10,
+      testDb.db
+    )
+    expect(
+      queuedAfterSecond.filter(
+        (job) => job.kind === COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND
       )
     ).toHaveLength(1)
   })

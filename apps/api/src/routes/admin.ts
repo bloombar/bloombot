@@ -56,6 +56,7 @@ import { z } from 'zod'
 
 import {
   checkPlatformHealth,
+  enqueueCourseApprovalNotifyPending,
   type PlatformHealthReport,
 } from '@bloombot/actions'
 import { isPlatformAdministrator } from '@bloombot/auth'
@@ -1088,6 +1089,16 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         res.status(404).json({ error: 'course_not_found' })
         return
       }
+      // ADMIN-14 — only on this branch, never the idempotent "already
+      // decided pending" skip above: that skip is not a fresh decision, so
+      // it must not tell the support address about one that did not happen
+      // (`enqueueCourseApprovalNotifyPending`'s own doc comment,
+      // `@bloombot/actions`).
+      enqueueCourseApprovalNotifyPending(
+        organizationId,
+        req.params.courseId,
+        deps.db
+      )
       res.status(200).json({ approved: false })
     }
   )

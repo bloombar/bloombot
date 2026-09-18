@@ -504,3 +504,12 @@ for a sign-in's own destination. This phase extends that fallback to every arriv
 screen, which showed an install button and no indication of what was already installed.
 
 **In scope:** WEB-67, WEB-68
+
+## Phase 42 — One place for an organization's settings
+
+An organization's Discord, Team, Usage and Jobs screens were four drawer entries and four destinations, while
+a course's settings had been one tabbed screen since WEB-35. This phase consolidates them the same way, gives
+each tab its own unsaved-changes guard, explains in ordinary words what each job actually did, stops a row's
+controls wrapping below it on a phone, and drops a row of buttons the console's own navigation made redundant.
+
+**In scope:** WEB-69, WEB-70, WEB-71, ADMIN-15

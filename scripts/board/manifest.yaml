@@ -4739,3 +4739,61 @@
   phase: 41
   status: In progress
   review: false
+- id: ADMIN-15
+  title: The console's screens do not repeat their own navigation
+  full: The Organizations screen ended with a row of buttons to Courses, Users and
+    Deletion history, from a time before the console had navigation of its own.
+    WEB-54's secondary navigation now carries all three at the top of every
+    console screen, so the buttons at the foot are removed rather than offering
+    a second way to the same places.
+  section: §47 One Place for an Organization's Settings
+  family: ADMIN
+  phase: 42
+  status: Backlog
+  review: false
+- id: WEB-69
+  title: An organization's settings are one tabbed screen, not four drawer entries
+  full: "Discord, Team, Usage and Jobs each had their own entry in the navigation
+    drawer and their own screen, so the drawer's Organization group was a list
+    of four things an owner had to already know the names of. They become one
+    Organization settings screen with a tab each, built the way a course's
+    settings already are (WEB-35): the tab is part of the address, so a tab can
+    be linked to and survives a reload; the tab bar is a real tablist reachable
+    by arrow keys; and a panel's contents load when the tab is first opened.
+    Every capability each screen had — installing and removing Discord servers,
+    granting and revoking memberships, inviting a colleague, setting and
+    clearing a spending cap, reading the…"
+  section: §47 One Place for an Organization's Settings
+  family: WEB
+  phase: 42
+  status: Backlog
+  review: false
+- id: WEB-70
+  title: A job says what work it stood for
+  full: "The Jobs tab named each job by its internal kind — roster.import,
+    contentDeletions.removeBytes — which tells an owner nothing. Each job now
+    carries a short description in ordinary words of what work it represented:
+    which course or project it was for where the job names one, what it was
+    doing, and what finishing meant. A kind the panel does not recognise falls
+    back to naming the kind itself rather than showing nothing, so a job added
+    later is never invisible."
+  section: §47 One Place for an Organization's Settings
+  family: WEB
+  phase: 42
+  status: Backlog
+  review: false
+- id: WEB-71
+  title: A row's controls stay on the row
+  full: "On a narrow screen the controls belonging to a row wrapped onto a line of
+    their own: a project's menu dropped below the project's name on the
+    organization screen, and a course's Chat button and menu dropped below the
+    course's name and metadata on both the organization screen and the project's
+    own screen. Each row now keeps its controls on the same line as the text
+    they belong to, at every width, with the text giving way — truncating or
+    wrapping within its own column — rather than the controls being pushed off
+    it."
+  section: §47 One Place for an Organization's Settings
+  family: WEB
+  phase: 42
+  status: Backlog
+  review: false

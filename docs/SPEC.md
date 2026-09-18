@@ -3422,3 +3422,45 @@ button. A server whose name was never recorded is named by whatever the deployme
 rather than left blank. When at least one server is already connected, the install button reads "Install
 to another Discord server", because installing again adds a server rather than replacing the one already
 there; with none connected it reads as it does today.
+
+### 47. One Place for an Organization's Settings
+
+#### WEB-69 An organization's settings are one tabbed screen, not four drawer entries
+
+Discord, Team, Usage and Jobs each had their own entry in the navigation drawer and their own screen, so the
+drawer's Organization group was a list of four things an owner had to already know the names of. They become
+one **Organization settings** screen with a tab each, built the way a course's settings already are (WEB-35):
+the tab is part of the address, so a tab can be linked to and survives a reload; the tab bar is a real
+tablist reachable by arrow keys; and a panel's contents load when the tab is first opened. Every capability
+each screen had — installing and removing Discord servers, granting and revoking memberships, inviting a
+colleague, setting and clearing a spending cap, reading the job list — works exactly as it did. The drawer
+carries one Organization settings entry in place of the four, and the old addresses continue to open the
+screen at the tab they named.
+
+Each tab keeps its own record of whether it has unsaved changes, rather than the screen sharing one. Moving
+to another tab, or leaving the screen, while a tab holds unsaved changes asks the three-answer question
+WEB-38 already asks on a course: save them and carry on, discard them and carry on, or stay where you are —
+with Cancel and `Escape` both meaning stay. A tab with nothing to save never asks.
+
+#### WEB-70 A job says what work it stood for
+
+The Jobs tab named each job by its internal kind — `roster.import`, `contentDeletions.removeBytes` — which
+tells an owner nothing. Each job now carries a short description in ordinary words of what work it
+represented: which course or project it was for where the job names one, what it was doing, and what
+finishing meant. A kind the panel does not recognise falls back to naming the kind itself rather than
+showing nothing, so a job added later is never invisible.
+
+#### WEB-71 A row's controls stay on the row
+
+On a narrow screen the controls belonging to a row wrapped onto a line of their own: a project's menu
+dropped below the project's name on the organization screen, and a course's Chat button and menu dropped
+below the course's name and metadata on both the organization screen and the project's own screen. Each
+row now keeps its controls on the same line as the text they belong to, at every width, with the text
+giving way — truncating or wrapping within its own column — rather than the controls being pushed off it.
+
+#### ADMIN-15 The console's screens do not repeat their own navigation
+
+The Organizations screen ended with a row of buttons to Courses, Users and Deletion history, from a time
+before the console had navigation of its own. WEB-54's secondary navigation now carries all three at the top
+of every console screen, so the buttons at the foot are removed rather than offering a second way to the
+same places.

@@ -642,13 +642,18 @@ describe('App — WEB-44: a sign-in destination naming an organization this acco
     expect(window.location.pathname).toBe('/o/institution-org/chat')
   })
 
-  // The WEB-32 no-leak guarantee itself, asserted at this level: an address
-  // a signed-in person *navigates to* (not one delivered by a sign-in
-  // redemption) naming an organization they cannot reach must still render
-  // `NotFound` — this fix only changes what a sign-in redemption does with
-  // an unreachable destination, not what `isShellRoute`'s own check does
-  // for anything else.
-  it('navigating directly to an unreachable organization address still renders NotFound, not a silent redirect', async () => {
+  // WEB-67 — this used to be the WEB-32 no-leak guarantee's own pin: a
+  // signed-in person *navigating to* (not delivered by a sign-in
+  // redemption) an address naming an organization they cannot reach
+  // rendered `NotFound`. WEB-67 generalises WEB-44's own sign-in fallback
+  // to every arrival, so this now takes the account home instead — the
+  // no-leak guarantee itself survives unchanged (the assertion below that
+  // the unreachable id is never named anywhere on screen), since the
+  // fallback discloses no more than the not-found screen it replaces
+  // (TEN-5).
+  it('navigating directly to an unreachable organization address lands on the account own home screen, replacing the history entry, and never names the unreachable organization', async () => {
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
     fetchMe.mockResolvedValue({
       account: {
         id: 'account-1',
@@ -663,20 +668,107 @@ describe('App — WEB-44: a sign-in destination naming an organization this acco
         connectedOrganizations: [],
       },
     })
-    window.history.pushState(null, '', '/o/stale-org/projects')
+    // `replaceState` here, not `pushState` — establishing the cold-load
+    // address the test starts from, not the navigation under test (the
+    // same discipline `describe('replace discipline (WEB-34)')`, above,
+    // already follows).
+    window.history.replaceState(null, '', '/o/stale-org/projects')
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const replaceState = vi.spyOn(window.history, 'replaceState')
 
     renderWithModal(<App />)
 
-    expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
-    // LINK-11 — `NotFound` now carries the panel's own chrome, the same as
-    // every other signed-in page, acting in the account's own reachable
-    // default organization ("Student") — never the unreachable one this
-    // address named ("stale-org"), which the switcher must never be asked
-    // to display (`components/SignedInChrome.tsx`'s own module comment).
-    expect(screen.getByTestId('organization-switcher')).toHaveTextContent(
-      'Student'
-    )
+    expect(
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Student')
+    // WEB-67: no not-found screen, and this account's own reachable
+    // organization ("Student") is what renders — never the unreachable one
+    // this address named ("stale-org"), which the switcher must never be
+    // asked to display (`components/SignedInChrome.tsx`'s own module
+    // comment) — the identical no-leak assertion the old version of this
+    // test made.
+    expect(screen.queryByTestId('not-found-page')).not.toBeInTheDocument()
     expect(screen.queryByText('stale-org')).not.toBeInTheDocument()
+    expect(window.location.pathname).toBe('/o/personal-org/projects')
+    // WEB-67: the unusable address's history entry is replaced, not pushed
+    // — a Back press must not return to it.
+    expect(pushState).not.toHaveBeenCalled()
+    expect(replaceState).toHaveBeenCalled()
+  })
+
+  // WEB-67 — the second half of the same requirement: an address this
+  // panel does not recognise at all (`routing/route.ts#parseRoute`'s own
+  // `'not-found'`), not merely one naming an unreachable organization.
+  it('navigating to an address this panel does not recognise at all lands on the account own home screen, replacing the history entry', async () => {
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Student',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.replaceState(null, '', '/this-is-not-a-real-address')
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Student')
+    expect(screen.queryByTestId('not-found-page')).not.toBeInTheDocument()
+    expect(window.location.pathname).toBe('/o/personal-org/projects')
+    expect(pushState).not.toHaveBeenCalled()
+    expect(replaceState).toHaveBeenCalled()
+  })
+
+  // WEB-55/WEB-67 — an account in more than one organization is sent to
+  // the arrival list, not guessed into one of them: `resolveHomeRoute`'s
+  // own multi-organization branch, exercised here through the WEB-67
+  // redirect rather than through `/` itself, so a change that special-cased
+  // `route.kind === 'home'` instead of reusing `resolveHomeRoute` outright
+  // would pass every other test in this file yet still land a
+  // multi-organization account inside one of its organizations here.
+  it('an unusable address for an account in more than one organization lands on the arrival list, not inside one of them', async () => {
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [
+          {
+            organizationId: 'org-a',
+            organizationName: 'Org A',
+            role: 'owner',
+          },
+          {
+            organizationId: 'org-b',
+            organizationName: 'Org B',
+            role: 'assistant',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.replaceState(null, '', '/o/stale-org/projects')
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+
+    renderWithModal(<App />)
+
+    expect(await screen.findByTestId('organizations-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('not-found-page')).not.toBeInTheDocument()
+    expect(window.location.pathname).toBe('/choose-organization')
+    expect(pushState).not.toHaveBeenCalled()
+    expect(replaceState).toHaveBeenCalled()
   })
 
   // Review finding 1 — a `refreshSession()` that does not resolve

@@ -13524,3 +13524,31 @@ through `organizationId` plus a name match, which is exactly the ambiguity D-128
 around for an organization with two similarly-named projects. Each owner links to `'admin-account'` by its
 own `accountId`, the same "id first, name for display" shape `CourseRowDetail`'s existing organization link
 already uses.
+
+## D-131 — `apps/web`: WEB-67 — one effect drives every home redirect, not a third copy of `resolveHomeRoute`'s call
+
+**The redirect is one `useEffect`, extended from the existing `route.kind === 'home'` effect, rather than a
+new effect per call site.** `App.tsx` already had one place that resolved `/` through `resolveHomeRoute` and
+replaced the history entry; the two call sites this slice generalises (`isShellRoute(route) &&
+!isReachableShellRoute(...)`, and the `route.kind === 'not-found'` fallthrough) do exactly the same thing for
+exactly the same reason, so folding all three into one effect's `isUnusable` boolean was the reading of "the
+machinery already exists and must be reused, not reinvented" the brief asked for — three separate effects,
+each calling `navigate(resolveHomeRoute(...), { replace: true })` on its own condition, would have been the
+same redirect written three times with three chances to drift apart.
+
+**The effect's condition is `route.kind === 'home' || route.kind === 'not-found' ||
+(isShellRoute(route) && !isReachableShellRoute(...))`, not an explicit exclusion list for the
+signed-out-only route kinds (`'connect'`, `'join-link'`, etc.) also reachable while signed in.** `isShellRoute`
+narrows to `OrganizationRoute | AccountRoute` only, disjoint from every signed-out-only `route.kind` — so the
+effect can never misfire for one of those without enumerating them, and the render bodies below it stay the
+one place that actually decides what each of those routes renders. The alternative (naming every excluded
+kind explicitly) would have needed updating in lockstep with every future addition to `Route` that is neither
+a `ShellRoute` nor `'not-found'`; this reads the same guarantee off `isShellRoute`'s own type instead.
+
+**`renderSignedInNotFound` was deleted outright, not kept for a caller that no longer exists.** Both of its
+two call sites (the unreachable-`ShellRoute` branch and the final fallthrough) became
+`renderHomeRedirectSkeleton()` calls; nothing else in `App.tsx` used it, so keeping it around would have been
+dead code an unused-export lint rule would have had to explain away rather than something a future slice
+could still reach. `pages/NotFound.tsx` itself is untouched — `pages/ProjectsPanel.tsx`, `pages/Chat.tsx` and
+`pages/Admin.tsx`'s four detail screens still render it directly, exactly as WEB-67's own last paragraph
+requires.

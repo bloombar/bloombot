@@ -161,25 +161,35 @@ test('a cold load of a deep course URL renders that course, panel navigation and
   await expect(page.getByText(courseTitle)).toBeVisible()
 })
 
-test('an address naming nothing this panel recognises renders the not-found screen, with a working way home (WEB-32)', async ({
+test('an unusable address takes a signed-in account home instead of a dead end (WEB-32, WEB-67)', async ({
   page,
 }) => {
   const suffix = randomUUID().slice(0, 8)
-  const email = `web32-nf-${suffix}@example.edu`
+  const email = `web67-home-${suffix}@example.edu`
 
   await signInFreshAccount(page, email)
   const organizationId = findPersonalOrganizationId(email)
 
-  // A path this router does not recognise at all.
+  // A path this router does not recognise at all — WEB-67 lands this on the
+  // account's own home address, replacing the history entry, rather than
+  // the not-found screen this used to render.
   await page.goto('/this-is-not-a-real-page')
-  await expect(page.getByTestId('not-found-page')).toBeVisible()
-  await page.getByRole('button', { name: 'Go home' }).click()
   await expect(page).toHaveURL(`/o/${organizationId}/projects`)
+  await expect(page.getByTestId('not-found-page')).not.toBeVisible()
 
   // An organization-scoped address naming an organization this account has
-  // no relationship to at all — never a leak of whether it exists.
+  // no relationship to at all — the identical fallback, and still never a
+  // leak of whether the organization exists (TEN-5): this account's own
+  // reachable organization renders, never the id the address named.
   await page.goto('/o/00000000-0000-0000-0000-000000000000/projects')
-  await expect(page.getByTestId('not-found-page')).toBeVisible()
+  await expect(page).toHaveURL(`/o/${organizationId}/projects`)
+  await expect(page.getByTestId('not-found-page')).not.toBeVisible()
+
+  // WEB-67: the redirect replaces the history entry, so Back from here does
+  // not return to the unusable address — it returns to wherever the account
+  // was before it navigated to that address at all (the sign-in landing).
+  await page.goBack()
+  await expect(page).toHaveURL(`/o/${organizationId}/projects`)
 })
 
 test("the browser's own Back button asks before leaving a dirty course form, and honours the answer (WEB-34, WEB-16)", async ({

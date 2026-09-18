@@ -38,6 +38,8 @@ export interface ProjectsPanelProps {
   organizationId: string
   /** COST-8/SURF-10 — threaded straight to `CourseEditor`'s own pending-approval banner (`pages/Shell.tsx`'s own module comment on where this originates). Optional, defaulting to `''` — most of this file's own tests do not care. */
   supportContact?: string
+  /** WEB-63/WEB-64 — threaded straight to `CourseEditor`'s own Transcripts tab (`CourseEditor`'s own module comment on why), the same shape `pages/Usage.tsx`/`pages/Transcripts.tsx` already take one level up in `pages/Shell.tsx`. Optional, defaulting to `false` — most of this file's own tests do not care. */
+  isOwner?: boolean
   /** WEB-32 — which of the four project/course addresses is current. */
   route: ProjectsRoute
   navigate: (route: Route, options?: { replace?: boolean }) => void
@@ -55,6 +57,7 @@ type ProjectResolution =
 export function ProjectsPanel({
   organizationId,
   supportContact = '',
+  isOwner = false,
   route,
   navigate,
   onOpenChat,
@@ -207,6 +210,7 @@ export function ProjectsPanel({
       organizationId={organizationId}
       project={project}
       supportContact={supportContact}
+      isOwner={isOwner}
       // WEB-36 — `CoursePeople`'s own transcript link, threaded straight
       // through (`CourseEditor`'s own module comment on why it takes this
       // at all).

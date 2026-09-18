@@ -13085,3 +13085,55 @@ inside the drawer and `click` on the dialog, and pins that the drawer stays open
 guard. The two existing backdrop-click tests needed a matching `fireEvent.mouseDown` added alongside their
 own `fireEvent.click`, since `fireEvent.click` alone (unlike a real click) does not synthesize a preceding
 `mousedown`.
+
+## D-124 — `apps/web`: WEB-63/WEB-64 — a course's own Usage and Transcripts tabs, and the extraction underneath both
+
+**Usage extraction (WEB-63) is a faithful one.** `hooks/useOrganizationUsage.ts` (the `costLedger.organizationUsage`
+fetch, and `today()`) and `components/usageFormat.ts` (`formatMicros`/`formatBySurface`/`studentLabel`) are
+pulled out of `pages/Usage.tsx` unchanged and reused, verbatim, by the new `components/CourseUsage.tsx` — the
+organization-wide report is the only read `costLedger.organizationUsage` offers (there is no course-scoped
+version), so the course tab filters that same report down to its own `courseId` rather than adding a second
+action. `pages/Usage.tsx` itself is otherwise untouched; `tests/usage.test.tsx` passed unedited throughout.
+
+**Transcripts extraction (WEB-64) is also faithful, not the "extract what you can" fallback the brief allowed
+for** — worth recording why, since the brief's own text (`docs/ROADMAP.md`'s "reaching things where they
+already are", phase 38 brief) flagged this as the likely case for a partial extraction given
+`pages/Transcripts.tsx`'s WEB-36 rework history (`epochRef`/`seedRef`/`readEpochRef`, three rounds of races
+found and fixed). The key realization: WEB-64's own tab has **no course-switching and no route-seeded
+person** at all — its `courseId` is a fixed prop for the component's whole life. That is exactly the
+degenerate case `components/TranscriptBrowser.tsx` was written for: everything downstream of "a course is
+chosen" (student/date filters, the entries list, export + its own list of requested exports, the ADMIN-2
+access log) moved there, parameterized by a `courseId` that never changes under one mounted instance. The
+race conditions the WEB-36 rework fixed were all about a *changing* course/person while mounted — with no
+course changes inside `TranscriptBrowser` itself, most of that machinery (`epochRef`'s course-selection half,
+`seedRef`, the seeded chain's own sequencing) simply does not apply and was not carried over.
+
+`pages/Transcripts.tsx` keeps its own project/course picker and the WEB-36 route-seeding logic (resolving a
+route-named course's project via `getCourse`, the disabled-course exception, the `appliedRouteRef` echo
+check) — genuinely irreducible, since only that screen has a picker and a route to seed from — but delegates
+everything past "a course is chosen" to `TranscriptBrowser`, mounted **keyed** by
+`` `${courseId}:${seedGeneration}` ``. A course change already changes the key (via `courseId`); `seedGeneration`
+is bumped only when the *route* names a genuinely new person for the *same* course (WEB-36 rework round 1's
+own "a routePersonId change alone" case) — the one scenario a bare `courseId` key would not remount for. This
+replaces the entries/students/exports/access-log half of the old `epochRef`/`seedRef` machinery with React's
+own remount-on-key-change primitive, rather than hand-rolled epoch counters, for that half specifically.
+`startDate`/`endDate` are the one piece of state that could not move into `TranscriptBrowser` outright: WEB-36
+rework round 1 found a date filter must *survive* an ordinary course change (only the student filter clears),
+which means it cannot live inside a component that remounts on exactly that change — `pages/Transcripts.tsx`
+owns the two dates and passes them down as controlled props; `TranscriptBrowser` falls back to owning them
+itself when a caller (the course tab) never passes any, which is the uncontrolled default a component like
+this normally takes.
+
+All of `tests/transcripts.test.tsx` (30+ cases pinning the WEB-36 rework's own race-condition fixes) passed
+unedited against the rewritten `pages/Transcripts.tsx` — the strongest evidence the extraction is behaviourally
+faithful, not merely typechecking. New coverage: `tests/course-editor-usage-transcripts.test.tsx` (both tabs,
+proven to fail at the pre-change commit in a throwaway `git worktree`) and
+`e2e/course-usage-transcripts-tabs.spec.ts` (an instructor reading both tabs on a real course, filtering by
+student, and exporting, against a live API and database).
+
+**One judgment call inside the e2e spec**: the export step exports unfiltered rather than filtered to the
+seeded student. `transcripts.export` (PPL-5, `packages/actions/src/actions/transcripts.ts`) refuses an
+export filtered to one student unless that student has a *verified* address, and this spec's student is
+inserted directly (`people.createPerson`, the same device `e2e/transcript-access-log.spec.ts` already uses),
+never verified. The student filter is still exercised, for the read; the export step switches back to "Every
+student" first, which is what the seeded-message assertions already prove works for a filtered read.

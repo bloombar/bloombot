@@ -146,6 +146,7 @@ import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
 import type { CourseInstructionsActions } from '../components/CourseInstructions.js'
 import { CoursePeople } from '../components/CoursePeople.js'
+import { CourseUsage } from '../components/CourseUsage.js'
 import { CourseWebSources } from '../components/CourseWebSources.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
@@ -159,6 +160,7 @@ import {
   Skeleton,
   SkeletonLine,
 } from '../components/Skeleton.js'
+import { TranscriptBrowser } from '../components/TranscriptBrowser.js'
 import { useFormDirty } from '../hooks/useFormDirty.js'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard.js'
 import {
@@ -176,6 +178,16 @@ export interface CourseEditorProps {
   supportContact?: string
   /** `undefined` — define a new course. A string — edit the course with that id. */
   courseId: string | undefined
+  /**
+   * WEB-64 — threaded straight to the Transcripts tab's own Access log
+   * section, the same `isOwner` shape `pages/Usage.tsx`/`pages/Transcripts.tsx`
+   * already take (`pages/Shell.tsx`'s own module comment): whether the
+   * caller's own membership in this organization is `'owner'`. Optional,
+   * defaulting to `false` — most of `tests/course-editor.test.tsx` does not
+   * care, and withholding an owner-only section by default is the safer
+   * default for a prop nobody passed.
+   */
+  isOwner?: boolean
   /**
    * WEB-35 — which of the five tabs is on screen, for an existing course.
    * `undefined` for a new course (this file's own module comment on why),
@@ -227,6 +239,11 @@ const TAB_LABELS: Record<CourseEditorTab, string> = {
   discord: 'Discord',
   roster: 'Roster',
   people: 'People',
+  // WEB-63/WEB-64 — the two labels the module comment on
+  // `routing/route.ts#COURSE_EDITOR_TABS` promised: "one edit there, plus
+  // one label above."
+  usage: 'Usage',
+  transcripts: 'Transcripts',
 }
 
 /** WEB-35 (rework round 1, cheap fix) — derived from `routing/route.ts#COURSE_EDITOR_TABS`, the one array the type, the parser's runtime guard and this tab bar all now agree with — a sixth tab is one edit there, plus one label above. */
@@ -454,6 +471,7 @@ export function CourseEditor({
   project,
   supportContact = '',
   courseId,
+  isOwner = false,
   tab,
   onNavigateTab,
   navigate,
@@ -2209,6 +2227,48 @@ export function CourseEditor({
                   navigate={navigate}
                 />
               </section>
+            )}
+          </div>
+
+          {/* WEB-63 — this course's own usage: the same figures
+              `pages/Usage.tsx` reports for it, laid out for a tab about one
+              course rather than a list of every course in the
+              organization. No spending-cap form here — that is the
+              organization's own, owner-only control
+              (`components/CourseUsage.tsx`'s own module comment). */}
+          <div
+            role="tabpanel"
+            id="course-tabpanel-usage"
+            aria-labelledby="course-tab-usage"
+            hidden={activeTab !== 'usage'}
+            className="flex flex-col gap-6"
+          >
+            {visitedTabs.has('usage') && (
+              <CourseUsage
+                organizationId={organizationId}
+                courseId={courseId}
+              />
+            )}
+          </div>
+
+          {/* WEB-64 — this course's own transcripts: the same browser
+              `pages/Transcripts.tsx` shows once a project and course are
+              chosen, with both already chosen here — no picker at all
+              (`components/TranscriptBrowser.tsx`'s own module comment). */}
+          <div
+            role="tabpanel"
+            id="course-tabpanel-transcripts"
+            aria-labelledby="course-tab-transcripts"
+            hidden={activeTab !== 'transcripts'}
+            className="flex flex-col gap-6"
+          >
+            {visitedTabs.has('transcripts') && (
+              <TranscriptBrowser
+                key={courseId}
+                organizationId={organizationId}
+                courseId={courseId}
+                isOwner={isOwner}
+              />
             )}
           </div>
         </>

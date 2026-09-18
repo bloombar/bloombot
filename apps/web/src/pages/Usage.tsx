@@ -45,62 +45,35 @@
  * and these are real students' addresses, shown only where a screen
  * genuinely cannot tell two people apart without one, which is not the
  * case here.
+ *
+ * WEB-63 — the fetch (`useOrganizationUsageReport`) and the small format
+ * helpers below it (`formatMicros`/`formatBySurface`/`studentLabel`) are
+ * shared with the course editor's own Usage tab
+ * (`components/CourseUsage.tsx`), which filters this same organization-wide
+ * report down to one course rather than reading a second, course-scoped
+ * action that does not exist.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 
-import {
-  ApiError,
-  fetchOrganizationUsage,
-  setSpendingCap,
-} from '../api/client.js'
-import type {
-  CostBySurface,
-  OrganizationUsageReport,
-  UsageNearLimit,
-} from '../api/types.js'
+import { ApiError, setSpendingCap } from '../api/client.js'
+import type { OrganizationUsageReport } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
+import {
+  formatBySurface,
+  formatMicros,
+  studentLabel,
+} from '../components/usageFormat.js'
+import { useOrganizationUsageReport } from '../hooks/useOrganizationUsage.js'
 import { InfoIcon, WarningIcon } from '../icons.js'
-import { surfaceLabel } from '../surface-label.js'
 
 export interface UsageScreenProps {
   organizationId: string
   /** Whether the caller's own membership in this organization is `'owner'` — see this file's own module comment for why the form is withheld rather than merely disabled for anyone else. */
   isOwner: boolean
-}
-
-/**
- * Integer micros (COST-1) to a plain dollar figure — the same conversion,
- * and the same reasoning, `pages/Admin.tsx#formatMicros` already uses for
- * ADMIN-4's own usage screen. Not extracted into a shared module: two
- * four-line copies of the identical conversion is still not enough
- * duplication to justify one, the same threshold that comment's own
- * "this app has no other place that formats one yet" already implied.
- */
-function formatMicros(micros: number): string {
-  return `$${(micros / 1_000_000).toFixed(2)}`
-}
-
-/**
- * Today, in the browser's own local timezone — `studentsNearLimit` is
- * scoped to one day (`usage.listUsageNearLimit`'s own `day` argument), and
- * an instructor reading this screen is thinking in *their* today, not
- * UTC's. Mirrors `apps/bot/src/today.ts`'s own `YYYY-MM-DD` construction
- * (local `getFullYear`/`getMonth`/`getDate`, not `toISOString()`, for the
- * identical reason that file's own comment gives) rather than importing it
- * — this app does not import another app's source at all, workspace
- * package or not (`api/types.ts`'s own module comment states the same
- * boundary for shapes this file already follows for logic).
- */
-function today(): string {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
 }
 
 /**
@@ -122,30 +95,6 @@ function parseCapAmount(
   return { ok: true, value }
 }
 
-/**
- * COST-7 — the same terse, inline register this screen's own per-course
- * total already uses (`{formatMicros(...)} · {callCount} call(s) ·
- * includes an estimate`), applied per surface rather than a second table or
- * chart. Joined with ` · ` into one line — `bySurface` only ever carries a
- * handful of entries (at most `discord`/`web`/`mcp`/`unknown`), so this
- * reads as a short list, not a wall of text.
- */
-function formatBySurface(bySurface: CostBySurface[]): string {
-  return bySurface
-    .map((entry) => {
-      const calls = entry.callCount === 1 ? 'call' : 'calls'
-      const estimateNote =
-        entry.estimatedCostMicros > 0 ? ' (includes an estimate)' : ''
-      return `${surfaceLabel(entry.surface)}: ${formatMicros(entry.costMicros)} · ${entry.callCount} ${calls}${estimateNote}`
-    })
-    .join(' · ')
-}
-
-/** What a near-limit row shows in place of a name — `personDisplayName` when the person has one, `personId` otherwise (this file's own module comment on why never email). */
-function studentLabel(entry: UsageNearLimit): string {
-  return entry.personDisplayName ?? entry.personId
-}
-
 /** `capInput`'s own starting value for a freshly loaded (or refreshed) report — the stored cap, formatted the same way `formatMicros` renders it but without the `$`, since this feeds an editable field rather than read-only text. */
 function capInputFromReport(report: OrganizationUsageReport): string {
   return report.spendingCapMicros === null
@@ -154,10 +103,14 @@ function capInputFromReport(report: OrganizationUsageReport): string {
 }
 
 export function Usage({ organizationId, isOwner }: UsageScreenProps) {
-  const [report, setReport] = useState<OrganizationUsageReport | undefined>(
-    undefined
-  )
-  const [loadError, setLoadError] = useState<ApiError | undefined>(undefined)
+  // WEB-63 — the fetch itself is shared with the course tab's own
+  // `CourseUsage` (this file's own module comment); `refresh` is re-run
+  // below after a cap save/clear, the same as before this extraction.
+  const {
+    report,
+    loadError,
+    refresh: refreshReport,
+  } = useOrganizationUsageReport(organizationId)
   const [capInput, setCapInput] = useState('')
   const [capParseError, setCapParseError] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -172,25 +125,13 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
     undefined
   )
 
-  const refresh = useCallback(
-    () =>
-      fetchOrganizationUsage(organizationId, today()).then(
-        (result) => {
-          setReport(result)
-          setCapInput(capInputFromReport(result))
-          setLoadError(undefined)
-        },
-        (caught: unknown) => {
-          if (caught instanceof ApiError) setLoadError(caught)
-          else throw caught
-        }
-      ),
-    [organizationId]
-  )
-
+  // `capInput`'s own starting value tracks the loaded (or refreshed) report
+  // — the same "seeded from a fresh report" timing the old, page-local
+  // fetch used to do inline; kept as its own effect now that the fetch
+  // itself lives in `useOrganizationUsageReport`; below.
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    if (report) setCapInput(capInputFromReport(report))
+  }, [report])
 
   const handleSave = async () => {
     const parsed = parseCapAmount(capInput)
@@ -209,7 +150,7 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
           ? 'Spending cap cleared.'
           : `Spending cap set to ${formatMicros(Math.round(parsed.value * 1_000_000))}.`
       )
-      await refresh()
+      await refreshReport()
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
       else throw caught
@@ -226,7 +167,7 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
     try {
       await setSpendingCap(organizationId, null)
       setStatusMessage('Spending cap cleared.')
-      await refresh()
+      await refreshReport()
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
       else throw caught

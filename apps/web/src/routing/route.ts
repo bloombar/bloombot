@@ -52,6 +52,14 @@ export const COURSE_EDITOR_TABS = [
   'discord',
   'roster',
   'people',
+  // WEB-63/WEB-64 — this course's own usage and transcripts, laid out for a
+  // screen about one course rather than the organization-wide `pages/Usage.tsx`/
+  // `pages/Transcripts.tsx`. `isCourseEditorTab`'s own runtime guard and
+  // `pages/CourseEditor.tsx`'s own `TAB_LABELS` both derive from this array
+  // (this array's own module comment), so both new tabs need nothing edited
+  // there beyond a label.
+  'usage',
+  'transcripts',
 ] as const
 
 export type CourseEditorTab = (typeof COURSE_EDITOR_TABS)[number]

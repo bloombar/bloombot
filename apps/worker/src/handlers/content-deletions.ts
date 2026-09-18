@@ -15,6 +15,13 @@
  * the local bytes and the provider-side resources are removed only after
  * the rows naming them have actually committed as deleted.
  *
+ * DATA-8's own retention sweep (`handlers/retention-sweep.ts`) also enqueues
+ * this job, for a *whole organization*'s own bytes, once that organization
+ * itself has already been permanently removed — `ParsedPayload`'s own doc
+ * comment (below) has why the payload can carry an explicit `organizationId`
+ * for that one case, distinct from `context.organizationId` (the job row's
+ * own organization, which cannot be the one just deleted).
+ *
  * **Reaching the provider**, for every attachment that ever recorded a
  * `providerFileId` (FILE-1): remove it from the course's own vector store
  * (when the course had one), then delete the file object itself — the
@@ -90,20 +97,49 @@ function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === 'string'
 }
 
-function parseCoursesPayload(raw: unknown): CoursePayload[] {
+/**
+ * DATA-8 rework, must-fix 1 — what `parsePayload` (below) hands back:
+ * `courses`, the same as before, plus an *optional* `organizationId`. When
+ * present, it names the organization whose bytes these actually are, for
+ * `removeBytes` below to pass to `AttachmentStorage` — which is keyed by
+ * organization id (`packages/db`'s `attachment-storage.ts`) — *instead of*
+ * `context.organizationId`, the job row's own organization. The two are the
+ * same for an ordinary course or project delete (`deletions.deleteCourse`/
+ * `deleteProject`, `@bloombot/actions`' `enqueueRemoveDeletedContentBytes`),
+ * which never sets this field, so `context.organizationId` is used exactly
+ * as before. They diverge for `handlers/retention-sweep.ts`'s own
+ * organization-level removal: the organization whose bytes these are has
+ * already been deleted by the time this job can run (`organizations.ts#deleteOrganizationData`'s
+ * own doc comment on why `jobs.organizationId` cannot name it), so that job
+ * is attached to a *different*, still-existing organization purely to
+ * satisfy `jobs.organizationId`'s own foreign key, and this field is what
+ * tells `removeBytes` where the actual bytes live instead.
+ */
+interface ParsedPayload {
+  organizationId?: string
+  courses: CoursePayload[]
+}
+
+function parsePayload(raw: unknown): ParsedPayload {
   const invalid = (): never => {
     throw new Error(
       'contentDeletions.removeBytes: payload must be an object shaped ' +
-        '{ courses: { courseId: string, vectorStoreId: string | null, ' +
+        '{ organizationId?: string, courses: { courseId: string, vectorStoreId: string | null, ' +
         'attachments: { attachmentId: string, providerFileId: string | null }[], ' +
         'exportIds: string[] }[] }'
     )
   }
   if (typeof raw !== 'object' || raw === null) return invalid()
-  const { courses } = raw as { courses?: unknown }
+  const { organizationId, courses } = raw as {
+    organizationId?: unknown
+    courses?: unknown
+  }
+  if (organizationId !== undefined && typeof organizationId !== 'string') {
+    return invalid()
+  }
   if (!Array.isArray(courses)) return invalid()
 
-  return courses.map((entry) => {
+  const parsedCourses = courses.map((entry) => {
     if (typeof entry !== 'object' || entry === null) return invalid()
     const { courseId, vectorStoreId, attachments, exportIds } = entry as Record<
       string,
@@ -138,6 +174,11 @@ function parseCoursesPayload(raw: unknown): CoursePayload[] {
       exportIds,
     }
   })
+
+  return {
+    ...(organizationId === undefined ? {} : { organizationId }),
+    courses: parsedCourses,
+  }
 }
 
 /**
@@ -169,7 +210,14 @@ export function createRemoveDeletedContentBytesHandler(
     rawPayload: unknown,
     context: JobContext
   ): Promise<RemoveDeletedContentBytesReport> => {
-    const courses = parseCoursesPayload(rawPayload)
+    const { organizationId: payloadOrganizationId, courses } =
+      parsePayload(rawPayload)
+    // DATA-8 rework, must-fix 1 — the organization these bytes actually
+    // belong to, on disk: the payload's own `organizationId` when this job
+    // was enqueued naming one explicitly (`ParsedPayload`'s own doc comment
+    // has why), `context.organizationId` — the job row's own organization —
+    // otherwise, exactly as before this rework.
+    const bytesOrganizationId = payloadOrganizationId ?? context.organizationId
 
     let bytesRemoved = 0
     let bytesFailed = 0
@@ -180,12 +228,12 @@ export function createRemoveDeletedContentBytesHandler(
 
     const removeBytes = async (id: string): Promise<void> => {
       try {
-        await deps.attachmentStorage.remove(context.organizationId, id)
+        await deps.attachmentStorage.remove(bytesOrganizationId, id)
         bytesRemoved += 1
       } catch (error) {
         bytesFailed += 1
         deps.logger.warn(
-          { err: error, organizationId: context.organizationId, id },
+          { err: error, organizationId: bytesOrganizationId, id },
           'apps/worker: could not remove a deleted course’s or project’s stored bytes'
         )
       }

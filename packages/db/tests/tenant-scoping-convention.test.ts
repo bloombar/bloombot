@@ -93,7 +93,11 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    reasoning `resolveDiscordServerBinding` already gets). `countQueuedJobs`
 //    is `apps/worker`'s own health endpoint's "how deep is the queue"
 //    (JOB-5) — an operational metric about the queue as a whole, the same
-//    class `deleteExpiredInstallStates` already is.
+//    class `deleteExpiredInstallStates` already is. `hasQueuedJobOfKind`
+//    (DATA-8) is the same class again — the retention sweep is platform-wide
+//    (`accounts`/`people` are not scoped to one organization either, TEN-1),
+//    so its own "is one already queued" duplicate guard has to look across
+//    every organization too.
 //  - cost-ledger.ts: `listOrganizationTotals` is COST-4's platform
 //    administrator read — "usage per organization", spanning every
 //    organization by definition, the same class `countQueuedJobs` already
@@ -192,6 +196,15 @@ const ALLOWLIST: Record<string, string[]> = {
     'listAccounts',
     'softDeleteAccount',
     'restoreAccount',
+    // DATA-8 — the same class `organizations.ts#listTenantDeletions` already
+    // is: the sweep's own candidate list spans every account, and an
+    // account is not scoped to one organization to begin with (this file's
+    // own module comment).
+    'listAccountsDeletedBefore',
+    // DATA-8 — scoped by `accountId`, the same "not organization-scoped"
+    // reason every other function in this list is, not by `organizationId`
+    // (there is none to scope by — an account can belong to several).
+    'permanentlyDeleteAccount',
   ],
   'cost-ledger.ts': [
     'listOrganizationTotals',
@@ -209,7 +222,20 @@ const ALLOWLIST: Record<string, string[]> = {
     'recordLastKnownConnected',
     'getLastKnownConnectedAt',
   ],
-  'organizations.ts': ['listTenantDeletions'],
+  'organizations.ts': [
+    'listTenantDeletions',
+    // DATA-8 — the sweep's own candidate list and its own "which
+    // organization does a platform-wide job belong to" pick; neither is
+    // about one already-known organization (this function's own doc
+    // comment on each).
+    'listOrganizationsDeletedBefore',
+    'pickReferenceOrganizationId',
+  ],
+  // DATA-8 — the same "the sweep is platform-wide" class
+  // `accounts.ts#listAccountsDeletedBefore`/`people.ts#listPeopleDeletedBefore`
+  // already are; `conversations.ts`'s own module comment used to say this
+  // file had no exception at all.
+  'conversations.ts': ['listConversationsDeletedBefore'],
   'course-join-links.ts': ['redeemJoinLink', 'redeemJoinLinkForWebAccount'],
   'discord-servers.ts': [
     'resolveDiscordServerBinding',
@@ -221,7 +247,7 @@ const ALLOWLIST: Record<string, string[]> = {
     'consumeInstallState',
     'deleteExpiredInstallStates',
   ],
-  'jobs.ts': ['claimNextJob', 'countQueuedJobs'],
+  'jobs.ts': ['claimNextJob', 'countQueuedJobs', 'hasQueuedJobOfKind'],
   'mcp-oauth.ts': [
     'createClient',
     'getClient',
@@ -254,8 +280,20 @@ const ALLOWLIST: Record<string, string[]> = {
     'listConnectedOrganizationsForAccount',
     'listConnectedOrganizationsWithNamesForAccount',
     'listPeopleForAccount',
+    // DATA-8 — the same class `accounts.ts#listAccountsDeletedBefore` just
+    // above already is: the sweep's own candidate list spans every
+    // organization on purpose.
+    'listPeopleDeletedBefore',
   ],
-  'projects.ts': ['findProjectOrganizationId'],
+  'projects.ts': [
+    'findProjectOrganizationId',
+    // DATA-8 — the sweep's own candidate list, the same class
+    // `organizations.ts#listOrganizationsDeletedBefore` already is.
+    'listProjectsDeletedBefore',
+  ],
+  // DATA-8 — the sweep's own candidate list, the same class
+  // `projects.ts#listProjectsDeletedBefore` already is.
+  'courses.ts': ['listCoursesDeletedBefore'],
   'enrolments.ts': ['listEnrolmentsForPeople'],
   'roster-import-acknowledgements.ts': ['listAcknowledgementsForAccount'],
   'person-link-challenges.ts': [

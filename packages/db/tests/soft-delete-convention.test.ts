@@ -42,7 +42,8 @@ const DELETABLE_TABLES = [
 // whether it is already soft-deleted, because deleting a tenant or a course
 // outright has to remove what was soft-deleted too, not leave it behind.
 //
-//  - organizations.ts#previewOrganizationDeletion / deletions.ts#previewCourseDeletion /
+//  - organizations.ts#previewOrganizationDeletion / organizations.ts#deleteOrganizationData /
+//    deletions.ts#previewCourseDeletion /
 //    deletions.ts#previewProjectDeletion / deletions.ts#deleteCourse /
 //    deletions.ts#deleteProject / deletions.ts#emptyCourse: ADMIN-5/PROJ-8/PROJ-9's
 //    own hard, permanent wipe — counts and removes every row a
@@ -54,9 +55,18 @@ const DELETABLE_TABLES = [
 //    tightened the convention test to scan private helpers too,
 //    `emptyCourse`'s own unfiltered read was folded into whichever exported
 //    function's body happened to precede it, which already carried this
-//    same allowlist entry). This slice does not change that operation;
-//    DATA-8's later sweep is what eventually reuses something like it for
-//    what soft-delete leaves behind.
+//    same allowlist entry). `deleteOrganizationData` is added here by
+//    DATA-8: it now also reads `courses`/`course_attachments`/
+//    `transcript_exports` (unfiltered by `deletedAt`, the identical reason)
+//    to gather each course's own `deletions.CourseByteRemoval` before
+//    deleting them, for the retention sweep's own use.
+//  - people.ts#permanentlyDeletePerson: DATA-8's own permanent wipe, one
+//    level down from `deleteOrganizationData` — removes a soft-deleted
+//    person's own conversations (and every message in them) regardless of
+//    whether either was tombstoned independently or inherited the same
+//    timestamp through `softDeletePerson`'s own cascade, the identical
+//    "a permanent wipe does not distinguish the two" reasoning every other
+//    entry in this list already gives.
 //  - organizations.ts#restoreOrganization / projects.ts#restoreProject /
 //    courses.ts#restoreCourse / people.ts#restorePerson /
 //    conversations.ts#restoreConversationsForPerson: DATA-9's own "a
@@ -87,7 +97,11 @@ const DELETABLE_TABLES = [
 //    its own past incomplete for a reason that has nothing to do with the
 //    account.
 const ALLOWLIST: Record<string, string[]> = {
-  'organizations.ts': ['previewOrganizationDeletion', 'restoreOrganization'],
+  'organizations.ts': [
+    'previewOrganizationDeletion',
+    'restoreOrganization',
+    'deleteOrganizationData',
+  ],
   'deletions.ts': [
     'previewCourseDeletion',
     'previewProjectDeletion',
@@ -98,7 +112,7 @@ const ALLOWLIST: Record<string, string[]> = {
   'projects.ts': ['restoreProject'],
   'courses.ts': ['restoreCourse'],
   'conversations.ts': ['restoreConversationsForPerson'],
-  'people.ts': ['mergePeople', 'restorePerson'],
+  'people.ts': ['mergePeople', 'restorePerson', 'permanentlyDeletePerson'],
   'cost-ledger.ts': ['getAccountUsageSummary'],
   'roster-import-acknowledgements.ts': ['listAcknowledgementsForAccount'],
 }

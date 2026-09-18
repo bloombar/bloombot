@@ -206,3 +206,30 @@ export function deleteExpiredChallenges(now: number, db: Executor): number {
     .run()
   return result.changes
 }
+
+/**
+ * DATA-8 — every outstanding challenge naming `personId` as its `discord`
+ * survivor (this file's own module comment: only `discord` challenges carry
+ * one), removed outright rather than re-pointed — unlike
+ * `repointOutstandingChallenges` above, there is no survivor left to
+ * re-point onto once `people.ts#permanentlyDeletePerson` is about to remove
+ * this person's own row entirely, so an outstanding challenge naming them is
+ * simply dead, the same as an expired one `deleteExpiredChallenges` above
+ * already removes.
+ */
+export function deleteChallengesForPerson(
+  organizationId: string,
+  personId: string,
+  db: Executor
+): number {
+  const result = db
+    .delete(personLinkChallenges)
+    .where(
+      and(
+        eq(personLinkChallenges.organizationId, organizationId),
+        eq(personLinkChallenges.personId, personId)
+      )
+    )
+    .run()
+  return result.changes
+}

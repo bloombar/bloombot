@@ -43,7 +43,7 @@
  * attempt.
  */
 
-import { and, asc, desc, eq, inArray, lt, lte, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, lt, lte, not, or, sql } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import { jobs } from '../schema.js'
@@ -457,4 +457,38 @@ export function countQueuedJobs(db: Database): number {
     .where(inArray(jobs.status, ['pending', 'running']))
     .get()
   return row?.count ?? 0
+}
+
+/**
+ * DATA-8 — whether a job of `kind` is already queued (pending, or running
+ * regardless of lease) anywhere on the platform, excluding `excludeJobId`
+ * itself — `apps/worker`'s own `retention.sweep` handler's guard against
+ * accumulating duplicate sweeps: it calls this with its own `context.jobId`
+ * excluded (this job is still `running`, not yet `succeeded`, at the moment
+ * it schedules its own successor — without the exclusion, this would always
+ * report "already queued" and the sweep would never reschedule itself) both
+ * there and at `apps/worker`'s own startup (no id to exclude there — `''`,
+ * never a real job id).
+ *
+ * TEN-2 exception: unscoped by design, the same class `countQueuedJobs`
+ * above already is — a sweep is platform-wide, not one organization's own
+ * job to guard against duplicating.
+ */
+export function hasQueuedJobOfKind(
+  kind: string,
+  excludeJobId: string,
+  db: Database
+): boolean {
+  const row = db
+    .select({ count: sql<number>`count(*)` })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.kind, kind),
+        inArray(jobs.status, ['pending', 'running']),
+        not(eq(jobs.id, excludeJobId))
+      )
+    )
+    .get()
+  return (row?.count ?? 0) > 0
 }

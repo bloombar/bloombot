@@ -20,7 +20,7 @@
 
 import { and, asc, desc, eq, gte, isNull, lte } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor } from '../client.js'
 import { writeTransaction } from '../client.js'
 import {
   conversations,
@@ -359,4 +359,31 @@ export function listAccessLogForCourse(
     )
     .orderBy(desc(transcriptAccessLog.sequence))
     .all()
+}
+
+/**
+ * DATA-8 — `people.ts#permanentlyDeletePerson`'s own use: `personId` here is
+ * nullable already (`schema.ts`'s own comment — `null` already means "an
+ * unfiltered read, everybody in the course"), so a row this student's own
+ * access once named is anonymized, not removed — the row itself is one of
+ * DATA-7's own named "records of events" that "cannot themselves be deleted
+ * by the person [they describe]", the same reason `actorAccountId` is left
+ * entirely untouched by `accounts.ts#permanentlyDeleteAccount`.
+ */
+export function clearPersonFromAccessLog(
+  organizationId: string,
+  personId: string,
+  db: Executor
+): number {
+  const result = db
+    .update(transcriptAccessLog)
+    .set({ personId: null })
+    .where(
+      and(
+        eq(transcriptAccessLog.organizationId, organizationId),
+        eq(transcriptAccessLog.personId, personId)
+      )
+    )
+    .run()
+  return result.changes
 }

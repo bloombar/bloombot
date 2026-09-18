@@ -15,7 +15,7 @@
 
 import { and, desc, eq } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor } from '../client.js'
 import { writeTransaction } from '../client.js'
 import {
   transcriptExports,
@@ -184,6 +184,33 @@ export function markExportFailed(
     )
     .returning()
     .get()
+}
+
+/**
+ * DATA-8 — `people.ts#permanentlyDeletePerson`'s own use: `personId` here is
+ * nullable already (`null` already means "every student the course's
+ * transcript covers", `schema.ts`'s own comment) — an export naming this
+ * student is anonymized, not removed, the same "the file itself is course
+ * content, not this student's alone" reasoning that already lets it survive
+ * the course-level sweep untouched by anything but a course/project/tenant
+ * delete.
+ */
+export function clearPersonFromExports(
+  organizationId: string,
+  personId: string,
+  db: Executor
+): number {
+  const result = db
+    .update(transcriptExports)
+    .set({ personId: null })
+    .where(
+      and(
+        eq(transcriptExports.organizationId, organizationId),
+        eq(transcriptExports.personId, personId)
+      )
+    )
+    .run()
+  return result.changes
 }
 
 export type { TranscriptExportStatus }

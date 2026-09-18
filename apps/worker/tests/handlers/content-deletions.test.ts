@@ -121,6 +121,79 @@ describe('contentDeletions.removeBytes handler', () => {
     expect(await storage.read(organizationId, 'export-1')).toBeUndefined()
   })
 
+  // DATA-8 rework, must-fix 1 — `handlers/retention-sweep.ts` enqueues this
+  // job under a *different* organization than the one whose bytes it is
+  // removing (the real one has already been permanently deleted, so it is
+  // no longer a valid `jobs.organizationId` — `ParsedPayload`'s own doc
+  // comment has the full mechanism). Fails without this slice's code:
+  // before it, this handler always used `context.organizationId` — the job
+  // row's own organization — to find the bytes, so it would have looked in
+  // `jobOwnerOrganizationId`'s own (empty) directory and reported the
+  // attachment already gone, leaving it on disk under `bytesOrganizationId`
+  // forever.
+  it('removes bytes from the organization the payload names, not the job row’s own organization, when the two differ', async () => {
+    const { storage, openaiHttpOptions } = await setUp()
+    const jobOwnerOrganizationId = randomUUID()
+    const bytesOrganizationId = randomUUID()
+    organizations.createOrganization(
+      jobOwnerOrganizationId,
+      { name: 'Job Owner Org', isPersonal: false },
+      testDb.db
+    )
+    organizations.createOrganization(
+      bytesOrganizationId,
+      { name: 'Bytes Org', isPersonal: false },
+      testDb.db
+    )
+    await storage.write(bytesOrganizationId, 'attachment-1', Buffer.from('x'))
+
+    const handlers = new HandlerRegistry()
+    handlers.register(
+      REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+      createRemoveDeletedContentBytesHandler({
+        attachmentStorage: storage,
+        openaiHttpOptions,
+        logger: createFakeLogger(),
+      })
+    )
+    jobs.enqueueJob(
+      jobOwnerOrganizationId,
+      {
+        kind: REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+        payload: {
+          organizationId: bytesOrganizationId,
+          courses: [
+            {
+              courseId: 'course-1',
+              vectorStoreId: null,
+              attachments: [
+                { attachmentId: 'attachment-1', providerFileId: null },
+              ],
+              exportIds: [],
+            },
+          ],
+        },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('succeeded')
+    expect(
+      await storage.read(bytesOrganizationId, 'attachment-1')
+    ).toBeUndefined()
+  })
+
   it('is a no-op, not an error, for an id that was never written (already removed, or a foreign id)', async () => {
     const { storage, openaiHttpOptions } = await setUp()
     const organizationId = randomUUID()

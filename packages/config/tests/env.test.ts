@@ -27,6 +27,46 @@ describe('parseEnv', () => {
     // SURF-10/COST-8 — parsed with a default, so a deployment that has not
     // set a support contact yet still starts.
     expect(env.SUPPORT_CONTACT).toBe('')
+    // DATA-7/DATA-8 — thirty days when unset (docs/SPEC.md §49's own
+    // number).
+    expect(env.DELETED_DATA_RETENTION_DAYS).toBe(30)
+  })
+
+  it('accepts a deployment-chosen retention window, including zero (DATA-8: disables the sweep)', () => {
+    expect(
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '0' })
+        .DELETED_DATA_RETENTION_DAYS
+    ).toBe(0)
+    expect(
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '90' })
+        .DELETED_DATA_RETENTION_DAYS
+    ).toBe(90)
+  })
+
+  it('rejects a non-integer retention window', () => {
+    expect(() =>
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '30.5' })
+    ).toThrow(EnvValidationError)
+  })
+
+  it('rejects a negative retention window', () => {
+    expect(() =>
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '-1' })
+    ).toThrow(EnvValidationError)
+  })
+
+  // DATA-8 rework, cheap-fix 3 — a blanked-out variable (`FOO=`, the same
+  // shape `env.example`'s own `ADMIN_EMAILS=`/`SUPPORT_CONTACT=` already
+  // invite) used to parse as `Number('') === 0`, which `min(0)` accepts
+  // silently — indistinguishable from a deployment's own deliberate
+  // "disable the sweep." Fails without `nonNegativeIntWithBlankDefault`
+  // (`env.ts`): the 30-day default must fire instead, the same as an
+  // altogether-absent variable.
+  it('treats a blank DELETED_DATA_RETENTION_DAYS the same as an absent one — the default fires, not 0', () => {
+    expect(
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '' })
+        .DELETED_DATA_RETENTION_DAYS
+    ).toBe(30)
   })
 
   it('defaults every upstream base URL to the real service (QA-2)', () => {

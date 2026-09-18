@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 
 import { describeJob } from '../src/pages/job-descriptions.js'
 
-// The seven kinds `apps/worker/src/index.ts` registers a handler for
+// The eight kinds `apps/worker/src/index.ts` registers a handler for
 // (that file's own `handlers.register` calls) — kept in step by hand, the
 // same convention `job-descriptions.ts`'s own module comment explains.
 const REGISTERED_KINDS = [
@@ -20,6 +20,8 @@ const REGISTERED_KINDS = [
   'transcripts.export',
   'contentDeletions.removeBytes',
   'courseApproval.notifyPending',
+  // DATA-8
+  'retention.sweep',
 ]
 
 describe('describeJob (WEB-70)', () => {

@@ -466,3 +466,12 @@ This phase makes the choice explicit on arrival, makes the organization on scree
 header and the drawer alike, and lets an owner rename an organization or a member leave one.
 
 **In scope:** WEB-55, WEB-56, WEB-57, WEB-58
+
+## Phase 38 — Reaching things where they already are
+
+A project's own screen could not do what its row on the organization screen could; a course's screen offered
+no chat, no usage and no transcripts, so reading either meant leaving for an organization-wide screen and
+filtering back down to the course already on screen. This phase closes those gaps, adds the platform
+administrator's own way into the console, and makes the drawer close on an outside click.
+
+**In scope:** WEB-59, WEB-60, WEB-61, WEB-62, WEB-63, WEB-64

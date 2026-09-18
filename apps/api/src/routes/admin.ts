@@ -72,6 +72,7 @@ import {
   organizations,
   people,
   projects,
+  rosterImportAcknowledgements,
   transcriptExports,
   type AttachmentStorage,
   type Database,
@@ -265,6 +266,16 @@ export interface AdminCourseApprovalEvent {
   createdAt: number
 }
 
+/** ROST-20 — one of a course's own roster-import acknowledgements, the acknowledging account's email resolved rather than left as a bare id, the same shape `AdminCourseApprovalEvent.accountEmail` already resolves above. */
+export interface AdminRosterAcknowledgement {
+  id: string
+  accountId: string
+  accountEmail: string | null
+  filename: string
+  acknowledgementVersion: string
+  acknowledgedAt: number
+}
+
 /** ADMIN-9 — one person enrolled in the course: named as WEB-52 names them, when they enrolled, their own usage in the course, and, when they are reachable as a console account, the id to link to (ADMIN-11) — `null` when this person has no `web` identity at all. Never a transcript: nothing here names a conversation or a message. */
 export interface AdminCoursePerson {
   personId: string
@@ -325,6 +336,9 @@ export interface AdminCourseDetail {
     bySurface: costLedger.CostBySurface[]
   }
   people: AdminCoursePerson[]
+  // ROST-20 — the course's own roster-import acknowledgements, alongside
+  // the approval history above.
+  rosterAcknowledgements: AdminRosterAcknowledgement[]
 }
 
 /**
@@ -389,6 +403,18 @@ export interface AdminAccountEnrolment {
   enroledAt: number
 }
 
+/** ROST-20 — one acknowledgement `AdminAccountDetail.rosterAcknowledgements` names, across every course and organization this account has ever imported a roster into — the course and organization named alongside it, the same "every course and organization named on this screen is a link" (ADMIN-11) `AdminAccountEnrolment` above already holds itself to. */
+export interface AdminAccountRosterAcknowledgement {
+  id: string
+  courseId: string
+  courseTitle: string
+  organizationId: string
+  organizationName: string
+  filename: string
+  acknowledgementVersion: string
+  acknowledgedAt: number
+}
+
 /**
  * ADMIN-11: an account's own console screen — its identity, its
  * organizations (membership and merely-connected alike), the courses its
@@ -411,6 +437,10 @@ export interface AdminAccountDetail {
   people: AdminAccountPerson[]
   enrolments: AdminAccountEnrolment[]
   usage: costLedger.AccountUsageSummary
+  // ROST-20 — every roster import this account has ever acknowledged,
+  // across every course and organization (a deliberate TEN-2 exception,
+  // `repos/roster-import-acknowledgements.ts`'s own module comment).
+  rosterAcknowledgements: AdminAccountRosterAcknowledgement[]
 }
 
 // ADMIN-5's own race — `AdminRouterDependencies.deletedTenantSweepDelayMs`'s
@@ -850,6 +880,33 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       })
     )
 
+    // ROST-20 — the course's own roster-import acknowledgements, the same
+    // "one lookup per distinct account, not per row" batching the approval
+    // history just above already uses.
+    const acknowledgementRows =
+      rosterImportAcknowledgements.listAcknowledgementsForCourse(
+        organizationId,
+        req.params.courseId,
+        deps.db
+      )
+    const acknowledgerEmails = new Map<string, string | null>()
+    const resolveAcknowledgerEmail = (accountId: string): string | null => {
+      const cached = acknowledgerEmails.get(accountId)
+      if (cached !== undefined) return cached
+      const email = accounts.getAccountById(accountId, deps.db)?.email ?? null
+      acknowledgerEmails.set(accountId, email)
+      return email
+    }
+    const rosterAcknowledgements: AdminRosterAcknowledgement[] =
+      acknowledgementRows.map((entry) => ({
+        id: entry.id,
+        accountId: entry.accountId,
+        accountEmail: resolveAcknowledgerEmail(entry.accountId),
+        filename: entry.filename,
+        acknowledgementVersion: entry.acknowledgementVersion,
+        acknowledgedAt: entry.acknowledgedAt,
+      }))
+
     // ADMIN-9 — the course's own usage, and the people enrolled in it (never
     // their transcript — this router's own module comment on the boundary).
     const courseUsage = costLedger.getCourseUsageSummary(
@@ -941,6 +998,7 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         bySurface: courseUsage.bySurface,
       },
       people: coursePeople,
+      rosterAcknowledgements,
     }
     res.status(200).json(body)
   })
@@ -1332,6 +1390,15 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
     const personIds = peopleRecords.map((person) => person.personId)
     const enrolmentRows = enrolments.listEnrolmentsForPeople(personIds, deps.db)
     const usage = costLedger.getAccountUsageSummary(account.id, deps.db)
+    // ROST-20 — every acknowledgement this account has ever made, across
+    // every course and organization; `listAcknowledgementsForAccount`'s own
+    // row shape already matches `AdminAccountRosterAcknowledgement` field
+    // for field, so no per-row mapping is needed here.
+    const rosterAcknowledgementRows =
+      rosterImportAcknowledgements.listAcknowledgementsForAccount(
+        account.id,
+        deps.db
+      )
 
     const body: AdminAccountDetail = {
       accountId: account.id,
@@ -1347,6 +1414,7 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       people: peopleRecords,
       enrolments: enrolmentRows,
       usage,
+      rosterAcknowledgements: rosterAcknowledgementRows,
     }
     res.status(200).json(body)
   })

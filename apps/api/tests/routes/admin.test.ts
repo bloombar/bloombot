@@ -33,6 +33,7 @@ import {
   memberships,
   organizations,
   people,
+  rosterImportAcknowledgements,
   transcriptExports,
   courses as coursesRepo,
   projects as projectsRepo,
@@ -1384,6 +1385,58 @@ describe('ADMIN-9 — a course’s console screen shows the course and the peopl
     expect(Array.isArray(body.approvalEvents)).toBe(true)
   })
 
+  // ROST-20: the course's own roster-import acknowledgements, alongside
+  // the approval history — the acknowledging account's email resolved.
+  it("carries the course's own roster-import acknowledgements", async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, courseId } = seedCourseWithSettings(testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: `instructor-${randomUUID()}@example.edu`,
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    const job = jobs.enqueueJob(
+      organizationId,
+      { kind: 'roster.import', payload: {}, maxAttempts: 5 },
+      testDb.db
+    )
+    rosterImportAcknowledgements.recordAcknowledgement(
+      organizationId,
+      {
+        courseId,
+        accountId: instructor.id,
+        filename: 'roster.csv',
+        jobId: job.id,
+        acknowledgementVersion: '2026-09-18',
+        acknowledgedAt: Date.now(),
+      },
+      testDb.db
+    )
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      rosterAcknowledgements: [
+        {
+          accountId: instructor.id,
+          accountEmail: instructor.email,
+          filename: 'roster.csv',
+          acknowledgementVersion: '2026-09-18',
+        },
+      ],
+    })
+  })
+
   // ADMIN-4's line, as amended in phase 40: this screen may name who is in a
   // course; it may never reach what they said. The course seeded here holds a
   // real conversation with a real message in each direction, so the assertion
@@ -1594,5 +1647,49 @@ describe('ADMIN-11 — an account has its own console screen', () => {
       .set('Cookie', caller.cookieHeader)
       .set('Origin', TEST_PUBLIC_APP_URL)
     expect(notAdmin.status).toBe(403)
+  })
+
+  // ROST-20: every roster-import acknowledgement this account has ever
+  // made, across every course and organization it has imported into.
+  it('carries the account’s own roster-import acknowledgements, across organizations', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const seed = seedConsoleTenant(testDb.db)
+    const job = jobs.enqueueJob(
+      seed.organizationId,
+      { kind: 'roster.import', payload: {}, maxAttempts: 5 },
+      testDb.db
+    )
+    rosterImportAcknowledgements.recordAcknowledgement(
+      seed.organizationId,
+      {
+        courseId: seed.courseId,
+        accountId: seed.studentAccountId,
+        filename: 'roster.csv',
+        jobId: job.id,
+        acknowledgementVersion: '2026-09-18',
+        acknowledgedAt: Date.now(),
+      },
+      testDb.db
+    )
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/accounts/${seed.studentAccountId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      rosterAcknowledgements: [
+        {
+          courseId: seed.courseId,
+          courseTitle: 'Course A',
+          organizationId: seed.organizationId,
+          filename: 'roster.csv',
+          acknowledgementVersion: '2026-09-18',
+        },
+      ],
+    })
   })
 })

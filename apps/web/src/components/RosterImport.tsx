@@ -55,18 +55,39 @@
  * possible while it is unticked, so the acknowledgement is read at the
  * moment it means something (a file is already chosen) rather than before
  * there is anything to acknowledge.
+ *
+ * **ROST-20's record, and the list below the import.** Every dispatch
+ * sends `ROSTER_ACKNOWLEDGEMENT_VERSION` (below) and the chosen file's own
+ * name alongside `csvText` — `roster.import`'s own input schema refuses a
+ * call missing either, so this is never silently omitted. The course's own
+ * acknowledgements are fetched on mount and refreshed once an import
+ * starts (`rosterAcknowledgements.listForCourse`), newest first, naming
+ * who acknowledged (an account id — this app has no read that turns one
+ * into a display name yet, the same D-54 gap `CourseInstructions.tsx`'s
+ * own module comment already documents for its own revision history), when,
+ * and the file.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { ApiError, getJobStatus, importRoster } from '../api/client.js'
-import type { JobStatus, RosterImportReport } from '../api/types.js'
+import {
+  ApiError,
+  getJobStatus,
+  importRoster,
+  listRosterAcknowledgements,
+} from '../api/client.js'
+import type {
+  JobStatus,
+  RosterImportAcknowledgement,
+  RosterImportReport,
+} from '../api/types.js'
 import { ImportIcon } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FileDropZone } from './FileDropZone.js'
 import { fileToText } from './file-text.js'
 import { FormField } from './FormField.js'
+import { LoadingStatus, SkeletonRow } from './Skeleton.js'
 
 export interface RosterImportProps {
   organizationId: string
@@ -93,6 +114,15 @@ const MAX_ROSTER_BYTES = 10 * 1024 * 1024
 // only one `RosterImport` ever renders per course screen (the same
 // assumption `data-testid="roster-import"` above already makes).
 const ACK_REASON_ID = 'roster-import-acknowledgement-reason'
+
+// ROST-20 — an identifier for the acknowledgement wording above, as it
+// stands today. Bump this (a new date, or any other value that has never
+// been used before) whenever that wording changes — never reuse an old
+// value, even if the new wording is later reverted to match it word for
+// word, so a stored `acknowledgementVersion` always names one specific
+// version of the text an instructor actually saw, never one this platform
+// merely happens to match again by coincidence.
+const ROSTER_ACKNOWLEDGEMENT_VERSION = '2026-09-18'
 
 function isRosterImportReport(value: unknown): value is RosterImportReport {
   return (
@@ -129,8 +159,35 @@ export function RosterImport({
   // comment for why this is the opposite default from
   // `createStudentCategories` just above.
   const [acknowledged, setAcknowledged] = useState(false)
+  // ROST-20 — the course's own acknowledgements, fetched on mount and
+  // refreshed once an import starts (below). `undefined` while the first
+  // fetch is still in flight, the same "loading, not merely empty" meaning
+  // `CourseInstructions.tsx`'s own `revisions` already carries.
+  const [acknowledgements, setAcknowledgements] = useState<
+    RosterImportAcknowledgement[] | undefined
+  >(undefined)
+  const [acknowledgementsError, setAcknowledgementsError] = useState<
+    ApiError | undefined
+  >(undefined)
 
   const settled = job?.status === 'succeeded' || job?.status === 'failed'
+
+  const refreshAcknowledgements = useCallback(() => {
+    listRosterAcknowledgements(organizationId, courseId).then(
+      (list) => {
+        setAcknowledgements(list)
+        setAcknowledgementsError(undefined)
+      },
+      (caught: unknown) => {
+        if (caught instanceof ApiError) setAcknowledgementsError(caught)
+        else throw caught
+      }
+    )
+  }, [organizationId, courseId])
+
+  useEffect(() => {
+    refreshAcknowledgements()
+  }, [refreshAcknowledgements])
 
   // Poll a running import the same way `ScaffoldButton.tsx` polls a
   // scaffold job — see that component's own module comment for the "still
@@ -198,12 +255,18 @@ export function RosterImport({
         courseId,
         csvText,
         createStudentCategories,
-        effectiveBaseName
+        effectiveBaseName,
+        selectedFile.name,
+        ROSTER_ACKNOWLEDGEMENT_VERSION
       )
       const status = await getJobStatus(organizationId, jobId)
       pollingSinceRef.current = Date.now()
       setJob(status)
       setSelectedFile(undefined)
+      // ROST-20 — the import started, so it wrote an acknowledgement
+      // (`roster.import`'s own "same transaction as the enqueue"): refresh
+      // the list now rather than waiting for a remount to show it.
+      refreshAcknowledgements()
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
       else throw caught
@@ -649,6 +712,46 @@ export function RosterImport({
           )}
         </div>
       )}
+
+      {/* ROST-20 — the course's own acknowledgements, newest first, below
+          the import itself: the person who took the responsibility can see
+          what they took and when. Readable by whoever can already import
+          here (this component's own module comment) — no new permission. */}
+      <div
+        className="flex flex-col gap-2"
+        data-testid="roster-acknowledgements"
+      >
+        <h3 className="text-section-title font-semibold text-neutral-900">
+          Acknowledgements
+        </h3>
+        {acknowledgementsError && (
+          <ErrorMessage error={acknowledgementsError} />
+        )}
+        {acknowledgements === undefined && !acknowledgementsError && (
+          <div className="flex flex-col gap-2">
+            <SkeletonRow />
+            <LoadingStatus />
+          </div>
+        )}
+        {acknowledgements && acknowledgements.length === 0 && (
+          <p className="text-sm text-neutral-500">
+            No roster has been imported into this course yet.
+          </p>
+        )}
+        {acknowledgements && acknowledgements.length > 0 && (
+          <ul className="flex flex-col gap-1">
+            {acknowledgements.map((entry) => (
+              <li
+                key={entry.id}
+                className="rounded-md border border-neutral-200 p-2 text-sm text-neutral-700"
+              >
+                {entry.filename} — acknowledged by {entry.accountId} on{' '}
+                {new Date(entry.acknowledgedAt).toLocaleString()}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }

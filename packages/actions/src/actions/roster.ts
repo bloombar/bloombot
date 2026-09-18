@@ -39,14 +39,44 @@
  * course) is in hand — a default this action can compute and the worker
  * cannot, since `parsePayload` there runs before the course is even
  * fetched.
+ *
+ * **ROST-20's acknowledgement, recorded here, in the same transaction as
+ * the enqueue.** `filename` and `acknowledgementVersion` are both
+ * required, not optional like ROST-15's two fields above — an unversioned
+ * record is exactly the thing ROST-20 exists to prevent, so a caller that
+ * omits either is refused by this action's own input schema before the
+ * policy even runs, rather than recorded blank. `jobs.enqueueJob`
+ * (`@bloombot/db`) was widened to accept an `Executor`
+ * (`repos/jobs.ts`'s own doc comment) so this action can enqueue the job
+ * and record the acknowledgement inside one `writeTransaction(...)`: an
+ * import that never started (a rolled-back transaction) records nothing,
+ * and an import that started can never lack one — ROST-20's own text,
+ * satisfied structurally rather than by two calls a crash between them
+ * could split. This also needs the caller's own account id
+ * (`courseInstructions.ts`'s own `requireAccountId`, the identical
+ * "a self-reported author is a forgeable audit trail" reasoning) — an
+ * acknowledgement with no one to name as having acknowledged it is not a
+ * record at all.
  */
 
-import { courses, jobs } from '@bloombot/db'
+import {
+  courses,
+  jobs,
+  rosterImportAcknowledgements,
+  writeTransaction,
+} from '@bloombot/db'
 import { z } from 'zod'
 
+import { ActionRefusedError } from '../errors.js'
 import type { Action } from '../types.js'
 
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
+
+/** Both `roster.import` and (were it ever needed) a future writer in this file refuse the same way when `dispatch` was not given an authenticated caller — the identical guard `course-instructions.ts#requireAccountId` uses, for the identical reason (this file's own module comment). */
+function requireAccountId(accountId: string | undefined): string {
+  if (!accountId) throw new ActionRefusedError()
+  return accountId
+}
 
 // The job `kind` `apps/worker`'s `handlers/roster-import.ts` registers its
 // handler under (that file's own `ROSTER_IMPORT_JOB_KIND`) — a literal
@@ -78,6 +108,10 @@ const importInputSchema = z.object({
   // validation runs.
   createStudentCategories: z.boolean().optional(),
   studentCategoryBaseName: z.string().trim().min(1).optional(),
+  // ROST-20 — both required (this file's own module comment on why:
+  // an unversioned record is what this requirement exists to prevent).
+  filename: z.string().min(1),
+  acknowledgementVersion: z.string().min(1),
 })
 type ImportInput = z.infer<typeof importInputSchema>
 
@@ -107,26 +141,82 @@ export const importRosterAction: Action<
     resolve: (input, context) =>
       courses.getCourse(context.organizationId, input.courseId, context.db),
   },
-  execute: ({ organizationId, input, entity, db }) => {
+  execute: ({ organizationId, input, entity, accountId, db }) => {
+    const acknowledgedByAccountId = requireAccountId(accountId)
     // ROST-15: "checked by default" (requirement 1) lives here, not in the
     // worker's own handler — see this file's own module comment.
     const createStudentCategories = input.createStudentCategories ?? true
     const studentCategoryBaseName =
       input.studentCategoryBaseName ?? `${entity.title} - STUDENTS`
-    const job = jobs.enqueueJob(
-      organizationId,
-      {
-        kind: ROSTER_IMPORT_JOB_KIND,
-        payload: {
-          courseId: entity.id,
-          csvText: input.csvText,
-          createStudentCategories,
-          studentCategoryBaseName,
+
+    // ROST-20: the enqueue and the acknowledgement it accompanies, in one
+    // transaction — this file's own module comment has the "structurally,
+    // not by two calls a crash could split" reasoning.
+    const job = writeTransaction(db, (tx) => {
+      const enqueued = jobs.enqueueJob(
+        organizationId,
+        {
+          kind: ROSTER_IMPORT_JOB_KIND,
+          payload: {
+            courseId: entity.id,
+            csvText: input.csvText,
+            createStudentCategories,
+            studentCategoryBaseName,
+          },
+          maxAttempts: ROSTER_IMPORT_MAX_ATTEMPTS,
         },
-        maxAttempts: ROSTER_IMPORT_MAX_ATTEMPTS,
-      },
-      db
-    )
+        tx
+      )
+      rosterImportAcknowledgements.recordAcknowledgement(
+        organizationId,
+        {
+          courseId: entity.id,
+          accountId: acknowledgedByAccountId,
+          filename: input.filename,
+          jobId: enqueued.id,
+          acknowledgementVersion: input.acknowledgementVersion,
+          acknowledgedAt: Date.now(),
+        },
+        tx
+      )
+      return enqueued
+    })
     return { jobId: job.id }
   },
+}
+
+const listAcknowledgementsInputSchema = z.object({
+  courseId: z.string().min(1),
+})
+type ListAcknowledgementsInput = z.infer<typeof listAcknowledgementsInputSchema>
+
+/**
+ * ROST-20: a course's own roster-import acknowledgements, newest first —
+ * the same read/write access split `courseInstructions.list` already uses
+ * for the course's other own histories: reachable by whoever can already
+ * import a roster there (`{ resource: 'course', access: 'write' }`, the
+ * identical descriptor `importRosterAction` above declares), no new
+ * permission added.
+ */
+export const listRosterAcknowledgementsAction: Action<
+  'rosterAcknowledgements.listForCourse',
+  ListAcknowledgementsInput,
+  Course,
+  rosterImportAcknowledgements.RosterImportAcknowledgement[]
+> = {
+  name: 'rosterAcknowledgements.listForCourse',
+  description:
+    "List a course's roster-import acknowledgements (ROST-20), newest first: who acknowledged, when, the file, and which wording they were shown.",
+  inputSchema: listAcknowledgementsInputSchema,
+  policy: {
+    descriptor: { resource: 'course', access: 'write' },
+    resolve: (input, context) =>
+      courses.getCourse(context.organizationId, input.courseId, context.db),
+  },
+  execute: ({ organizationId, entity, db }) =>
+    rosterImportAcknowledgements.listAcknowledgementsForCourse(
+      organizationId,
+      entity.id,
+      db
+    ),
 }

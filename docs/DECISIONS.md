@@ -13661,3 +13661,41 @@ states already explain themselves, and ROST-19 gates starting a fresh import, no
 locked while a run is in flight (`importing || (job !== undefined && !settled)`) so an instructor cannot
 untick and re-tick mid-import, but neither is gated on `acknowledged` itself — the box has to stay
 interactive precisely because it is what makes the button interactive.
+
+## D-136 — `packages/db`/`packages/actions`: ROST-20 — the acknowledgement is written in the enqueue's own
+transaction, not adjacent to it
+
+**`jobs.enqueueJob` (`packages/db/src/repos/jobs.ts`) was widened from `db: Database` to `db: Executor`.**
+The brief allows either "the same transaction or immediately adjacent to the enqueue," and adjacent was the
+existing precedent — `course-portability.ts`'s own module comment documents *not* enqueueing inside its own
+transaction for exactly this reason ("`enqueueJob` does not accept one"). But ROST-20's own text is that "an
+import that never started records nothing, and an import that started can never lack one" — two calls with
+nothing atomic between them can still be split by a crash (the job enqueues, the process dies, the
+acknowledgement never writes), which is a real, if rare, way to violate that guarantee. Widening `enqueueJob`
+to accept `Executor` (every other repo function's own body only calls `select`/`insert`/`update`/`delete`, so
+`Database`'s wider surface was never actually used) lets `roster.import` (`packages/actions/src/actions/roster.ts`)
+enqueue the job and record the acknowledgement inside one `writeTransaction(...)`, the same "called from
+inside another transaction" widening `course-instruction-revisions.ts#createRevision`'s own doc comment
+already explains for the identical reason — making the guarantee structural rather than a matter of two call
+sites staying carefully ordered forever. `course-portability.ts`'s own "does not accept one" comment now
+describes a limitation that no longer exists; left alone, since fixing that call site's own batched-enqueue
+shape is outside this slice.
+
+**`acknowledgementVersion`/`filename` are both required on `roster.import`'s own input schema, not
+defaulted.** ROST-20's whole point is that an unversioned record is not evidence of anything — so a caller
+that omits either is refused by zod before the policy even runs (`ActionInputError`), the same refusal shape
+an empty CSV already gets, rather than being recorded with a blank or a placeholder value that would read as
+real data later.
+
+**The acknowledging account comes from `context.accountId`, never from the action's own input**, the
+identical "a self-reported author is a forgeable audit trail" reasoning `course-instructions.ts`'s own
+`requireAccountId` already holds `courseInstructions.save`/`.restore` to — a call with no authenticated
+account is refused (`ActionRefusedError`), never recorded as acknowledged by nobody.
+
+**The course's own list is read through a new action, `rosterAcknowledgements.listForCourse`, gated behind
+the identical `{ resource: 'course', access: 'write' }` descriptor `roster.import` itself declares** — the
+brief's own "add no new permission, reuse the existing one." The account-wide read for ADMIN-11
+(`repos/roster-import-acknowledgements.ts#listAcknowledgementsForAccount`) is read directly by `apps/api`'s
+admin router instead, the same way every other ADMIN-11 cross-tenant read in that file already bypasses
+`dispatch` entirely (`costLedger.listAccountTotals`, `memberships.listMembershipsForAccountWithOrganizations`,
+etc.) — this router is not reached through the organization-scoped action pipeline at all.

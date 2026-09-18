@@ -4497,7 +4497,7 @@
   section: §43 Reaching Things Where They Already Are
   family: WEB
   phase: 38
-  status: In progress
+  status: Done
   review: false
 - id: WEB-60
   title: Clicking away from the drawer closes it
@@ -4508,7 +4508,7 @@
   section: §43 Reaching Things Where They Already Are
   family: WEB
   phase: 38
-  status: In progress
+  status: Done
   review: false
 - id: WEB-61
   title: A project's own screen carries the same menu its row does
@@ -4520,7 +4520,7 @@
   section: §43 Reaching Things Where They Already Are
   family: WEB
   phase: 38
-  status: In progress
+  status: Done
   review: false
 - id: WEB-62
   title: A course's own screen offers a way into its chat
@@ -4530,7 +4530,7 @@
   section: §43 Reaching Things Where They Already Are
   family: WEB
   phase: 38
-  status: In progress
+  status: Done
   review: false
 - id: WEB-63
   title: A course's own screen shows what it has spent
@@ -4541,7 +4541,7 @@
   section: §43 Reaching Things Where They Already Are
   family: WEB
   phase: 38
-  status: Backlog
+  status: In progress
   review: false
 - id: WEB-64
   title: A course's own screen shows its transcripts
@@ -4553,5 +4553,5 @@
   section: §43 Reaching Things Where They Already Are
   family: WEB
   phase: 38
-  status: Backlog
+  status: In progress
   review: false

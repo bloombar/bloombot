@@ -54,7 +54,18 @@ import { renderWithModal, withModal } from './helpers/render-with-modal.js'
  * decide anything about.
  */
 function renderShell(
-  props: Omit<ShellProps, 'route' | 'navigate'> & { route?: ShellRoute }
+  props: Omit<ShellProps, 'route' | 'navigate'> & {
+    route?: ShellRoute
+    /**
+     * WEB-59 — an optional spy over every `navigate()` call this render
+     * makes, including one `isShellRoute` filters out of `route` itself
+     * (`{ kind: 'platform-admin' }` — `Shell` never renders the console, so
+     * the guard below leaves `route` untouched for it) — most of this
+     * file's own tests do not care what was *attempted*, only what actually
+     * rendered.
+     */
+    onNavigate?: (route: Route) => void
+  }
 ) {
   const account = props.account
   const defaultOrganizationId =
@@ -73,6 +84,7 @@ function renderShell(
   function Harness() {
     const [route, setRoute] = useState<ShellRoute>(initialRoute)
     const navigate = (next: Route) => {
+      props.onNavigate?.(next)
       // `Shell` only ever constructs a `ShellRoute` itself — this mirrors
       // `App.tsx`'s own guard (`isShellRoute`) rather than assuming it.
       if (isShellRoute(next)) setRoute(next)
@@ -173,6 +185,7 @@ function switchOrganization(organizationName: string) {
 const MULTI_MEMBERSHIP_ACCOUNT: AccountSummary = {
   id: 'account-1',
   email: 'instructor@example.edu',
+  isPlatformAdministrator: false,
   memberships: [
     { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
     {
@@ -192,6 +205,7 @@ const MULTI_MEMBERSHIP_ACCOUNT: AccountSummary = {
 const CONNECTED_NON_MEMBER_ACCOUNT: AccountSummary = {
   id: 'account-2',
   email: 'student@example.edu',
+  isPlatformAdministrator: false,
   memberships: [
     {
       organizationId: 'personal-org',
@@ -212,6 +226,7 @@ const CONNECTED_NON_MEMBER_ACCOUNT: AccountSummary = {
 const SINGLE_MEMBERSHIP_ACCOUNT: AccountSummary = {
   id: 'account-3',
   email: 'owner@example.edu',
+  isPlatformAdministrator: false,
   memberships: [
     { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
   ],
@@ -1250,6 +1265,61 @@ describe('Shell (WEB-3, WEB-4)', () => {
       ).toBeInTheDocument()
     })
 
+    // WEB-59: an Admin link, in its own section below the existing groups,
+    // divided the way the organization group already is (this describe
+    // block's own first test on that divider) — shown only for an account
+    // `GET /auth/me` actually reports as a platform administrator.
+    describe('the Admin link (WEB-59)', () => {
+      it('offers no Admin link for an ordinary account, even one with two memberships', () => {
+        renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
+        openDrawer()
+
+        expect(
+          screen.queryByRole('button', { name: 'Admin' })
+        ).not.toBeInTheDocument()
+      })
+
+      it('offers an Admin link, in its own section below the existing groups, for a platform administrator, and it navigates to the console', () => {
+        const adminAccount: AccountSummary = {
+          ...MULTI_MEMBERSHIP_ACCOUNT,
+          isPlatformAdministrator: true,
+        }
+        const onNavigate = vi.fn()
+        renderShell({
+          account: adminAccount,
+          onSignedOut: vi.fn(),
+          onNavigate,
+        })
+        openDrawer()
+
+        const nav = screen.getByRole('navigation', { name: 'Main' })
+        const adminLink = screen.getByRole('button', { name: 'Admin' })
+        expect(nav).toContainElement(adminLink)
+        // Below every other group — the organization group's own last item
+        // (Jobs) precedes it, the same "later in the DOM" relation this
+        // describe block's own first test already uses for the divider.
+        const jobs = screen.getByRole('button', { name: 'Jobs' })
+        expect(
+          jobs.compareDocumentPosition(adminLink) &
+            Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy()
+        // Its own divider, distinct from the one between the everyday and
+        // organization groups.
+        expect(screen.getAllByRole('separator')).toHaveLength(2)
+
+        fireEvent.click(adminLink)
+        expect(onNavigate).toHaveBeenCalledWith({ kind: 'platform-admin' })
+        // Closes the drawer the same way every other drawer control does —
+        // `tests/app-shell.test.tsx` pins the transition itself; this only
+        // checks that closing was actually requested (the switcher test
+        // above, in this same describe block, checks the same thing the
+        // same way).
+        expect(screen.getByRole('dialog', { name: 'Navigation' })).toHaveClass(
+          '-translate-x-full'
+        )
+      })
+    })
+
     it("states the acting organization's name at the header's leading edge, beside the home control — not the trailing edge with the profile control", () => {
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       // A single option would read plainly; two memberships (this account)
@@ -1382,6 +1452,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       const beforeLeaving: AccountSummary = {
         id: 'account-9',
         email: 'member@example.edu',
+        isPlatformAdministrator: false,
         memberships: [
           {
             organizationId: 'org-team',

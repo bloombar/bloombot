@@ -13,6 +13,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 
 import {
+  isPlatformAdministrator,
   isSameOriginPath,
   redeemSignInLink,
   requestSignInLink,
@@ -201,6 +202,16 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
    * here specifically because a valid session already proved this exact
    * account, not a value this route accepts from the caller.
    *
+   * `isPlatformAdministrator` (WEB-59): whether this account's own email is
+   * on the platform-administrator allowlist (AUTH-4) — read here, live, on
+   * every request, through `@bloombot/auth`'s own `isPlatformAdministrator`,
+   * never cached on the session or inferred in the browser from the email
+   * itself. This is what `components/SignedInChrome.tsx` reads to decide
+   * whether the drawer offers an **Admin** link at all; the console's own
+   * routes (`routes/platform-admin.ts`) refuse a non-administrator
+   * regardless, so this field only decides what is *offered*, never what is
+   * *allowed*.
+   *
    * `connectedOrganizations` (LINK-10): a membership (TEN-1's
    * administrative relationship) is not the same thing as a connected
    * person (LINK-3's proof) — a student who connects through the Discord
@@ -266,6 +277,9 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
       account: {
         id: req.session.accountId,
         email: account.email,
+        // WEB-59 — live, per request (this route's own doc comment above),
+        // never cached alongside the rest of the session.
+        isPlatformAdministrator: isPlatformAdministrator(account.email),
         memberships: accountMemberships.map((membership) => {
           const organization = organizations.getOrganizationById(
             membership.organizationId,

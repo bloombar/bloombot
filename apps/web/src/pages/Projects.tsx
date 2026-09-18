@@ -32,40 +32,28 @@
  * name through `useModal()`'s own `prompt` (`components/modal/`), the one
  * dialog this app renders, rather than a second free-text field grown per
  * row.
+ *
+ * WEB-61: the row menu's own item list and handlers (Archive/Restore,
+ * Duplicate, Import, Rename, Delete) now live in
+ * `hooks/useProjectMenu.tsx`, shared with `pages/Courses.tsx` (the
+ * project's own screen), rather than kept here and copied there — see that
+ * hook's own module comment for why it is a hook and not a component.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import {
-  archiveProject,
-  createProject,
-  deleteProject,
-  duplicateProject,
-  listCourses,
-  listProjects,
-  previewDeleteProject,
-  renameProject,
-  unarchiveProject,
-} from '../api/client.js'
+import { createProject, listCourses, listProjects } from '../api/client.js'
 import { ApiError } from '../api/client.js'
 import type { CourseSummary, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
-import { CourseImportDialog } from '../components/CourseImportDialog.js'
 import { CourseRows } from '../components/CourseRows.js'
-import { KebabMenu, type KebabMenuItem } from '../components/KebabMenu.js'
+import { KebabMenu } from '../components/KebabMenu.js'
 import { useModal } from '../components/modal/ModalProvider.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses } from '../components/fieldStyles.js'
 import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
-import {
-  AddIcon,
-  ArchiveIcon,
-  DeleteIcon,
-  DuplicateIcon,
-  EditIcon,
-  ImportIcon,
-  RestoreIcon,
-} from '../icons.js'
+import { requireName, useProjectMenu } from '../hooks/useProjectMenu.js'
+import { AddIcon } from '../icons.js'
 
 export interface ProjectsScreenProps {
   organizationId: string
@@ -88,33 +76,6 @@ type CourseFetchState =
   | { status: 'ready'; courses: CourseSummary[] }
   | { status: 'error'; error: ApiError }
 
-/**
- * D-23's reasoning, said in one sentence a person can act on: a duplicate's
- * courses carry the same category and role names as their originals — the
- * exact collision PROJ-3 forbids among enabled courses — so every one of
- * them is created disabled, and stays that way until an instructor confirms
- * (or edits) those names and enables it.
- */
-function duplicateDisabledMessage(
-  newProjectName: string,
-  coursesCopied: number
-): string {
-  if (coursesCopied === 0) {
-    return `Copied "${newProjectName}" — it had no courses to bring with it.`
-  }
-  const plural = coursesCopied === 1 ? 'course' : 'courses'
-  return (
-    `Copied ${coursesCopied} ${plural} into "${newProjectName}", every one disabled: ` +
-    `a copy shares its original's category and role names, so enabling one immediately ` +
-    `would collide with the course it was copied from. Confirm or edit those names, then enable each.`
-  )
-}
-
-/** A blank or whitespace-only name is refused the same way everywhere a project name is typed (finding 7 of the WEB-7 rework, carried forward into every `prompt()` call below). */
-function requireName(value: string): string | undefined {
-  return value.trim().length === 0 ? 'Enter a project name.' : undefined
-}
-
 export function Projects({
   organizationId,
   onOpenProject,
@@ -125,19 +86,7 @@ export function Projects({
   const [includeArchived, setIncludeArchived] = useState(false)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [creating, setCreating] = useState(false)
-  const [duplicateNotice, setDuplicateNotice] = useState<string | undefined>(
-    undefined
-  )
-  const [busyProjectId, setBusyProjectId] = useState<string | undefined>(
-    undefined
-  )
-  // WEB-39 — which project's Import dialog is open, or none. The project
-  // itself rather than its id, since the dialog names it on screen and this
-  // is the only place that already has the row it was opened from.
-  const [importingInto, setImportingInto] = useState<Project | undefined>(
-    undefined
-  )
-  const { prompt, confirm } = useModal()
+  const { prompt } = useModal()
 
   // Finding 8 (WEB-7 rework): `refresh` is called both from the effect
   // below (on mount, and whenever `includeArchived` changes) and directly
@@ -317,149 +266,25 @@ export function Projects({
     }
   }
 
-  const handleArchive = async (project: Project) => {
-    // WEB-15 — archiving and deleting must never look alike (PROJ-2:
-    // archiving is reversible, Restore is right there), so this confirms
-    // through the *non-destructive* path — a plain, primary-styled
-    // confirm, not the danger-red one `destructive: true` renders — while
-    // still confirming at all, because archiving a whole term stops every
-    // course inside it routing, more consequence than disabling one course
-    // ever has, and disabling already confirms (`pages/Courses.tsx`,
-    // `pages/CourseEditor.tsx`). One rule — a destructive action confirms
-    // as destructive, a merely consequential one still confirms, plainly —
-    // applied the same way everywhere it appears. Restoring undoes exactly
-    // this, so it never needs to ask first.
-    if (project.archivedAt === null) {
-      const confirmed = await confirm({
-        title: `Archive ${project.name}?`,
-        description: 'Its courses stop routing. You can restore it.',
-        confirmLabel: 'Archive',
-      })
-      if (!confirmed) return
-    }
-    setError(undefined)
-    setBusyProjectId(project.id)
-    try {
-      if (project.archivedAt === null) {
-        await archiveProject(organizationId, project.id)
-      } else {
-        await unarchiveProject(organizationId, project.id)
-      }
-      refresh()
-    } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
-    } finally {
-      setBusyProjectId(undefined)
-    }
-  }
-
-  // PROJ-6/WEB-26: rename, over the `projects.rename` action
-  // (`packages/actions`) — a refusal (the name collides with another active
-  // project) surfaces the same way every other refusal on this screen does,
-  // through `error`/`ErrorMessage`, naming the colliding project.
-  const handleRename = async (project: Project) => {
-    const name = await prompt({
-      title: `Rename "${project.name}"`,
-      label: 'Project name',
-      initialValue: project.name,
-      confirmLabel: 'Rename',
-      validate: requireName,
-    })
-    if (name === undefined) return
-    setError(undefined)
-    setBusyProjectId(project.id)
-    try {
-      await renameProject(organizationId, project.id, name.trim())
-      refresh()
-    } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
-    } finally {
-      setBusyProjectId(undefined)
-    }
-  }
-
-  const handleDuplicate = async (project: Project) => {
-    const name = await prompt({
-      title: `Duplicate "${project.name}"`,
-      label: 'New project name',
-      placeholder: 'new project name',
-      confirmLabel: 'Duplicate',
-      validate: requireName,
-    })
-    if (name === undefined) return
-    setError(undefined)
-    setDuplicateNotice(undefined)
-    setBusyProjectId(project.id)
-    try {
-      const result = await duplicateProject(
-        organizationId,
-        project.id,
-        name.trim()
-      )
-      setDuplicateNotice(
-        duplicateDisabledMessage(result.project.name, result.coursesCopied)
-      )
-      refresh()
-    } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
-    } finally {
-      setBusyProjectId(undefined)
-    }
-  }
-
-  /**
-   * PROJ-9/WEB-50: preview, then confirm by typing the project's own name,
-   * then permanently delete — the same shape `pages/Admin.tsx#handleDelete`
-   * already gives ADMIN-5's own tenant deletion, and the same one
-   * `components/CourseRows.tsx#handleDelete` gives one course at a time. On
-   * success `refresh()` is what makes the row disappear; on failure the row
-   * stays and the error is reported the usual way (WEB-5).
-   */
-  const handleDelete = async (project: Project) => {
-    setError(undefined)
-    let preview
-    try {
-      preview = await previewDeleteProject(organizationId, project.id)
-    } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
-      return
-    }
-
-    const typed = await prompt({
-      title: `Delete ${project.name}?`,
-      description:
-        `This permanently deletes ${preview.courses} course(s), ` +
-        `${preview.conversations} conversation(s), ${preview.messages} message(s), ` +
-        `${preview.enrolments} enrolment(s) and ${preview.courseAttachments} ` +
-        'knowledge file(s). Spending already recorded survives. Discord channels ' +
-        'and roles are not touched. This cannot be undone. Type the project’s ' +
-        'name to confirm.',
-      label: 'Project name',
-      placeholder: project.name,
-      confirmLabel: 'Delete',
-      destructive: true,
-      validate: (value) =>
-        value === project.name
-          ? undefined
-          : 'Type the name exactly to confirm.',
-    })
-    if (typed === undefined) return
-
-    setBusyProjectId(project.id)
-    try {
-      await deleteProject(organizationId, project.id)
-      refresh()
-    } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
-    } finally {
-      setBusyProjectId(undefined)
-    }
-  }
+  // WEB-61: the row menu itself — Archive/Restore, Duplicate, Import,
+  // Rename, Delete — is `hooks/useProjectMenu.tsx`, shared with
+  // `pages/Courses.tsx`. Every one of `onChanged`/`onDeleted`/
+  // `onProjectCreated` just re-lists here — this page's own single
+  // `listProjects` call already reflects every one of those (a changed
+  // row, a deleted row missing from the relist, or Duplicate's new row
+  // finally appearing, round-2 review's own must-fix) — unlike
+  // `Courses.tsx`, which names one project outright and has to update or
+  // navigate away from that one record instead of merely relisting.
+  // `onError` shares this screen's own `error`/`setError` (round-2 review,
+  // cheap-fix) rather than keeping a second banner state that `handleCreate`
+  // above never clears and this file never merges with — one refusal, from
+  // any source, showing at a time.
+  const projectMenu = useProjectMenu(organizationId, {
+    onChanged: () => refresh(),
+    onDeleted: () => refresh(),
+    onProjectCreated: () => refresh(),
+    onError: setError,
+  })
 
   return (
     <section
@@ -496,30 +321,14 @@ export function Projects({
         Show archived
       </label>
 
-      {importingInto && (
-        <CourseImportDialog
-          open={true}
-          organizationId={organizationId}
-          project={importingInto}
-          onClose={() => setImportingInto(undefined)}
-          // A course imported into a project this screen does not itself
-          // list the courses of still deserves a line saying it happened —
-          // the same notice slot the duplicate already writes into, rather
-          // than a second one grown beside it.
-          onImported={(result) =>
-            setDuplicateNotice(
-              `Imported "${result.title}" into "${importingInto.name}", disabled — open the project to enable it.`
-            )
-          }
-        />
-      )}
-      {duplicateNotice && (
+      {projectMenu.importDialog}
+      {projectMenu.duplicateNotice && (
         <p
           role="status"
           data-testid="duplicate-notice"
           className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800"
         >
-          {duplicateNotice}
+          {projectMenu.duplicateNotice}
         </p>
       )}
       {error && <ErrorMessage error={error} />}
@@ -546,50 +355,12 @@ export function Projects({
         // phone would have to scroll horizontally to read.
         <ul className="flex flex-col gap-3">
           {projects.map((project) => {
-            const busy = busyProjectId === project.id
-            // WEB-26: Archive/Restore, Duplicate and Rename, in that order —
-            // a single kebab per row rather than a row of buttons plus a
-            // free-text "duplicate as" input.
-            const items: KebabMenuItem[] = [
-              {
-                key: 'archive',
-                label: project.archivedAt === null ? 'Archive' : 'Restore',
-                icon:
-                  project.archivedAt === null ? (
-                    <ArchiveIcon aria-hidden="true" className="size-4" />
-                  ) : (
-                    <RestoreIcon aria-hidden="true" className="size-4" />
-                  ),
-                onSelect: () => void handleArchive(project),
-              },
-              {
-                key: 'duplicate',
-                label: 'Duplicate',
-                icon: <DuplicateIcon aria-hidden="true" className="size-4" />,
-                onSelect: () => void handleDuplicate(project),
-              },
-              {
-                key: 'import',
-                label: 'Import',
-                icon: <ImportIcon aria-hidden="true" className="size-4" />,
-                onSelect: () => setImportingInto(project),
-              },
-              {
-                key: 'rename',
-                label: 'Rename',
-                icon: <EditIcon aria-hidden="true" className="size-4" />,
-                onSelect: () => void handleRename(project),
-              },
-              // PROJ-9/WEB-50 — Delete, last, styled destructive: the row's
-              // most severe action sits at the end of the menu.
-              {
-                key: 'delete',
-                label: 'Delete',
-                icon: <DeleteIcon aria-hidden="true" className="size-4" />,
-                destructive: true,
-                onSelect: () => void handleDelete(project),
-              },
-            ]
+            // WEB-26/WEB-61: Archive/Restore, Duplicate, Import, Rename,
+            // Delete — the one shared implementation
+            // (`hooks/useProjectMenu.tsx`), also offered by
+            // `pages/Courses.tsx` for this same project's own screen.
+            const busy = projectMenu.busyProjectId === project.id
+            const items = projectMenu.itemsFor(project)
             const courseState = courseStates[project.id]
             return (
               // WEB-42/WEB-13: `flex-col` unconditionally (not `sm:flex-row`

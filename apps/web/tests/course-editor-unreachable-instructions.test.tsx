@@ -141,6 +141,7 @@ describe('CourseEditor with an unreachable instructions edit (review round 1, mu
         tab="ai"
         onNavigateTab={vi.fn()}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )

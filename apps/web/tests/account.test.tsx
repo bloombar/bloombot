@@ -22,6 +22,7 @@ import { renderWithModal } from './helpers/render-with-modal.js'
 const ACCOUNT: AccountSummary = {
   id: 'account-1',
   email: 'instructor@example.edu',
+  isPlatformAdministrator: false,
   memberships: [
     { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
     {

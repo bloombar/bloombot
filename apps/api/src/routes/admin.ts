@@ -826,6 +826,16 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       req.params.courseId,
       deps.db
     )
+    // One lookup per *distinct* approver, not per event: a course approved,
+    // revoked and approved again by the same administrator asks once.
+    const approverEmails = new Map<string, string | null>()
+    const resolveApproverEmail = (accountId: string): string | null => {
+      const cached = approverEmails.get(accountId)
+      if (cached !== undefined) return cached
+      const email = accounts.getAccountById(accountId, deps.db)?.email ?? null
+      approverEmails.set(accountId, email)
+      return email
+    }
     const approvalEvents: AdminCourseApprovalEvent[] = approvalEventRows.map(
       (event) => ({
         id: event.id,
@@ -834,8 +844,7 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         accountEmail:
           event.accountId === null
             ? null
-            : (accounts.getAccountById(event.accountId, deps.db)?.email ??
-              null),
+            : resolveApproverEmail(event.accountId),
         createdAt: event.createdAt,
       })
     )

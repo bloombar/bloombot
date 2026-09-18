@@ -20,6 +20,7 @@ import request from 'supertest'
 import { createSession } from '@bloombot/auth'
 import {
   accounts,
+  conversations,
   costLedger,
   courseApproval,
   courseAttachments,
@@ -1326,7 +1327,12 @@ describe('ADMIN-9 — a course’s console screen shows the course and the peopl
     expect(Array.isArray(body.approvalEvents)).toBe(true)
   })
 
-  it('never names a message or a conversation, even once people are listed', async () => {
+  // ADMIN-4's line, as amended in phase 40: this screen may name who is in a
+  // course; it may never reach what they said. The course seeded here holds a
+  // real conversation with a real message in each direction, so the assertion
+  // has content that *could* leak — a response that grew a `messages` field
+  // would fail here rather than passing on an empty database.
+  it('never carries a message’s content, even once people are listed', async () => {
     testDb = createTestDatabase()
     const admin = seedPlatformAdministrator(testDb.db)
     const { organizationId, courseId } = seedCourseWithSettings(testDb.db)
@@ -1340,6 +1346,26 @@ describe('ADMIN-9 — a course’s console screen shows the course and the peopl
       { courseId, personId: person.id },
       testDb.db
     )
+    const conversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId, personId: person.id, surface: 'web' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+    const studentQuestion = 'SECRET-QUESTION-how-do-stomata-work'
+    const botAnswer = 'SECRET-ANSWER-they-open-and-close'
+    conversations.appendMessage(
+      organizationId,
+      conversation.id,
+      { direction: 'from_person', content: studentQuestion, surface: 'web' },
+      testDb.db
+    )
+    conversations.appendMessage(
+      organizationId,
+      conversation.id,
+      { direction: 'to_person', content: botAnswer, surface: 'web' },
+      testDb.db
+    )
     const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
@@ -1349,6 +1375,9 @@ describe('ADMIN-9 — a course’s console screen shows the course and the peopl
 
     expect(response.status).toBe(200)
     const serialized = JSON.stringify(response.body)
+    expect(serialized).not.toContain(studentQuestion)
+    expect(serialized).not.toContain(botAnswer)
+    expect(serialized).not.toContain(conversation.id)
     expect(serialized).not.toMatch(/conversationId|messageId/i)
   })
 })

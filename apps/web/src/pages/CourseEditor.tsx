@@ -1464,9 +1464,17 @@ export function CourseEditor({
                 {staleServerId} (no longer active)
               </option>
             )}
+            {/* WEB-74 — the option's visible text is the guild's own name
+                (WEB-68's `serverName`), falling back to the id for a
+                binding recorded before that column existed. A `<select>`
+                option is a single line, so unlike `DiscordServerRow`'s
+                "name, id alongside" this shows one or the other rather
+                than both — the id is still available by hovering/copying
+                the saved value once chosen. The *value* stays the
+                snowflake id either way; only the label changes. */}
             {activeBindings.map((binding) => (
               <option key={binding.serverId} value={binding.serverId}>
-                {binding.serverId}
+                {binding.serverName ?? binding.serverId}
               </option>
             ))}
           </select>

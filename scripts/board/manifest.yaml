@@ -3522,8 +3522,8 @@
     One-time entry points — a redeemed sign-in link, a completed OAuth callback
     — keep replacing their history entry rather than pushing one, since they
     must not be reachable by pressing back. An address naming something this
-    account cannot see, or nothing at all, says so on a screen of its own and
-    offers the way home rather…
+    account cannot see, or nothing at all, takes a signed-in account to its own
+    home screen instead of a…
   section: §34 Web Control Panel
   family: WEB
   phase: 21
@@ -4706,4 +4706,36 @@
   family: ADMIN
   phase: 40
   status: Done
+  review: false
+- id: WEB-67
+  title: An address a signed-in account cannot use takes them home, not to a dead end
+  full: "A signed-in account that arrives at an address naming an organization it
+    has no membership in and no connected identity to — or at an address this
+    panel does not recognise at all — is taken to its own home screen, the same
+    address / resolves to, rather than being shown the not-found screen. The
+    redirect replaces the history entry rather than pushing one, so the
+    browser's Back button does not return to the unusable address. WEB-44
+    already did this for a destination a sign-in delivered; this is the same
+    fallback for every other way of arriving, including a typed or pasted
+    address and a stale bookmark. Nothing is disclosed by it that the not-found
+    screen did not disclose: the check is made…"
+  section: §46 Landing Somewhere Usable
+  family: WEB
+  phase: 41
+  status: In progress
+  review: false
+- id: WEB-68
+  title: An organization's Discord screen names the servers it is connected to
+  full: The Discord screen for an organization lists the Discord servers already
+    connected to it by name, so an owner can see at a glance where the bot is
+    installed rather than inferring it from the presence of a button. A server
+    whose name was never recorded is named by whatever the deployment does know
+    about it rather than left blank. When at least one server is already
+    connected, the install button reads "Install to another Discord server",
+    because installing again adds a server rather than replacing the one already
+    there; with none connected it reads as it does today.
+  section: §46 Landing Somewhere Usable
+  family: WEB
+  phase: 41
+  status: In progress
   review: false

@@ -82,6 +82,16 @@ function rosterFile(text: string): File {
   return new File([text], 'roster.csv', { type: 'text/csv' })
 }
 
+/** ROST-19: ticks the acknowledgement checkbox — every test below that
+ * actually starts an import needs this now that the box gates the button. */
+function acknowledge(): void {
+  fireEvent.click(
+    screen.getByRole('checkbox', {
+      name: /Uploading my students' names, email addresses/,
+    })
+  )
+}
+
 function renderRosterImport(
   overrides: {
     pollIntervalMs?: number
@@ -118,15 +128,118 @@ describe('RosterImport (WEB-21)', () => {
     expect(screen.getAllByText(/Discord/).length).toBeGreaterThan(0)
   })
 
-  it('the import button is disabled until a file is chosen', () => {
+  it('the import button is disabled until a file is chosen and the acknowledgement is ticked', () => {
     renderRosterImport()
     expect(screen.getByRole('button', { name: 'Import roster' })).toBeDisabled()
 
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    // ROST-19: choosing a file alone does not enable Import — the box is
+    // still unticked.
+    expect(screen.getByRole('button', { name: 'Import roster' })).toBeDisabled()
+
+    acknowledge()
 
     expect(
       screen.getByRole('button', { name: 'Import roster' })
     ).not.toBeDisabled()
+  })
+
+  // ROST-19: the acknowledgement above the drop zone — gating only the
+  // start of an import, never the choice of a file.
+  describe('ROST-19 — the roster acknowledgement', () => {
+    it('is unticked on mount, and remains unticked on a fresh mount — never carried over', () => {
+      const { unmount } = renderRosterImport()
+      expect(
+        screen.getByRole('checkbox', {
+          name: /Uploading my students' names, email addresses/,
+        })
+      ).not.toBeChecked()
+
+      acknowledge()
+      expect(
+        screen.getByRole('checkbox', {
+          name: /Uploading my students' names, email addresses/,
+        })
+      ).toBeChecked()
+
+      unmount()
+      renderRosterImport()
+      expect(
+        screen.getByRole('checkbox', {
+          name: /Uploading my students' names, email addresses/,
+        })
+      ).not.toBeChecked()
+    })
+
+    it('choosing a file is possible while the acknowledgement is unticked — only starting the import is gated', () => {
+      renderRosterImport()
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      expect(
+        screen.getByRole('checkbox', {
+          name: /Uploading my students' names, email addresses/,
+        })
+      ).not.toBeChecked()
+    })
+
+    it('with a file chosen and the box unticked, Import is disabled and the on-screen reason is associated with the button', () => {
+      renderRosterImport()
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+
+      const button = screen.getByRole('button', { name: 'Import roster' })
+      expect(button).toBeDisabled()
+      const reason = screen.getByText(
+        'Tick the acknowledgement above to start the import.'
+      )
+      expect(reason).toBeInTheDocument()
+      expect(button.getAttribute('aria-describedby')).toBe(reason.id)
+    })
+
+    it('ticking the box enables Import and the dispatch is unchanged; unticking it again disables Import', async () => {
+      importRoster.mockResolvedValue({ jobId: 'job-1' })
+      getJobStatus.mockResolvedValue(job({ status: 'pending' }))
+      const csvText = 'First,Last,Email,Discord,GitHub\n'
+
+      renderRosterImport()
+      chooseFile(rosterFile(csvText))
+      const checkbox = screen.getByRole('checkbox', {
+        name: /Uploading my students' names, email addresses/,
+      })
+      const button = screen.getByRole('button', { name: 'Import roster' })
+
+      fireEvent.click(checkbox)
+      expect(button).not.toBeDisabled()
+
+      fireEvent.click(checkbox)
+      expect(button).toBeDisabled()
+
+      fireEvent.click(checkbox)
+      fireEvent.click(button)
+
+      // Same dispatch as before this slice — the acknowledgement travels
+      // with nothing added to `importRoster`'s own arguments.
+      await waitFor(() =>
+        expect(importRoster).toHaveBeenCalledWith(
+          'org-1',
+          'course-1',
+          csvText,
+          true,
+          'Test Course - STUDENTS'
+        )
+      )
+    })
+
+    it('names FERPA and links to both /terms and /privacy', () => {
+      renderRosterImport()
+      expect(screen.getByText(/FERPA/)).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /terms/ })).toHaveAttribute(
+        'href',
+        '/terms'
+      )
+      expect(screen.getByRole('link', { name: /privacy/ })).toHaveAttribute(
+        'href',
+        '/privacy'
+      )
+    })
   })
 
   it('reads the chosen file as text, enqueues the job, and shows it as queued', async () => {
@@ -137,6 +250,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile(csvText))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     // ROST-15: the checkbox is checked and the base name field already
@@ -187,6 +301,7 @@ describe('RosterImport (WEB-21)', () => {
       ).not.toBeInTheDocument()
 
       chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      acknowledge()
       fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
       await waitFor(() =>
@@ -210,6 +325,7 @@ describe('RosterImport (WEB-21)', () => {
         { target: { value: 'Custom Base' } }
       )
       chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      acknowledge()
       fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
       await waitFor(() =>
@@ -236,6 +352,7 @@ describe('RosterImport (WEB-21)', () => {
 
       renderRosterImport()
       chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      acknowledge()
       fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
       const report = await screen.findByTestId('roster-import-report')
@@ -260,6 +377,7 @@ describe('RosterImport (WEB-21)', () => {
 
       renderRosterImport()
       chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      acknowledge()
       fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
       const report = await screen.findByTestId('roster-import-report')
@@ -288,6 +406,7 @@ describe('RosterImport (WEB-21)', () => {
 
       renderRosterImport()
       chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      acknowledge()
       fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
       const report = await screen.findByTestId('roster-import-report')
@@ -308,6 +427,7 @@ describe('RosterImport (WEB-21)', () => {
         { target: { value: '' } }
       )
       chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      acknowledge()
       fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
       await waitFor(() =>
@@ -340,6 +460,7 @@ describe('RosterImport (WEB-21)', () => {
         })
       )
       chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      acknowledge()
       fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
       await waitFor(() =>
@@ -372,6 +493,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     const report = await screen.findByTestId('roster-import-report')
@@ -407,6 +529,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     const report = await screen.findByTestId('roster-import-report')
@@ -441,6 +564,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     const report = await screen.findByTestId('roster-import-report')
@@ -465,6 +589,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     const report = await screen.findByTestId('roster-import-report')
@@ -498,6 +623,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     const report = await screen.findByTestId('roster-import-report')
@@ -529,6 +655,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     const report = await screen.findByTestId('roster-import-report')
@@ -557,6 +684,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     const report = await screen.findByTestId('roster-import-report')
@@ -578,6 +706,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     const report = await screen.findByTestId('roster-import-report')
@@ -592,6 +721,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport({ pollIntervalMs: 10, stillQueuedHintAfterMs: 30 })
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
     await screen.findByText('Queued…')
 
@@ -613,6 +743,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     expect(await screen.findByText('Failed.')).toBeInTheDocument()
@@ -628,6 +759,7 @@ describe('RosterImport (WEB-21)', () => {
 
     renderRosterImport()
     chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    acknowledge()
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(

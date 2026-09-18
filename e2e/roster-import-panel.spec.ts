@@ -220,6 +220,8 @@ test('an instructor imports a roster through the panel; an unparseable row is re
         mimeType: 'text/csv',
         buffer: Buffer.from(csvText),
       })
+    // ROST-19: the acknowledgement above the drop zone gates the button.
+    await page.getByRole('checkbox', { name: /Uploading my students/ }).check()
     await page.getByRole('button', { name: 'Import roster' }).click()
     await expect(page.getByText('Queued…')).toBeVisible()
 

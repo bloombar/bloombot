@@ -3509,3 +3509,81 @@ Three screens read it back:
   made, across every course and organization, each linking to the course it was for.
 
 This records an acknowledgement, not a transcript, so ADMIN-4's boundary is untouched.
+
+### 49. Deleting, Reversibly, Then Permanently
+
+#### DATA-7 Deleting content marks it deleted rather than removing it, for a stated window
+
+Deleting an account, a person, an organization, a project, a course, or one person's conversation history in
+a course marks the record deleted — a `deletedAt` timestamp and the account that did it — rather than removing
+it. The record is gone from the product the moment it is marked: it does not appear in any list, cannot be
+opened at its own address, answers nothing, costs nothing and counts toward nothing. What it is not is
+irrecoverable, for a window this deployment configures (`DELETED_DATA_RETENTION_DAYS`, thirty days by
+default).
+
+Deleting a parent marks its children with the same timestamp, and that shared timestamp is what a restore
+reads: restoring un-marks only the children marked at the same moment, so something deleted earlier, on
+purpose, stays deleted. A platform administrator restores within the window; nobody else does, and nothing is
+restorable after the sweep has run.
+
+This is deletion, not the existing `archivedAt`, `endedAt`, `revokedAt` and `removedAt` markers, which mean
+what they have always meant and are untouched: an archived project, an ended enrolment, a revoked membership
+and a removed Discord server are all still present, and none of them is a deletion.
+
+Records of events are not content and are never soft-deleted: a tenant deletion (ADMIN-5), a content deletion,
+a roster acknowledgement (ROST-20) and a transcript access log entry each describe something that happened,
+and an account of what happened cannot itself be deleted by the person it describes.
+
+#### DATA-8 A scheduled sweep permanently removes what the window has released
+
+A sweep runs on a schedule and permanently removes every record whose `deletedAt` is older than the retention
+window — the rows, in foreign-key-safe order, and the bytes: attachment files, export files, and the model
+provider's own file objects and vector stores, through the same content-deletion job that already removes them
+today rather than a second implementation.
+
+The sweep is a job like any other, so its runs, failures and retries are visible on the Jobs screen and in the
+queue's own retry policy rather than in a log nobody reads. It schedules its own next run, and one is queued
+when the worker starts, so a deployment that has been down does not silently stop deleting. A retention window
+of zero disables the sweep, which is a deliberate choice a deployment can make and not a default.
+
+A sweep that cannot remove something — a provider call that fails, a file already gone — records what it could
+not do and moves on rather than abandoning the whole run, and the record stays marked so the next run tries
+again.
+
+#### DATA-9 Nothing deleted is ever read back
+
+Every read of a deletable entity excludes what is marked deleted. This is a property of the queries rather
+than of the callers' discipline: the repositories are where it is enforced, a test walks the repository
+layer and fails a read of a deletable table that does not filter, and the exceptions — a restore, the sweep,
+and a platform administrator's own view of what is pending removal — are named in that test's allowlist rather
+than left to be noticed. A record marked deleted answers no question on any surface: not the web panel, not
+Discord, not an assistant through MCP.
+
+#### TEN-10 A tenant's deletion covers everything that belongs to the tenant
+
+ADMIN-5's deletion walks a hand-written list of tables, and the list has drifted from the schema more than
+once — each time discovered as a foreign-key failure in production rather than by a test. Every table
+carrying a tenant's data is covered, and a test derives the expectation from the schema rather than repeating
+the list, so a table added later without being added to the deletion fails that test instead of failing a
+deletion.
+
+#### WEB-72 Deleting a thing is offered in one place, and it looks dangerous
+
+Every screen about a single entity that can be deleted ends with a Danger zone: the account screen, the
+organization's own screen, the course's settings under General, and the platform administrator's course,
+project and account screens. It is the last section on the screen, visibly separated from what is above it,
+and holds the delete for that entity and nothing else.
+
+Deleting asks first, in the dialog this panel already uses for a destructive act, and the dialog names what
+will go, says it is reversible for the retention window and permanent afterwards, and requires the entity's own
+name to be typed before the destructive button does anything — the same gate WEB-50 already applies to a
+course and a project.
+
+#### WEB-73 A person deletes their own conversation history in a course
+
+The chat screen's heading row carries a Delete history control, to the right of the heading, styled as this
+panel styles a destructive action. It deletes that person's own conversations in the course on screen and
+nothing else: no other person's, no other course's, and nothing about the course itself. It confirms first,
+naming the course, and it is the same soft delete as everything else — reversible for the window, then swept.
+
+A person who has asked nothing in the course is offered nothing to delete.

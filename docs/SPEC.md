@@ -2468,8 +2468,9 @@ address names. Reloading holds the current screen rather than resetting to Proje
 pasted into a fresh tab opens the same screen it did for whoever copied it. One-time entry points —
 a redeemed sign-in link, a completed OAuth callback — keep replacing their history entry rather than
 pushing one, since they must not be reachable by pressing back. An address naming something this
-account cannot see, or nothing at all, says so on a screen of its own and offers the way home rather
-than rendering an empty panel. WEB-16's unsaved-changes guard still runs before any of it.
+account cannot see, or nothing at all, takes a signed-in account to its own home screen instead of a
+dead end — WEB-67 replaces the not-found screen this requirement originally described for that case.
+WEB-16's unsaved-changes guard still runs before any of it.
 
 #### WEB-35 A course's settings are organised into tabs, not one long form
 
@@ -2791,9 +2792,10 @@ not-found screen for a delivery this app made itself.
 A sign-in destination naming an organization the account cannot reach now resolves to the account's own
 default organization instead — the same address `resolveHomeRoute` already picks for `/` — checked once
 the session is actually known, not before. A destination the account can reach still lands on exactly
-that address, unchanged. WEB-32's own no-leak guarantee is untouched: an address a signed-in person
-navigates to or types, naming an organization they cannot reach, still shows the not-found screen —
-this only changes what a sign-in delivers, never what typing an address does.
+that address, unchanged. WEB-67 later extended the same fallback to every arrival, not only a sign-in's
+own delivery, so the scope limit this requirement originally drew — that typing such an address still
+showed the not-found screen — no longer holds; the no-leak guarantee it protected does, because the
+fallback discloses no more than the not-found screen it replaces.
 
 #### WEB-45 Skeleton loaders for the panel's dynamic content
 
@@ -3390,3 +3392,33 @@ link to that course's own console screen (ADMIN-9) so the decision is one click 
 built from `PUBLIC_APP_URL` (TEN-4), never hard-coded. A deployment with no support address configured, or no
 mail transport, sends nothing and records why rather than failing the operation that triggered it: a course is
 still created, and an approval is still revoked, when the mail cannot go out.
+
+### 46. Landing Somewhere Usable
+
+#### WEB-67 An address a signed-in account cannot use takes them home, not to a dead end
+
+A signed-in account that arrives at an address naming an organization it has no membership in and no
+connected identity to — or at an address this panel does not recognise at all — is taken to its own home
+screen, the same address `/` resolves to, rather than being shown the not-found screen. The redirect
+replaces the history entry rather than pushing one, so the browser's Back button does not return to the
+unusable address. WEB-44 already did this for a destination a sign-in delivered; this is the same
+fallback for every other way of arriving, including a typed or pasted address and a stale bookmark.
+
+Nothing is disclosed by it that the not-found screen did not disclose: the check is made against the
+account's own memberships and connected identities, which the panel already holds, and it asks no
+question of the server about an organization the account cannot reach, so a mistyped id and a real
+organization somebody else owns are still indistinguishable — TEN-5's guarantee, unchanged.
+
+The not-found screen stays for the places where it is the honest answer rather than a dead end: the
+platform-administrator console, where an id the API reports as absent is a fact an administrator needs
+told rather than navigated away from, and any screen reached inside an organization the account *can*
+reach where the thing named within it does not exist.
+
+#### WEB-68 An organization's Discord screen names the servers it is connected to
+
+The Discord screen for an organization lists the Discord servers already connected to it by name, so an
+owner can see at a glance where the bot is installed rather than inferring it from the presence of a
+button. A server whose name was never recorded is named by whatever the deployment does know about it
+rather than left blank. When at least one server is already connected, the install button reads "Install
+to another Discord server", because installing again adds a server rather than replacing the one already
+there; with none connected it reads as it does today.

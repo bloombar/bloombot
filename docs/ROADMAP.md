@@ -495,3 +495,12 @@ adds a Users screen and a search field to every list, and puts a confirmation in
 decision.
 
 **In scope:** ADMIN-7, ADMIN-8, ADMIN-9, ADMIN-10, ADMIN-11, ADMIN-12, ADMIN-13, ADMIN-14
+
+## Phase 41 — Landing somewhere usable
+
+A signed-in account that pasted a stale link, or typed an address slightly wrong, hit the not-found screen
+and had to click its way home — a dead end the app already knew how to avoid, since WEB-44 does exactly that
+for a sign-in's own destination. This phase extends that fallback to every arrival, and fills in the Discord
+screen, which showed an install button and no indication of what was already installed.
+
+**In scope:** WEB-67, WEB-68

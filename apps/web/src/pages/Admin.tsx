@@ -488,14 +488,29 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     else refreshCourses()
   }
 
-  // WEB-53's Approve button — not destructive, runs immediately, the same
-  // "enabling is not destructive" treatment `components/CourseRows.tsx`'s
-  // own toggle already gives the non-destructive direction of that choice.
-  const handleApprove = async (courseId: string) => {
+  // ADMIN-13 — Approve is not destructive (an administrator can always
+  // Unapprove again), but it is still a decision with a real effect — a
+  // course starts answering questions the moment this lands — so it now
+  // confirms too, a plain `confirm()` naming the course, the same "ask
+  // before sending" this panel already gives the destructive direction
+  // below. Shared by both callers of this handler (`CoursesView`'s own
+  // list and `CourseDetailView`'s own screen) — one confirmation, wired
+  // once, rather than each screen dialoguing separately.
+  const handleApprove = async (course: {
+    courseId: string
+    courseTitle: string
+  }) => {
     setError(undefined)
-    setDecidingCourseId(courseId)
+    const confirmed = await confirm({
+      title: `Approve ${course.courseTitle}?`,
+      description: 'This course starts answering questions immediately.',
+      confirmLabel: 'Approve',
+    })
+    if (!confirmed) return
+
+    setDecidingCourseId(course.courseId)
     try {
-      await approveAdminCourse(courseId)
+      await approveAdminCourse(course.courseId)
       refreshCurrentCourseScreen()
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
@@ -586,7 +601,7 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           courses={courses}
           failed={error !== undefined}
           decidingCourseId={decidingCourseId}
-          onOpen={(courseId) => navigate({ kind: 'admin-course', courseId })}
+          navigate={navigate}
           onApprove={handleApprove}
           onUnapprove={handleUnapprove}
           onBack={() => navigate({ kind: 'admin-organizations' })}
@@ -624,9 +639,7 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           data={data}
           failed={error !== undefined}
           deletingId={deletingId}
-          onOpen={(organizationId) =>
-            navigate({ kind: 'admin-organization', organizationId })
-          }
+          navigate={navigate}
           onDelete={handleDelete}
           onViewDeletions={() => navigate({ kind: 'admin-deletions' })}
           onViewCourses={() => navigate({ kind: 'admin-courses' })}

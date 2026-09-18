@@ -42,7 +42,7 @@ import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 
-test('a platform administrator opens a pending course from the list, reads its settings, and approves it from that screen (ADMIN-6)', async ({
+test('a platform administrator opens a pending course from the list, reads its settings, and approves it from that screen (ADMIN-6, ADMIN-13)', async ({
   page,
   browser,
 }) => {
@@ -140,7 +140,10 @@ test('a platform administrator opens a pending course from the list, reads its s
     await adminPage.goto('/platform-admin/courses')
     const pendingRow = adminPage.getByTestId(`admin-course-${courseId}`)
     await expect(pendingRow).toBeVisible()
-    await pendingRow.getByRole('button', { name: courseTitle }).click()
+    // ADMIN-12 — the row's own title is now a real link (`AppLink`), not
+    // a button, so an administrator can middle-click, copy it, or open it
+    // in a new tab.
+    await pendingRow.getByRole('link', { name: courseTitle }).click()
 
     // ADMIN-6's own address — bookmarkable, and distinct from the list.
     await expect(adminPage).toHaveURL(
@@ -162,8 +165,14 @@ test('a platform administrator opens a pending course from the list, reads its s
     await expect(detail.getByRole('combobox')).toHaveCount(0)
     await expect(detail.getByRole('button', { name: /save/i })).toHaveCount(0)
 
-    // 6. Approve from this screen, not the list.
+    // 6. Approve from this screen, not the list — ADMIN-13's confirmation,
+    //    naming the course, before anything is sent.
     await detail.getByRole('button', { name: 'Approve', exact: true }).click()
+    const approveDialog = adminPage.getByRole('dialog')
+    await expect(approveDialog).toContainText(courseTitle)
+    await approveDialog
+      .getByRole('button', { name: 'Approve', exact: true })
+      .click()
     await expect(
       detail.getByRole('button', { name: 'Unapprove' })
     ).toBeVisible()

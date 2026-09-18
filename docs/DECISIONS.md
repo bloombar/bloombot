@@ -13418,3 +13418,40 @@ for ADMIN-7 does not mention it.** `admin.test.tsx`'s pre-existing "a deletion s
 own screen returns to the list" test (and the matching WEB-33 module-comment claim) already depended on it
 being there; removing it would have been scope the brief did not ask for, on a screen ADMIN-5 already visits
 by a different address.
+
+## D-128 — `apps/web`: ADMIN-12/ADMIN-13 — a shared search hook rather than four copies, "Showing N of M" separated from the no-matches message, and the Courses row's project name stays plain text
+
+**`SearchField.tsx` exports both `useListSearch` (the filtering) and `SearchField` (the input/count/clear
+markup), rather than a single all-in-one component.** Every one of the four list screens needed the same
+"type, filter, report the count, clear" shape but a different field (or join of fields) to match against and
+a different "nothing matched" message shaped around what it lists (`"No organizations match…"` vs `"No
+pending courses match…"`/`"No approved courses match…"` — two separate messages on `CoursesView`, one per
+list). Splitting the hook from the field lets each screen own that per-screen wording while still sharing the
+one substring-matching implementation, rather than the field component growing a `renderEmpty` prop just to
+let four call sites customize one string.
+
+**`SearchField`'s own "Showing N of M" line never doubles as the "no matches" message.** An earlier draft had
+it read `No organizations match "x".` when the count was zero, which duplicated — word for word, in one
+case — the list area's own no-matches paragraph directly underneath it (caught by
+`apps/web/tests/admin.test.tsx`'s own duplicate-text failure during this slice, not by a reviewer). The field
+now only ever reports the count, including zero; each screen's own list area supplies the sentence explaining
+what "zero" means, once.
+
+**The Courses screen's own organization name is now a link, but the project name is not — `AdminCourseSummary`
+(`courseApproval.CourseForApproval`, `packages/db`) carries `projectName` but no `projectId`.** The brief
+asked for both, but adding a `projectId` column to that read is a `packages/db`/`apps/api` change this
+slice's own brief explicitly puts out of scope (`apps/api/`, `apps/worker/`, `packages/*` belong to the
+concurrent `ADMIN-14` slice's worktree). Left as plain text rather than guessed at from `organizationId` plus
+a name match, which would silently pick the wrong project for an organization with two projects of
+overlapping names. A future slice that touches `packages/db` can add the id and make it a link the same way
+this one did for the organization.
+
+**Approve now confirms too (`handleApprove` in `pages/Admin.tsx`), the plain, non-destructive `confirm()` the
+brief calls for — its previous signature (`courseId: string`) had to widen to the whole `{ courseId,
+courseTitle }` object `handleUnapprove` already took, so the dialog can name the course the same way Unapprove's
+already does.** Both `CoursesView` and `CourseDetailView` share the one handler unchanged in shape otherwise —
+the confirmation is one place, not duplicated per screen. `window.confirm` was already gone from this codebase
+before this slice started (`handleUnapprove` already called `useModal()`'s own `confirm()`); the brief's own
+claim that it was still the last caller was stale by the time this slice reached it — noted here rather than
+silently ignored, since the brief's instruction not to route around a stale premise without saying so applies
+to documentation drift too, not only blocked writes.

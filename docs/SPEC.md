@@ -3486,3 +3486,26 @@ to both.
 Nothing else about the import changes: the same CSV, the same options, the same job, the same report. A
 student who joins by link rather than by roster is untouched by this, because no institutional record is
 handed over on that path.
+
+#### ROST-20 A roster acknowledgement is recorded, and readable afterwards by the people it concerns
+
+ROST-19's acknowledgement is only worth what it can be shown to have been. Every roster import records one
+entry: who acknowledged, when, which course and organization it was for, the file they imported, the import
+job it started, and **which wording they were shown** — an identifier for the acknowledgement text as it stood
+that day, so a later edit to that wording cannot be mistaken for what an earlier instructor agreed to. The
+entry is written as part of starting the import, so an import that never started records nothing and an
+import that started can never lack one.
+
+An entry is never deleted and never edited. It is an account of something that happened, not a setting.
+
+Three screens read it back:
+
+- **The course's Roster tab** shows the course's own acknowledgements to the instructor who can already import
+  there — newest first, each naming who acknowledged, when, and the file it accompanied — so the person who
+  took the responsibility can see what they took and when.
+- **The platform-administrator's course screen** (ADMIN-9) shows the same list for that course, alongside the
+  approval history it already shows.
+- **The platform-administrator's account screen** (ADMIN-11) shows every acknowledgement that account has
+  made, across every course and organization, each linking to the course it was for.
+
+This records an acknowledgement, not a transcript, so ADMIN-4's boundary is untouched.

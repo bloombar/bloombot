@@ -20,6 +20,7 @@ export {
 
 export {
   archiveProjectAction,
+  COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND,
   createPlatformRegistry,
   createProjectAction,
   deleteCourseAction,
@@ -27,6 +28,7 @@ export {
   disableCourseAction,
   duplicateProjectAction,
   enableCourseAction,
+  enqueueCourseApprovalNotifyPending,
   getCourseAction,
   getJobAction,
   leaveMembershipAction,

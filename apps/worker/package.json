@@ -11,11 +11,13 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@bloombot/auth": "*",
     "@bloombot/config": "*",
     "@bloombot/db": "*",
     "@bloombot/discord-rest": "*",
     "@bloombot/jobs": "*",
     "@bloombot/logger": "*",
+    "@bloombot/mail": "*",
     "@bloombot/openai": "*"
   }
 }

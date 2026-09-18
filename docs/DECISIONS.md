@@ -13455,3 +13455,41 @@ before this slice started (`handleUnapprove` already called `useModal()`'s own `
 claim that it was still the last caller was stale by the time this slice reached it — noted here rather than
 silently ignored, since the brief's instruction not to route around a stale premise without saying so applies
 to documentation drift too, not only blocked writes.
+
+## D-129 — `packages/mail`/`packages/actions`/`packages/db`/`apps/api`/`apps/worker`: ADMIN-14 — a pending course emails the support address, and `apps/api`'s own mail-transport chooser moves into `packages/mail`
+
+**`apps/api/src/logging-email-sender.ts`/`file-email-sender.ts` moved into `packages/mail`** rather than being
+copied into `apps/worker`. No two apps in this platform import each other's `src/` (checked before writing
+anything), and `apps/worker` needed the identical "choose an `EmailSender` from `NODE_ENV`/`MAIL_FILE`/SMTP"
+selection `apps/api` already had — a straight copy would have been exactly the duplicated logic that drifts
+the moment one copy is fixed and the other is not. Both apps already depended on `packages/mail` (`apps/api`
+for `createSmtpEmailSender`; `apps/worker` newly, for this slice), so it was the one place to put the shared
+chooser without inventing a new package. `buildEmailSender`/`buildLoggingEmailSender`/`LoggingEmailSender`
+gained a `processName` parameter in the move — every message used to say `apps/api:` outright; now each
+caller supplies its own, so a log line or a startup failure still names which process it came from. The three
+test files that exercised this selection moved with it, into `packages/mail/tests/`.
+
+**`courses.import` and `projects.duplicate` enqueue *after* their own transaction commits, with the outer
+`db`, never the transaction's own `tx`.** `jobs.enqueueJob` (`@bloombot/db`) takes `db: Database`, not the
+narrower `Executor`/`TransactingExecutor` a transaction's own callback is typed as — widening its signature
+to accept a transaction was on the table (the same "called from inside another transaction" widening
+`approveCourse`/`createCourse` already carry), but the created course only needs to *exist*, not be part of
+the same atomic unit as the notification job — the row committing and the job being queued do not need to be
+the same transaction the way the row and its own approval columns do. Collecting inside the transaction and
+enqueuing once it returns keeps `enqueueJob`'s own signature untouched, at the cost of one line at each of the
+two call sites. `courses.save`'s own `execute` and `apps/api/src/routes/admin.ts`'s unapprove route need no
+such split — neither runs inside a transaction at all.
+
+**The pending-course notification is a single email to the support address, not one to each owner.** ADMIN-14's
+own text is "an email goes to the support address ... naming ... its owner" — owners are named *in the body*,
+the same way the course, project and organization are, not addressed directly. `EmailSender.send` takes one
+`to` string; sending one copy per owner as well would be a second, undocumented notification channel nobody
+asked for, and `SUPPORT_CONTACT` is the one place `docs/SPEC.md` says an operator configures a destination
+for this.
+
+**`courseApproval.listActiveOwnerEmails` is a new, narrow db read** — a projection of the same
+`memberships`/`accounts` join `courseApproval.isAdministratorOwnedOrganization` already runs, returning the
+emails themselves rather than a boolean. Added next to it in `course-approval.ts` rather than reusing
+`listCoursesForApproval`'s own batched owner-email map, which answers the identical question for every
+course on the platform at once — paying for that whole scan to discard every row but one course's would be
+exactly the class of fan-out D-126 already declined for a single-course read.

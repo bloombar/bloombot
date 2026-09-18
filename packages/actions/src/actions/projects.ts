@@ -17,7 +17,10 @@ import {
 } from '@bloombot/db'
 import { z } from 'zod'
 
-import { enqueueRemoveDeletedContentBytes } from './courses.js'
+import {
+  enqueueCourseApprovalNotifyPending,
+  enqueueRemoveDeletedContentBytes,
+} from './courses.js'
 import { ActionConflictError, ActionRefusedError } from '../errors.js'
 import type { Action } from '../types.js'
 
@@ -343,8 +346,16 @@ export const duplicateProjectAction: Action<
     descriptor: { resource: 'organization', access: 'write' },
     resolve: resolveOwnProject,
   },
-  execute: ({ organizationId, entity, input, db }) =>
-    writeTransaction(db, (tx): DuplicateProjectOutput => {
+  execute: ({ organizationId, entity, input, db }) => {
+    // ADMIN-14 — every course this duplicate creates is pending
+    // (`enqueueCourseApprovalNotifyPending`'s own doc comment, `courses.js`:
+    // this action never calls `approveIfAdministratorOwned` at all, unlike
+    // `courses.save`/`courses.import`). Collected inside the transaction
+    // below, then enqueued once it commits — the outer, non-transactional
+    // `db`, never `tx` itself, the same ordering `courses.import`'s own
+    // execute holds itself to for the identical reason.
+    const createdCourseIds: string[] = []
+    const output = writeTransaction(db, (tx): DuplicateProjectOutput => {
       let newProject: Project
       try {
         newProject = projects.createProject(
@@ -471,10 +482,21 @@ export const duplicateProjectAction: Action<
         }
 
         coursesCopied += 1
+        // ADMIN-14 — named for the enqueue after this transaction commits
+        // (this action's own `execute`, above); collected rather than
+        // enqueued here since `tx` is still open and `enqueueJob`
+        // (`@bloombot/db`) does not accept one.
+        createdCourseIds.push(result.course.id)
       }
 
       return { project: newProject, coursesCopied, coursesDisabled: true }
-    }),
+    })
+
+    for (const courseId of createdCourseIds) {
+      enqueueCourseApprovalNotifyPending(organizationId, courseId, db)
+    }
+    return output
+  },
 }
 
 /** PROJ-9's `projects.delete` needs the caller's own account id, the same reason `courses.ts`'s identically-named helper gives — see that file's own doc comment. */

@@ -68,6 +68,68 @@ export function enqueueRemoveDeletedContentBytes(
   )
 }
 
+/**
+ * ADMIN-14 (`docs/SPEC.md` §45) — the kind string is a literal duplicated on
+ * both sides, the same convention `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`
+ * just above already follows: `apps/worker/src/handlers/course-approval-notifications.ts`
+ * registers a handler under the identical literal, and nothing here can
+ * import from `apps/worker` (this file's own module comment on the
+ * direction that dependency runs).
+ *
+ * Enqueued wherever a course *becomes* pending approval — created without
+ * qualifying for COST-8's automatic approval (`courses.save`'s own
+ * `execute`, below), imported (`course-portability.ts#importCourseAction`),
+ * duplicated (`projects.ts#duplicateProjectAction`, which never calls
+ * `approveIfAdministratorOwned` at all — every duplicated course is
+ * pending), or an administrator revokes an existing approval
+ * (`apps/api/src/routes/admin.ts`'s unapprove route). Never from
+ * `packages/core/src/answer.ts`'s own lazy auto-approval — that path
+ * *approves* a course, it does not make one pending.
+ */
+export const COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND =
+  'courseApproval.notifyPending'
+const COURSE_APPROVAL_NOTIFY_PENDING_JOB_MAX_ATTEMPTS = 5
+
+/**
+ * Enqueues `COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND`, naming the course that
+ * just became pending. Goes through the job queue rather than sending mail
+ * inline for two reasons (`docs/DECISIONS.md`): every call site here lives
+ * in `packages/actions`, which (D-29) may not import `@bloombot/config` or
+ * `@bloombot/mail` — an env-reading package and a real mail transport,
+ * neither of which belongs behind this package's own dependency-injection
+ * boundary; and "records why rather than failing the operation that
+ * triggered it" (`docs/SPEC.md` §45's own words) is exactly what a queued
+ * job already gives every other handler in this platform, through the same
+ * retry policy (JOB-2) — a course is still created, and an approval is
+ * still revoked, even when the notification about it cannot go out yet.
+ *
+ * `db` is the same top-level `Database` every other caller here enqueues
+ * with — never a transaction's own `tx` (`Executor`): `courses.save`'s
+ * `execute` runs no transaction at all, and `course-portability.ts`'s
+ * import/`projects.ts`'s duplicate both enqueue *after* their own
+ * `db.transaction(...)` call returns, once the course (or courses) it names
+ * are already committed — the same "gathered inside the transaction that
+ * created the row, enqueued once it is durable" ordering
+ * `enqueueRemoveDeletedContentBytes`'s own callers already hold themselves
+ * to, just the other direction (a row that must exist before the job is
+ * queued, rather than one whose deletion must be committed first).
+ */
+export function enqueueCourseApprovalNotifyPending(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): void {
+  jobs.enqueueJob(
+    organizationId,
+    {
+      kind: COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND,
+      payload: { courseId },
+      maxAttempts: COURSE_APPROVAL_NOTIFY_PENDING_JOB_MAX_ATTEMPTS,
+    },
+    db
+  )
+}
+
 type Project = NonNullable<ReturnType<typeof projects.getProject>>
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
 
@@ -486,6 +548,10 @@ export const saveCourseAction: Action<
           aiApprovalDecidedAt: approved.aiApprovalDecidedAt,
         }
       }
+      // ADMIN-14 — this course landed pending, not administrator-owned:
+      // tell the support address (`enqueueCourseApprovalNotifyPending`'s own
+      // doc comment above).
+      enqueueCourseApprovalNotifyPending(organizationId, result.course.id, db)
     }
 
     return result.course

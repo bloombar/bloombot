@@ -245,7 +245,9 @@ export function listMembershipsForOrganizationWithAccounts(
     .where(
       and(
         eq(memberships.organizationId, organizationId),
-        isNull(memberships.revokedAt)
+        isNull(memberships.revokedAt),
+        // DATA-9 — a soft-deleted account is not listed as a member either.
+        isNull(accounts.deletedAt)
       )
     )
     .all()
@@ -285,7 +287,12 @@ export function listMembershipsForAccountWithOrganizations(
     .from(memberships)
     .innerJoin(organizations, eq(organizations.id, memberships.organizationId))
     .where(
-      and(eq(memberships.accountId, accountId), isNull(memberships.revokedAt))
+      and(
+        eq(memberships.accountId, accountId),
+        isNull(memberships.revokedAt),
+        // DATA-9 — a soft-deleted organization is not offered here either.
+        isNull(organizations.deletedAt)
+      )
     )
     .all()
 }

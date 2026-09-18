@@ -18,11 +18,12 @@
  * there is no exception in this file (TEN-2).
  */
 
-import { and, asc, desc, eq, gte, lte } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, isNull, lte } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { writeTransaction } from '../client.js'
 import {
+  conversations,
   courses,
   messages,
   people,
@@ -139,13 +140,15 @@ export function readCourseTranscript(
   input: ReadCourseTranscriptInput,
   db: Database
 ): ReadCourseTranscriptResult | undefined {
+  // DATA-9 — a soft-deleted course or person cannot be read here either.
   const course = db
     .select({ id: courses.id, title: courses.title })
     .from(courses)
     .where(
       and(
         eq(courses.id, input.courseId),
-        eq(courses.organizationId, organizationId)
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
       )
     )
     .get()
@@ -158,7 +161,8 @@ export function readCourseTranscript(
       .where(
         and(
           eq(people.id, input.personId),
-          eq(people.organizationId, organizationId)
+          eq(people.organizationId, organizationId),
+          isNull(people.deletedAt)
         )
       )
       .get()
@@ -199,6 +203,18 @@ export function readCourseTranscript(
         eq(people.organizationId, organizationId)
       )
     )
+    // DATA-9 — a message carries no tombstone of its own (`schema.ts`'s own
+    // comment); joined here so a soft-deleted conversation's messages read
+    // as though they were never asked, the same "no read anywhere returns a
+    // marked record" `conversations.ts#getTranscript` already holds itself
+    // to.
+    .innerJoin(
+      conversations,
+      and(
+        eq(conversations.id, messages.conversationId),
+        eq(conversations.organizationId, organizationId)
+      )
+    )
     .where(
       and(
         eq(messages.organizationId, organizationId),
@@ -209,6 +225,7 @@ export function readCourseTranscript(
         // out of `and(...)` the same way every other optional condition
         // here already does.
         input.surface ? eq(messages.surface, input.surface) : undefined,
+        isNull(conversations.deletedAt),
         ...dateConditions
       )
     )
@@ -300,7 +317,14 @@ export function listPeopleWithTranscript(
     .where(
       and(
         eq(messages.organizationId, organizationId),
-        eq(messages.courseId, courseId)
+        eq(messages.courseId, courseId),
+        // DATA-9 rework finding (soft-delete-convention.test.ts's own
+        // whitespace-tolerant `Join(` match, DATA-7 rework must-fix 3) — a
+        // soft-deleted person's own transcript is not offered in the
+        // panel's student dropdown either; this multi-line `innerJoin` was
+        // never actually scanned by the convention test before this rework
+        // tightened it.
+        isNull(people.deletedAt)
       )
     )
     .orderBy(asc(people.displayName), asc(messages.personId))

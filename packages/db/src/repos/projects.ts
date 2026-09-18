@@ -7,12 +7,13 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, eq, isNull, isNotNull } from 'drizzle-orm'
+import { and, eq, inArray, isNull, isNotNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import { findProjectUnarchiveConflict } from './courses.js'
 import type { CourseNameConflict } from './courses.js'
-import { projects } from '../schema.js'
+import { conversations, courses, projects } from '../schema.js'
 
 export type Project = typeof projects.$inferSelect
 
@@ -78,7 +79,14 @@ function findActiveProjectConflict(
       and(
         eq(projects.organizationId, organizationId),
         eq(projects.name, name),
-        isNull(projects.archivedAt)
+        isNull(projects.archivedAt),
+        // DATA-9 — a soft-deleted project is not a candidate conflict here
+        // either; the actual "is this name free" invariant lives in the
+        // database now, on `projects_org_name_active_unique` (`schema.ts`,
+        // DATA-7 rework must-fix 1) — that index's own `WHERE` excludes a
+        // soft-deleted row too, so this pre-check and what the index
+        // actually enforces agree.
+        isNull(projects.deletedAt)
       )
     )
     .all()
@@ -144,10 +152,12 @@ export function findProjectOrganizationId(
   projectId: string,
   db: Database
 ): string | undefined {
+  // DATA-9 — a soft-deleted project cannot be opened at its own address,
+  // including through this id-only lookup.
   return db
     .select({ organizationId: projects.organizationId })
     .from(projects)
-    .where(eq(projects.id, projectId))
+    .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
     .get()?.organizationId
 }
 
@@ -163,7 +173,10 @@ export function getProject(
     .where(
       and(
         eq(projects.id, projectId),
-        eq(projects.organizationId, organizationId)
+        eq(projects.organizationId, organizationId),
+        // DATA-9 — a soft-deleted project cannot be opened at its own
+        // address.
+        isNull(projects.deletedAt)
       )
     )
     .get()
@@ -185,7 +198,12 @@ export function listProjects(
   db: Executor,
   options?: { includeArchived?: boolean }
 ): Project[] {
-  const conditions = [eq(projects.organizationId, organizationId)]
+  // DATA-9 — a soft-deleted project never appears in a list, archived or
+  // not.
+  const conditions = [
+    eq(projects.organizationId, organizationId),
+    isNull(projects.deletedAt),
+  ]
   if (!options?.includeArchived) {
     conditions.push(isNull(projects.archivedAt))
   }
@@ -219,7 +237,9 @@ export function renameProject(
     .where(
       and(
         eq(projects.id, projectId),
-        eq(projects.organizationId, organizationId)
+        eq(projects.organizationId, organizationId),
+        // DATA-9 — a soft-deleted project cannot be renamed.
+        isNull(projects.deletedAt)
       )
     )
     .get()
@@ -325,7 +345,9 @@ export function unarchiveProject(
     .where(
       and(
         eq(projects.id, projectId),
-        eq(projects.organizationId, organizationId)
+        eq(projects.organizationId, organizationId),
+        // DATA-9 — a soft-deleted project cannot be unarchived.
+        isNull(projects.deletedAt)
       )
     )
     .get()
@@ -370,4 +392,171 @@ export function unarchiveProject(
     }
     return { ok: false, conflict }
   }
+}
+
+/**
+ * DATA-7 — soft-delete a project: stamp `deletedAt`/`deletedByAccountId` on
+ * the project itself and, with the *same* timestamp, on every `courses` row
+ * it owns (`schema.ts`'s own `courses.projectId`) — the same
+ * "same timestamp is what a restore reads" cascade
+ * `organizations.ts#softDeleteOrganization` already holds itself to, one
+ * level down. A course's own conversations are cascaded transitively by
+ * `courses.ts#softDeleteCourse` for a *single*-course delete — this function
+ * does not repeat that work per course, since a project delete removes
+ * conversations the same way, filtered only by `courseId IN (this
+ * project's courses)` rather than by `courses.deletedAt`, which the
+ * following statement sets in the same transaction.
+ *
+ * `undefined` when `projectId` does not exist, or does not belong to
+ * `organizationId` (TEN-2), or is already deleted. An *archived* project is
+ * deleted exactly as readily as a live one — nothing here reads
+ * `archivedAt`, the same "archiving and deleting never merge" reasoning
+ * `deletions.ts#deleteProject`'s own doc comment already gives.
+ */
+export function softDeleteProject(
+  organizationId: string,
+  projectId: string,
+  deletedByAccountId: string,
+  db: Database
+): Project | undefined {
+  return writeTransaction(db, (tx) => {
+    const now = Date.now()
+    const project = tx
+      .update(projects)
+      .set({ deletedAt: now, deletedByAccountId })
+      .where(
+        and(
+          eq(projects.id, projectId),
+          eq(projects.organizationId, organizationId),
+          isNull(projects.deletedAt)
+        )
+      )
+      .returning()
+      .get()
+    if (!project) return undefined
+
+    // Only the project's currently-*live* courses cascade — one already
+    // soft-deleted on its own keeps its own, earlier timestamp (this
+    // function's own doc comment).
+    const courseIds = tx
+      .select({ id: courses.id })
+      .from(courses)
+      .where(
+        and(
+          eq(courses.organizationId, organizationId),
+          eq(courses.projectId, projectId),
+          isNull(courses.deletedAt)
+        )
+      )
+      .all()
+      .map((row) => row.id)
+
+    tx.update(courses)
+      .set({ deletedAt: now, deletedByAccountId })
+      .where(
+        and(
+          eq(courses.organizationId, organizationId),
+          eq(courses.projectId, projectId),
+          isNull(courses.deletedAt)
+        )
+      )
+      .run()
+
+    if (courseIds.length > 0) {
+      tx.update(conversations)
+        .set({ deletedAt: now, deletedByAccountId })
+        .where(
+          and(
+            eq(conversations.organizationId, organizationId),
+            inArray(conversations.courseId, courseIds),
+            isNull(conversations.deletedAt)
+          )
+        )
+        .run()
+    }
+
+    return project
+  })
+}
+
+/**
+ * DATA-7 — restore a soft-deleted project: read its own `deletedAt` first
+ * (unfiltered — the DATA-9 convention test's own named "a restore"
+ * exception, the same reason `organizations.ts#restoreOrganization` needs
+ * it), then un-mark every `courses`/`conversations` row that carries that
+ * *same* timestamp — never a course (or its conversations) deleted
+ * independently, before or after this project's own delete.
+ *
+ * `undefined` when `projectId` does not exist, or does not belong to
+ * `organizationId` (TEN-2), or is not currently deleted.
+ */
+export function restoreProject(
+  organizationId: string,
+  projectId: string,
+  db: Database
+): Project | undefined {
+  return writeTransaction(db, (tx) => {
+    const existing = tx
+      .select()
+      .from(projects)
+      .where(
+        and(
+          eq(projects.id, projectId),
+          eq(projects.organizationId, organizationId)
+        )
+      )
+      .get()
+    if (!existing || existing.deletedAt === null) return undefined
+    const deletedAt = existing.deletedAt
+
+    const courseIds = tx
+      .select({ id: courses.id })
+      .from(courses)
+      .where(
+        and(
+          eq(courses.organizationId, organizationId),
+          eq(courses.projectId, projectId),
+          eq(courses.deletedAt, deletedAt)
+        )
+      )
+      .all()
+      .map((row) => row.id)
+
+    tx.update(courses)
+      .set({ deletedAt: null, deletedByAccountId: null })
+      .where(
+        and(
+          eq(courses.organizationId, organizationId),
+          eq(courses.projectId, projectId),
+          eq(courses.deletedAt, deletedAt)
+        )
+      )
+      .run()
+
+    if (courseIds.length > 0) {
+      tx.update(conversations)
+        .set({ deletedAt: null, deletedByAccountId: null })
+        .where(
+          and(
+            eq(conversations.organizationId, organizationId),
+            inArray(conversations.courseId, courseIds),
+            eq(conversations.deletedAt, deletedAt)
+          )
+        )
+        .run()
+    }
+
+    return tx
+      .update(projects)
+      .set({ deletedAt: null, deletedByAccountId: null })
+      .where(
+        and(
+          eq(projects.id, projectId),
+          eq(projects.organizationId, organizationId),
+          eq(projects.deletedAt, deletedAt)
+        )
+      )
+      .returning()
+      .get()
+  })
 }

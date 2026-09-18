@@ -102,16 +102,22 @@ describe('runMigrations', () => {
       'transcript_exports',
       'usage_counters',
     ])
+    // DATA-7 — `deleted_at`/`deleted_by_account_id` added by this slice.
     expect(schema.organizations).toEqual([
       'created_at',
+      'deleted_at',
+      'deleted_by_account_id',
       'id',
       'is_personal',
       'name',
       'spending_cap_micros',
     ])
     // AUTH-7 — `first_name`/`last_name` added by this slice.
+    // DATA-7 — `deleted_at`/`deleted_by_account_id` added by this slice.
     expect(schema.accounts).toEqual([
       'created_at',
+      'deleted_at',
+      'deleted_by_account_id',
       'disabled_at',
       'display_name',
       'email',
@@ -173,15 +179,19 @@ describe('runMigrations', () => {
       'state_hash',
       'used_at',
     ])
+    // DATA-7 — `deleted_at`/`deleted_by_account_id` added by this slice.
     expect(schema.projects).toEqual([
       'archived_at',
       'created_at',
+      'deleted_at',
+      'deleted_by_account_id',
       'id',
       'name',
       'organization_id',
     ])
     // ENRL-13/ENRL-14 — `self_enrol_from_discord`/`answer_unenrolled` added
     // by this slice.
+    // DATA-7 — `deleted_at`/`deleted_by_account_id` added by this slice.
     expect(schema.courses).toEqual([
       'admins_role',
       'ai_approval_decided_at',
@@ -190,6 +200,8 @@ describe('runMigrations', () => {
       'answer_unenrolled',
       'conversation_scope',
       'created_at',
+      'deleted_at',
+      'deleted_by_account_id',
       'discord_server_id',
       'enabled',
       'id',
@@ -230,9 +242,12 @@ describe('runMigrations', () => {
       'ordering',
       'organization_id',
     ])
+    // DATA-7 — `deleted_at`/`deleted_by_account_id` added by this slice.
     expect(schema.people).toEqual([
       'connected_at',
       'created_at',
+      'deleted_at',
+      'deleted_by_account_id',
       'display_name',
       'email',
       'first_name',
@@ -251,9 +266,12 @@ describe('runMigrations', () => {
       'person_id',
       'surface',
     ])
+    // DATA-7 — `deleted_at`/`deleted_by_account_id` added by this slice.
     expect(schema.conversations).toEqual([
       'course_id',
       'created_at',
+      'deleted_at',
+      'deleted_by_account_id',
       'id',
       'last_message_at',
       'organization_id',
@@ -1438,6 +1456,138 @@ describe('0017 — membership_invitations', () => {
       display_name: 'Instructor',
       first_name: null,
       last_name: null,
+    })
+  })
+
+  // DATA-7 — the tombstone migration (0038), applied over a database that
+  // already has a row in every one of the six deletable tables, the same
+  // "applies over the previous state with existing rows intact" shape
+  // `applies 0032` above already proves for a narrower case.
+  it('applies 0038 to a database with pre-existing rows in every deletable table, adding deleted_at/deleted_by_account_id as null and losing nothing', () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0037 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 37
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0037) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0037,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    const now = Date.now()
+    const organizationId = randomUUID()
+    const projectId = randomUUID()
+    const courseId = randomUUID()
+    const personId = randomUUID()
+    const conversationId = randomUUID()
+    const accountId = randomUUID()
+
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Pre-existing Org', 0, now)
+    db.$client
+      .prepare(
+        'insert into accounts (id, email, display_name, created_at) values (?, ?, ?, ?)'
+      )
+      .run(accountId, 'pre-existing@example.edu', 'Pre-existing', now)
+    db.$client
+      .prepare(
+        'insert into projects (id, organization_id, name, created_at) values (?, ?, ?, ?)'
+      )
+      .run(projectId, organizationId, 'Pre-existing Project', now)
+    db.$client
+      .prepare(
+        `insert into courses (id, organization_id, project_id, title, enabled, created_at)
+         values (?, ?, ?, ?, ?, ?)`
+      )
+      .run(courseId, organizationId, projectId, 'Pre-existing Course', 1, now)
+    db.$client
+      .prepare(
+        'insert into people (id, organization_id, display_name, created_at) values (?, ?, ?, ?)'
+      )
+      .run(personId, organizationId, 'Pre-existing Person', now)
+    db.$client
+      .prepare(
+        `insert into conversations (id, organization_id, course_id, person_id, created_at, last_message_at)
+         values (?, ?, ?, ?, ?, ?)`
+      )
+      .run(conversationId, organizationId, courseId, personId, now, now)
+
+    // The migration under test: 0038, applied through the real migrations
+    // folder — this must not throw.
+    expect(() => runMigrations(db as Database)).not.toThrow()
+
+    expect(
+      db.$client
+        .prepare('select * from organizations where id = ?')
+        .get(organizationId)
+    ).toMatchObject({
+      id: organizationId,
+      name: 'Pre-existing Org',
+      deleted_at: null,
+      deleted_by_account_id: null,
+    })
+    expect(
+      db.$client.prepare('select * from accounts where id = ?').get(accountId)
+    ).toMatchObject({
+      id: accountId,
+      email: 'pre-existing@example.edu',
+      deleted_at: null,
+      deleted_by_account_id: null,
+    })
+    expect(
+      db.$client.prepare('select * from projects where id = ?').get(projectId)
+    ).toMatchObject({
+      id: projectId,
+      name: 'Pre-existing Project',
+      deleted_at: null,
+      deleted_by_account_id: null,
+    })
+    expect(
+      db.$client.prepare('select * from courses where id = ?').get(courseId)
+    ).toMatchObject({
+      id: courseId,
+      title: 'Pre-existing Course',
+      deleted_at: null,
+      deleted_by_account_id: null,
+    })
+    expect(
+      db.$client.prepare('select * from people where id = ?').get(personId)
+    ).toMatchObject({
+      id: personId,
+      display_name: 'Pre-existing Person',
+      deleted_at: null,
+      deleted_by_account_id: null,
+    })
+    expect(
+      db.$client
+        .prepare('select * from conversations where id = ?')
+        .get(conversationId)
+    ).toMatchObject({
+      id: conversationId,
+      course_id: courseId,
+      person_id: personId,
+      deleted_at: null,
+      deleted_by_account_id: null,
     })
   })
 })

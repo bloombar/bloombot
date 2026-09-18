@@ -16,7 +16,7 @@
  * `cost-ledger.ts#listOrganizationTotals` already is.
  */
 
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import {
@@ -57,10 +57,12 @@ export function findCourseOrganizationId(
   courseId: string,
   db: Database
 ): string | undefined {
+  // DATA-9 — a soft-deleted course cannot be opened at its own address,
+  // including through this id-only lookup.
   return db
     .select({ organizationId: courses.organizationId })
     .from(courses)
-    .where(eq(courses.id, courseId))
+    .where(and(eq(courses.id, courseId), isNull(courses.deletedAt)))
     .get()?.organizationId
 }
 
@@ -141,11 +143,16 @@ export function approveCourse(
   now: number,
   db: Executor
 ): Course | undefined {
+  // DATA-9 — a soft-deleted course cannot be approved.
   const course = db
     .select()
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!course) return undefined
@@ -195,6 +202,8 @@ export function revokeCourseApproval(
   now: number,
   db: Executor
 ): Course | undefined {
+  // DATA-9 — a soft-deleted course cannot have its approval revoked
+  // (nothing to revoke — it already answers nothing).
   const updated = db
     .update(courses)
     .set({
@@ -203,7 +212,11 @@ export function revokeCourseApproval(
       aiApprovalDecidedAt: now,
     })
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .returning()
     .get()
@@ -249,7 +262,9 @@ export function isAdministratorOwnedOrganization(
     .where(
       and(
         eq(memberships.organizationId, organizationId),
-        eq(memberships.role, 'owner')
+        eq(memberships.role, 'owner'),
+        // DATA-9 — a soft-deleted account is not a candidate owner either.
+        isNull(accounts.deletedAt)
       )
     )
     .all()
@@ -280,7 +295,9 @@ export function listActiveOwnerEmails(
     .where(
       and(
         eq(memberships.organizationId, organizationId),
-        eq(memberships.role, 'owner')
+        eq(memberships.role, 'owner'),
+        // DATA-9 — a soft-deleted account is not named here either.
+        isNull(accounts.deletedAt)
       )
     )
     .all()
@@ -360,6 +377,15 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
     .from(courses)
     .innerJoin(projects, eq(projects.id, courses.projectId))
     .innerJoin(organizations, eq(organizations.id, courses.organizationId))
+    // DATA-9 — a soft-deleted course, project or organization does not
+    // appear in the platform administrator's own approval queue either.
+    .where(
+      and(
+        isNull(courses.deletedAt),
+        isNull(projects.deletedAt),
+        isNull(organizations.deletedAt)
+      )
+    )
     .orderBy(desc(courses.createdAt))
     .all()
 
@@ -376,10 +402,16 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
   ]
   const approverEmailsByAccountId = new Map<string, string>()
   if (approverAccountIds.length > 0) {
+    // DATA-9 — a soft-deleted account is not named as an approver either.
     const approverRows = db
       .select({ id: accounts.id, email: accounts.email })
       .from(accounts)
-      .where(inArray(accounts.id, approverAccountIds))
+      .where(
+        and(
+          inArray(accounts.id, approverAccountIds),
+          isNull(accounts.deletedAt)
+        )
+      )
       .all()
     for (const approver of approverRows) {
       approverEmailsByAccountId.set(approver.id, approver.email)
@@ -398,7 +430,8 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
     })
     .from(memberships)
     .innerJoin(accounts, eq(accounts.id, memberships.accountId))
-    .where(eq(memberships.role, 'owner'))
+    // DATA-9 — a soft-deleted account is not named as an owner either.
+    .where(and(eq(memberships.role, 'owner'), isNull(accounts.deletedAt)))
     .all()
 
   const ownersByOrganizationId = new Map<

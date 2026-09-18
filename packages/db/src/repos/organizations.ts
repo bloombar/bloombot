@@ -8,7 +8,7 @@
  * even here: the id is simply the organization's own.
  */
 
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import { writeTransaction } from '../client.js'
@@ -22,12 +22,15 @@ import {
   courseChannels,
   courseInstructionRevisions,
   courseJoinLinks,
+  courseSelfEnrolmentIntents,
+  courseWebSources,
   courses,
   discordInstallStates,
   discordServerBindings,
   enrolments,
   jobs,
   memberships,
+  membershipInvitations,
   messages,
   organizations,
   people,
@@ -94,10 +97,14 @@ export function getOrganizationById(
   organizationId: string,
   db: Executor
 ): Organization | undefined {
+  // DATA-9 — a soft-deleted organization cannot be opened at its own
+  // address.
   return db
     .select()
     .from(organizations)
-    .where(eq(organizations.id, organizationId))
+    .where(
+      and(eq(organizations.id, organizationId), isNull(organizations.deletedAt))
+    )
     .get()
 }
 
@@ -171,6 +178,12 @@ export function setSpendingCap(
  * `db` accepts `Executor`, not just `Database`: `deleteOrganizationData`
  * below calls this from inside its own transaction, counting exactly what
  * it is about to delete before any of it is gone.
+ *
+ * DATA-9 exception, named in `tests/soft-delete-convention.test.ts`'s own
+ * allowlist: deliberately counts every row regardless of `deletedAt` — this
+ * is ADMIN-5's *permanent* wipe, which has to remove a soft-deleted course
+ * too, not undercount it because DATA-9's own read filter was built to hide
+ * it from the product, not from this operation.
  */
 export interface OrganizationDeletionPreview {
   organizationId: string
@@ -348,6 +361,22 @@ export function deleteOrganizationData(
     tx.delete(courseJoinLinks)
       .where(eq(courseJoinLinks.organizationId, organizationId))
       .run()
+    // TEN-10 rework finding — `course_self_enrolment_intents` and
+    // `course_web_sources` are both real foreign keys to `courses.id` and
+    // `organizations.id` (`schema.ts`'s own comment on each), missing from
+    // this hand-written list until `tests/organizations-cascade-schema.test.ts`
+    // (TEN-10's own schema-derived test) caught it — the same class of drift
+    // `roster_channel_assignments` and `content_deletions` were each patched
+    // for below, after their own production `FOREIGN KEY constraint failed`.
+    // Deleted here, ahead of `courses`, the same "children before the
+    // parents they reference" ordering `deletions.ts#emptyCourse` already
+    // holds itself to for the identical two tables, one course at a time.
+    tx.delete(courseSelfEnrolmentIntents)
+      .where(eq(courseSelfEnrolmentIntents.organizationId, organizationId))
+      .run()
+    tx.delete(courseWebSources)
+      .where(eq(courseWebSources.organizationId, organizationId))
+      .run()
     // COST-8 — a course's own approval history, the same "does not outlive
     // the course, must not block the delete" carve-out `deletions.ts`'s own
     // `emptyCourse` already gives it, one level up (a whole tenant here,
@@ -409,6 +438,15 @@ export function deleteOrganizationData(
     tx.delete(jobs).where(eq(jobs.organizationId, organizationId)).run()
     tx.delete(memberships)
       .where(eq(memberships.organizationId, organizationId))
+      .run()
+    // TEN-10 rework finding — `membership_invitations` is a real foreign key
+    // to `organizations.id` (`schema.ts`'s own comment), the third table this
+    // hand-written list had drifted from missing. Deleted here, alongside
+    // `memberships` above, for the same reason: an invitation is the same
+    // "join between an account and this organization" `memberships` already
+    // is, just not yet redeemed.
+    tx.delete(membershipInvitations)
+      .where(eq(membershipInvitations.organizationId, organizationId))
       .run()
     // PROJ-8/PROJ-9 rework finding: `content_deletions` is a real foreign
     // key to `organizations.id` (`schema.ts`'s own comment on why it is,
@@ -481,4 +519,166 @@ export function listTenantDeletions(db: Database): TenantDeletion[] {
     .from(tenantDeletions)
     .orderBy(sql`${tenantDeletions.deletedAt} desc`)
     .all()
+}
+
+/**
+ * DATA-7 — soft-delete an organization: stamp `deletedAt`/`deletedByAccountId`
+ * on the organization itself and, with the *same* timestamp, on every
+ * `projects`/`courses`/`people`/`conversations` row it owns — DATA-7's own
+ * "deleting a parent marks its children with the same timestamp, and that
+ * shared timestamp is what a restore reads". Every one of those tables
+ * already carries `organizationId` directly, so the cascade is a flat
+ * per-table `UPDATE ... WHERE organizationId = X AND deletedAt IS NULL`
+ * rather than a walk through `projects → courses → conversations` — no
+ * table here needs another to find its own rows. Skips a row that is
+ * already deleted (`deletedAt IS NULL` in each cascade write) so an earlier,
+ * independent deletion — a course deleted on its own last week, say — keeps
+ * its own, earlier timestamp rather than being silently re-stamped to this
+ * one, which is exactly what would make `restoreOrganization`'s own
+ * "only children marked at the same moment" rule restore something that was
+ * deleted on purpose, before this call ever ran.
+ *
+ * Distinct from ADMIN-5's `deleteOrganizationData`, which still physically
+ * removes every row outright — this function marks, `deleteOrganizationData`
+ * removes; this slice does not connect the two (DATA-8's sweep, a later
+ * slice, is what eventually calls something like it for what this leaves
+ * behind once the retention window passes).
+ *
+ * `undefined` when `organizationId` does not exist, or is already deleted.
+ */
+export function softDeleteOrganization(
+  organizationId: string,
+  deletedByAccountId: string,
+  db: Database
+): Organization | undefined {
+  return writeTransaction(db, (tx) => {
+    const now = Date.now()
+    const organization = tx
+      .update(organizations)
+      .set({ deletedAt: now, deletedByAccountId })
+      .where(
+        and(
+          eq(organizations.id, organizationId),
+          isNull(organizations.deletedAt)
+        )
+      )
+      .returning()
+      .get()
+    if (!organization) return undefined
+
+    const cascade = { deletedAt: now, deletedByAccountId }
+    tx.update(projects)
+      .set(cascade)
+      .where(
+        and(
+          eq(projects.organizationId, organizationId),
+          isNull(projects.deletedAt)
+        )
+      )
+      .run()
+    tx.update(courses)
+      .set(cascade)
+      .where(
+        and(
+          eq(courses.organizationId, organizationId),
+          isNull(courses.deletedAt)
+        )
+      )
+      .run()
+    tx.update(people)
+      .set(cascade)
+      .where(
+        and(eq(people.organizationId, organizationId), isNull(people.deletedAt))
+      )
+      .run()
+    tx.update(conversations)
+      .set(cascade)
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          isNull(conversations.deletedAt)
+        )
+      )
+      .run()
+
+    return organization
+  })
+}
+
+/**
+ * DATA-7 — restore a soft-deleted organization: read its own `deletedAt`
+ * first (unfiltered by `deletedAt` — the DATA-9 convention test's own named
+ * "a restore" exception, needed here to learn the exact shared timestamp to
+ * restore children by), then un-mark every `projects`/`courses`/`people`/
+ * `conversations` row that carries that *same* timestamp — never a child
+ * deleted independently, before or after this organization's own delete,
+ * which is DATA-7's own "something deleted earlier, on purpose, stays
+ * deleted".
+ *
+ * `undefined` when `organizationId` does not exist, or is not currently
+ * deleted.
+ */
+export function restoreOrganization(
+  organizationId: string,
+  db: Database
+): Organization | undefined {
+  return writeTransaction(db, (tx) => {
+    const existing = tx
+      .select()
+      .from(organizations)
+      .where(eq(organizations.id, organizationId))
+      .get()
+    if (!existing || existing.deletedAt === null) return undefined
+    const deletedAt = existing.deletedAt
+
+    const restored = { deletedAt: null, deletedByAccountId: null }
+    tx.update(projects)
+      .set(restored)
+      .where(
+        and(
+          eq(projects.organizationId, organizationId),
+          eq(projects.deletedAt, deletedAt)
+        )
+      )
+      .run()
+    tx.update(courses)
+      .set(restored)
+      .where(
+        and(
+          eq(courses.organizationId, organizationId),
+          eq(courses.deletedAt, deletedAt)
+        )
+      )
+      .run()
+    tx.update(people)
+      .set(restored)
+      .where(
+        and(
+          eq(people.organizationId, organizationId),
+          eq(people.deletedAt, deletedAt)
+        )
+      )
+      .run()
+    tx.update(conversations)
+      .set(restored)
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          eq(conversations.deletedAt, deletedAt)
+        )
+      )
+      .run()
+
+    return tx
+      .update(organizations)
+      .set(restored)
+      .where(
+        and(
+          eq(organizations.id, organizationId),
+          eq(organizations.deletedAt, deletedAt)
+        )
+      )
+      .returning()
+      .get()
+  })
 }

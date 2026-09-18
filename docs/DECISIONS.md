@@ -13713,3 +13713,178 @@ itself to for the same reason, one level up for the tenant-wide cascade. An ackn
 discipline (no update, no delete function in `repos/roster-import-acknowledgements.ts`) is unchanged — it
 still records exactly what happened and is never revised — but it does not survive the course or tenant it
 is about being deleted, any more than an approval event does.
+
+## D-137 — `packages/db`: DATA-7/DATA-9/TEN-10 — soft deletion's cascade, its read filter, and the tenant cascade derived from the schema
+
+**The cascade is a flat, per-table write, not a walk through the entity tree.** DATA-7's own text says
+"deleting a parent marks its children with the same timestamp" — `organizations.ts#softDeleteOrganization`
+could have walked `organizations → projects → courses → conversations`, cascading one hop at a time the way
+`repos/deletions.ts#emptyCourse`'s own physical delete does. It does not: every one of `projects`/`courses`/
+`people`/`conversations` already carries `organizationId` directly (`schema.ts`), so soft-deleting an
+organization is four independent `UPDATE ... WHERE organizationId = X AND deletedAt IS NULL` statements, not
+a tree walk. `projects.ts#softDeleteProject` and `courses.ts#softDeleteCourse` are narrower versions of the
+same shape, one level down each. Every cascade write filters on `deletedAt IS NULL` for its _own_ table,
+which is what makes DATA-7's "something deleted earlier, on purpose, stays deleted" true without a tree walk
+having to check it explicitly: a row already marked keeps its own, earlier timestamp, because the `UPDATE`
+that would otherwise re-stamp it never matches it.
+
+**Restore reads the parent's own `deletedAt` unfiltered, then narrows every child `UPDATE` to that exact
+value.** `organizations.ts#restoreOrganization`/`projects.ts#restoreProject`/`courses.ts#restoreCourse`/
+`people.ts#restorePerson` all do the same three-step shape: read the parent row by id (no `deletedAt` filter
+— this is the one place in each of these files that legitimately needs to see a tombstoned row), refuse if it
+is not currently deleted, then `UPDATE` every child table `WHERE <scope> AND deletedAt = <the parent's own
+value>`. This is what the DATA-9 convention test's own allowlist means by "a restore" — the four functions
+named in it are exactly these, and no other function in the package reads a deletable table unfiltered for
+this reason.
+
+**A person's own conversation history in a course (WEB-73's own target) is a leaf, not a cascade.**
+`conversations.ts#softDeleteConversationsForPerson`/`#restoreConversationsForPerson` mark or un-mark every
+conversation for one `(courseId, personId)` pair directly — there is nothing above it in this package's own
+cascade for it to inherit a timestamp from, since it is itself one of DATA-7's six named deletable kinds, not
+a table another entity's delete cascades onto. `messages` carries no tombstone of its own (`schema.ts`'s own
+comment): CONV-2's "no delete path for a message" is unchanged, and `conversations.ts#getTranscript`/
+`transcript-access.ts#readCourseTranscript` both hide a soft-deleted conversation's messages by joining
+through `conversations.deletedAt` rather than the table gaining a column that would let it diverge from its
+own conversation's tombstone.
+
+**Formerly a known limitation, closed by the DATA-7 rework (round 2, D-138): `conversations`' own two partial
+unique indexes are now conditioned on `deletedAt` too**, along with `projects_org_name_active_unique` and a new
+`accounts_email_active_unique`. See D-138 for the fix and why it belongs on the index rather than on the
+pre-check that reads it.
+
+**ADMIN-5/PROJ-8/PROJ-9's own hard, permanent deletes (`organizations.ts#deleteOrganizationData`,
+`deletions.ts#deleteCourse`/`#deleteProject`, and their own preview reads) are deliberately left counting and
+removing every row regardless of `deletedAt`.** A permanent, irreversible wipe has to remove a soft-deleted
+course too, not leave it behind because a read filter designed to hide it from the *product* also hid it from
+the operation that is supposed to erase it outright. This is why these six functions are named in the DATA-9
+convention test's own allowlist rather than filtered like every ordinary read — and why this slice does not
+connect soft deletion to either operation at all: DATA-8's later sweep is what is expected to eventually call
+something shaped like `deleteOrganizationData`/`deleteCourse` for what has passed its retention window, not
+this slice.
+
+**An account's own historical record (`cost-ledger.ts#getAccountUsageSummary`,
+`roster-import-acknowledgements.ts#listAcknowledgementsForAccount`) still names a course after that course is
+soft-deleted.** Both already survive a course's _permanent_ deletion this way — `cost_ledger_entries.courseId`
+is nulled, not deleted, on a hard delete (PROJ-8's own carve-out), and `roster_import_acknowledgements` is
+deleted only when the course itself is (ROST-20 rework, D-136, just above) — so hiding either read behind the
+course's own soft-delete tombstone would make an account's own record of its own past spend or its own past
+acknowledgement incomplete for a reason that has nothing to do with the account. Both are named in the
+DATA-9 convention test's own allowlist for this reason.
+
+**`people.ts#mergePeople` is exempted from the DATA-9 convention test as a data-combination operation, not a
+read.** It already moves a losing person's conversations onto a survivor (or combines the two transcripts)
+without inspecting most of their other columns either — a `deletedAt` a moved conversation carries travels
+with it unexamined, the same way `upstreamThreadId` or `lastMessageAt` already does. Deciding what a merge
+_should_ do when one side's history was soft-deleted (keep it hidden? un-hide it because the survivor's own
+identity now owns it?) is a real product question this slice does not have enough context to answer well, and
+the existing behaviour (leave `deletedAt` exactly as it was on whatever moves) is at least not destructive —
+revisit if LINK-4/DATA-7 ever need to interact more deliberately than "neither one currently reads the
+other's tombstone."
+
+**`courseSelfEnrolmentIntents`/`courseWebSources`/`membershipInvitations` added to
+`deleteOrganizationData`'s cascade (TEN-10), and a schema-derived test added so a fourth table cannot drift in
+silently.** All three carry a real foreign key to `organizations.id` (`schema.ts`) and were missing from the
+hand-written list `deleteOrganizationData` walks — the third time this exact class of bug has been found
+(`roster_channel_assignments` and `content_deletions` were each patched in after a real production `FOREIGN
+KEY constraint failed`, this file's own comments on both). `tests/organizations-cascade-schema.test.ts`
+derives the expected table list from `schema.ts` itself (every `.references(() => organizations.id)`,
+matched against whichever `sqliteTable(...)` declaration precedes it) and asserts `deleteOrganizationData`
+calls `tx.delete(...)` for each one — a table added later with a foreign key to `organizations.id`, and not
+added to the cascade, now fails this test rather than a real deletion a fourth time. The cascade itself is
+still a hand-ordered list, not derived or auto-ordered: the brief's own "correctness and FK-safe ordering come
+first" — deriving _removal order_ from the schema's own FK graph (a topological sort) would be a genuine
+improvement but is a larger, separate change than this slice's finding warranted; the test closes the actual
+gap (a table silently missing) without also taking on that risk.
+
+## D-138 — `packages/db`: DATA-7/DATA-9 rework (round 2) — a tombstone still occupying its own unique index, and an identity resolving to a tombstone
+
+A review of D-137's own slice reproduced two ways a soft delete answered a caller with a crash rather than
+"gone", plus a convention-test gap that let both hide.
+
+**A partial unique index conditioned only on the _other_ nullable column a table carries does not exclude a
+tombstone — the index has to name `deletedAt` itself.** `projects_org_name_active_unique` was partial on
+`archivedAt IS NULL` alone (PROJ-2's own reason for existing); a soft delete never touches `archivedAt`, so a
+deleted project's name still occupied the index while `repos/projects.ts#findActiveProjectConflict`'s own
+pre-check (already filtered on `deletedAt`) reported no conflict — `createProject` reusing a deleted project's
+name threw `SQLITE_CONSTRAINT_UNIQUE` unhandled (D-12: `createProject` returns `Project`, not a result to
+unwrap), and `renameProject` refused, naming a conflicting project the caller could not see
+(`conflictingProjectId: ''`). `conversations`' own two partial unique indexes had exactly the same shape,
+already named as a known limitation in D-137 (now closed, see that entry's own updated text) — partial on
+`surface` alone. `accounts.email` had the _plain_ version of the same mistake: not partial at all, a soft
+deleted account's own email was unique across the whole table forever, so `getAccountByEmail`'s own
+`deletedAt` filter (which reports "nobody has this email" once the account is deleted) and what the index
+actually enforces (which still refuses a second account with it) disagreed the same way. **Fixed on the index
+in all three cases, not the pre-check**: `projects_org_name_active_unique` and `conversations`' own two
+indexes gained `AND deleted_at IS NULL` in their own `WHERE`; `accounts.email` moved from a plain `.unique()`
+column to a new partial `accounts_email_active_unique`, `WHERE deleted_at IS NULL`. The pre-check functions
+that read the same invariant (`findActiveProjectConflict`) are left as belt-and-braces on top of the index,
+not the source of truth — the index is, the same "let the database refuse it, never trust an application
+check alone" discipline this package already holds itself to for TEN-3/PROJ-2 structurally. One generated
+migration (`0039_loose_blackheart.sql`) carries all three.
+
+**An identity resolving to a soft-deleted owner now resolves to a _new_ person, rather than throwing.**
+`resolveIdentity` filters on `people.deletedAt` (DATA-9), which means a soft-deleted person's own identity row
+in `person_identities` becomes invisible to it — but the row itself, and the unique constraint it holds
+(`person_identities_org_surface_external_unique`), does not go anywhere. `resolvePersonByIdentity` (which
+returns a non-optional `Person`, never a result type) resolved this by trying to insert a _new_ person and
+identity when the filtered read found nobody; that insert lost to the still-live constraint, its own recovery
+("look up who won the race") ran the identical filtered read and found nobody either, and a raw
+`SQLITE_CONSTRAINT_UNIQUE` reached whichever surface (Discord, web, MCP) re-resolved the identity first.
+Decided here: DATA-9's own "a deleted record answers nothing" extends to "who is this" — the identity resolves
+to a **new** person (the same outcome as an identity nobody has ever proven anything about, PPL-3's ordinary
+case), and the deleted person's own row is left exactly as deleted as it was. The alternative — refusing in a
+way callers could branch on — was rejected: `resolvePersonByIdentity`'s entire contract, on every surface, is
+"you always get a person back"; a `Person | undefined` return would ripple into three call sites
+(`apps/api/routes/chat.ts`, `packages/discord/handle-mention.ts`, `apps/worker/handlers/roster-import.ts`) that
+today have nothing to do if it ever returned nothing, for a case (a returning visitor whose old account was
+deleted) none of them has a sensible refusal to show. Implemented by catching the unique-constraint failure,
+reading the colliding `person_identities` row back unfiltered (the same "a restore has to see what every other
+read hides" exception this package's actual restores already need) to confirm the current owner really is
+soft-deleted rather than some other collision this function has not seen before, then re-pointing that one row
+— `person_identities_org_surface_external_unique` permits only one — at a freshly created person, inside a new
+transaction. No caller needed a change: every one of them already treats "a person came back" as the ordinary
+case, because that is what PPL-3 always meant.
+
+**The DATA-9 convention test only ever scanned exported top-level functions, matched with an exact substring —
+both gaps closed, and three real reads fixed as a result.** `tests/soft-delete-convention.test.ts` used to walk
+only `export function`/`export const` matches to find each function's own body boundary; a private helper
+declared _before_ the first export was never scanned at all, and one declared _between_ two exports was folded
+into the preceding export's own body (already correctly filtered, so the private helper's own gap never
+tripped the test). It also matched `.from(alias)` as an exact substring, which a `.from(\n  alias\n)` Prettier
+is free to produce for a long line never satisfied. Fixed by anchoring function-boundary detection to the
+start of a line (`^`, multiline) across all three shapes this package's `src/repos/**` actually uses —
+`export function`, `export const … =`, and a private `function name(` — rather than only the two `export`
+shapes, and by matching `.from(`/`Join(` with a whitespace-tolerant regex instead of a literal substring.
+Scanning private helpers properly confirmed the ones D-137's own review already named
+(`conversations.ts#findConversation`/`#resolveConversationLookup`, `courses.ts#findCourseNameConflict`/
+`#loadOwnedProject`/`#findSelfConflict`, `projects.ts#findActiveProjectConflict`) were already correctly
+filtered, and turned up one true positive that needed allowlisting rather than fixing
+(`deletions.ts#emptyCourse`, `deleteCourse`'s and `deleteProject`'s own private helper, which deliberately sees
+every row regardless of `deletedAt` for the identical ADMIN-5/PROJ-8/PROJ-9 reason its own callers are already
+allowlisted). The whitespace-tolerant `.from(`/`Join(` match also turned up two genuine, previously-unnoticed
+gaps in _exported_ functions whose own multi-line `.innerJoin(people, …)` the old literal-substring check
+never actually scanned: `enrolments.ts#listEnrolmentsForCourse` and
+`transcript-access.ts#listPeopleWithTranscript` both joined `people` without excluding a soft-deleted one —
+fixed by adding `isNull(people.deletedAt)` to each, rather than allowlisted, since nothing about either read
+is the kind of deliberate exception DATA-9's own three named ones are. `courses.ts#findCourseNameConflict`
+also gained an explicit `isNull(projects.deletedAt)`, belt-and-braces on top of the invariant that
+`softDeleteProject` already cascades to every live course with the same timestamp (so `courses.deletedAt`
+alone already excluded this case) — the same "not only trusted to have been excluded upstream" reasoning
+`people.ts#listPeopleForAccount` already documents for its own second filter. `people.ts#restorePerson` is
+added to the convention test's own allowlist explicitly (cheap-fix): it already passed, but only because the
+words `people.deletedAt` happen to appear in its own `UPDATE ... WHERE`, not because it was named as the
+deliberate "a restore" exception every sibling restore already is.
+
+**Known limitation, recorded rather than fixed: a child soft-deleted at the same millisecond as its parent is
+resurrected by the parent's own restore.** DATA-7's cascade (D-137) restores every child row carrying the
+_exact same_ `deletedAt` timestamp the parent does — that is how it tells "deleted by this cascade" apart from
+"deleted independently, before or after." Deleting a child deliberately, and its parent, at the same millisecond
+collides those two cases: restoring the parent restores the child too, even though the child was never supposed
+to come back. The SPEC's own timestamp-matching design is what makes this possible, not an implementation
+shortcut this slice took — closing it would need a per-delete identifier distinct from the timestamp (a
+transaction id or a dedicated "cascade batch" column), a real schema change out of this rework's own scope. This
+package's own tests do not exercise the race by accident: every test in `soft-delete.test.ts` that deletes a
+child and then its parent uses `vi`'s fake clock (`vi.setSystemTime`) to force the two timestamps apart
+deliberately — an honest admission that the collision is real and the tests are working around it, not proof it
+cannot happen with a real clock, where two deletes issued in the same request-handling millisecond are
+entirely possible.

@@ -9,7 +9,7 @@
  * how sign-in decides whether this is a returning account or a new one.
  */
 
-import { and, desc, eq, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import type { Database, Executor, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
@@ -43,10 +43,15 @@ export function getAccountByEmail(
   email: string,
   db: Executor
 ): Account | undefined {
+  // DATA-9 — a soft-deleted account is invisible to sign-in exactly the way
+  // a disabled one already refuses it, one step earlier: it cannot even be
+  // found by the address that used to reach it.
   return db
     .select()
     .from(accounts)
-    .where(eq(accounts.email, email.toLowerCase()))
+    .where(
+      and(eq(accounts.email, email.toLowerCase()), isNull(accounts.deletedAt))
+    )
     .get()
 }
 
@@ -71,7 +76,15 @@ export function getAccountById(
   accountId: string,
   db: Executor
 ): Account | undefined {
-  return db.select().from(accounts).where(eq(accounts.id, accountId)).get()
+  // DATA-9 — a soft-deleted account answers no question on any surface,
+  // including `GET /auth/me`'s own lookup through this function: it reads
+  // as though the account does not exist, the same refusal shape a foreign
+  // id already gets everywhere else in this package.
+  return db
+    .select()
+    .from(accounts)
+    .where(and(eq(accounts.id, accountId), isNull(accounts.deletedAt)))
+    .get()
 }
 
 /**
@@ -134,26 +147,31 @@ export function getAccountInOrganization(
   accountId: string,
   db: Database
 ): Account | undefined {
-  return db
-    .select({
-      id: accounts.id,
-      email: accounts.email,
-      displayName: accounts.displayName,
-      firstName: accounts.firstName,
-      lastName: accounts.lastName,
-      disabledAt: accounts.disabledAt,
-      createdAt: accounts.createdAt,
-    })
-    .from(accounts)
-    .innerJoin(
-      memberships,
-      and(
-        eq(memberships.accountId, accounts.id),
-        eq(memberships.organizationId, organizationId)
+  return (
+    db
+      .select({
+        id: accounts.id,
+        email: accounts.email,
+        displayName: accounts.displayName,
+        firstName: accounts.firstName,
+        lastName: accounts.lastName,
+        disabledAt: accounts.disabledAt,
+        deletedAt: accounts.deletedAt,
+        deletedByAccountId: accounts.deletedByAccountId,
+        createdAt: accounts.createdAt,
+      })
+      .from(accounts)
+      .innerJoin(
+        memberships,
+        and(
+          eq(memberships.accountId, accounts.id),
+          eq(memberships.organizationId, organizationId)
+        )
       )
-    )
-    .where(eq(accounts.id, accountId))
-    .get()
+      // DATA-9 — a soft-deleted account is invisible here too.
+      .where(and(eq(accounts.id, accountId), isNull(accounts.deletedAt)))
+      .get()
+  )
 }
 
 /**
@@ -222,9 +240,12 @@ export interface AccountWithOrganizationCount extends Account {
  * owner-email lookup.
  */
 export function listAccounts(db: Database): AccountWithOrganizationCount[] {
+  // DATA-9 — a soft-deleted account is gone from the console the same as
+  // everywhere else.
   const accountRows = db
     .select()
     .from(accounts)
+    .where(isNull(accounts.deletedAt))
     .orderBy(desc(accounts.createdAt))
     .all()
 
@@ -279,4 +300,60 @@ export function disableAccount(
     revokeAllSessionsForAccount(accountId, tx)
     return account
   })
+}
+
+/**
+ * DATA-7 — soft-delete an account: stamp `deletedAt`/`deletedByAccountId`
+ * rather than removing the row. An account has no child table in this
+ * package's own deletable set (`schema.ts`'s module comment on the six
+ * deletable kinds — none of `people`/`conversations`/`courses`/`projects`/
+ * `organizations` carries an `accountId` foreign key), so there is nothing
+ * for this to cascade to; it is a leaf in DATA-7's own cascade.
+ *
+ * Sessions are deliberately left alone here, unlike `disableAccount`'s own
+ * `revokeAllSessionsForAccount`: who may call this, and whether it also ends
+ * a live session, is the action layer's own policy decision (out of this
+ * slice's scope — see the brief), not something a repo function decides for
+ * every future caller.
+ *
+ * `undefined` when `accountId` does not exist, or is already deleted — a
+ * second delete is not a re-stamp, the same "idempotent, not incremental"
+ * refusal shape `archiveProject`'s own `archivedAt IS NULL` condition
+ * gives, one table over.
+ */
+export function softDeleteAccount(
+  accountId: string,
+  deletedByAccountId: string,
+  db: Database
+): Account | undefined {
+  return db
+    .update(accounts)
+    .set({ deletedAt: Date.now(), deletedByAccountId })
+    .where(and(eq(accounts.id, accountId), isNull(accounts.deletedAt)))
+    .returning()
+    .get()
+}
+
+/**
+ * DATA-7 — restore a soft-deleted account: clear both tombstone columns.
+ * `undefined` when `accountId` does not exist, or is not currently deleted —
+ * restoring an account that was never deleted is refused, not a silent
+ * no-op, the same "nothing to restore" refusal `softDeleteAccount` above
+ * gives its own mirror case.
+ *
+ * Reads with no `deletedAt` filter (the DATA-9 convention test's own named
+ * exception for a restore path) — a restore has to find exactly the
+ * tombstoned row it is meant to un-mark, which every other read in this
+ * file exists to hide.
+ */
+export function restoreAccount(
+  accountId: string,
+  db: Database
+): Account | undefined {
+  return db
+    .update(accounts)
+    .set({ deletedAt: null, deletedByAccountId: null })
+    .where(and(eq(accounts.id, accountId), isNotNull(accounts.deletedAt)))
+    .returning()
+    .get()
 }

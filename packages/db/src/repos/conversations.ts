@@ -8,7 +8,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, desc, eq, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { writeTransaction } from '../client.js'
@@ -89,6 +89,10 @@ function findConversation(
   scopeSurface: Surface | null,
   db: Executor
 ): Conversation | undefined {
+  // DATA-9 — a soft-deleted conversation is not the row this lookup finds.
+  // See this file's own module comment on `softDeleteConversationsForPerson`
+  // for the one collision this leaves open, deliberately not this slice's
+  // to close.
   return db
     .select()
     .from(conversations)
@@ -99,7 +103,8 @@ function findConversation(
         eq(conversations.personId, personId),
         scopeSurface === null
           ? isNull(conversations.surface)
-          : eq(conversations.surface, scopeSurface)
+          : eq(conversations.surface, scopeSurface),
+        isNull(conversations.deletedAt)
       )
     )
     .get()
@@ -127,13 +132,16 @@ function resolveConversationLookup(
   input: GetOrCreateConversationInput,
   db: Database
 ): ConversationLookup | undefined {
+  // DATA-9 — a soft-deleted course or person answers nothing, including
+  // "what conversation does this input resolve to".
   const course = db
     .select({ conversationScope: courses.conversationScope })
     .from(courses)
     .where(
       and(
         eq(courses.id, input.courseId),
-        eq(courses.organizationId, organizationId)
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
       )
     )
     .get()
@@ -145,7 +153,8 @@ function resolveConversationLookup(
     .where(
       and(
         eq(people.id, input.personId),
-        eq(people.organizationId, organizationId)
+        eq(people.organizationId, organizationId),
+        isNull(people.deletedAt)
       )
     )
     .get()
@@ -255,13 +264,16 @@ export function getConversation(
   conversationId: string,
   db: Database
 ): Conversation | undefined {
+  // DATA-9 — a soft-deleted conversation cannot be opened at its own
+  // address, including as `appendMessage`'s own existence check.
   return db
     .select()
     .from(conversations)
     .where(
       and(
         eq(conversations.id, conversationId),
-        eq(conversations.organizationId, organizationId)
+        eq(conversations.organizationId, organizationId),
+        isNull(conversations.deletedAt)
       )
     )
     .get()
@@ -302,13 +314,15 @@ export function listConversationsForCourse(
   courseId: string,
   db: Database
 ): Conversation[] {
+  // DATA-9 — a soft-deleted conversation never appears in a list.
   return db
     .select()
     .from(conversations)
     .where(
       and(
         eq(conversations.organizationId, organizationId),
-        eq(conversations.courseId, courseId)
+        eq(conversations.courseId, courseId),
+        isNull(conversations.deletedAt)
       )
     )
     .all()
@@ -494,15 +508,147 @@ export function getTranscript(
   conversationId: string,
   db: Database
 ): Message[] {
+  // DATA-9 — a message carries no tombstone of its own (`schema.ts`'s own
+  // comment on why: its visibility is entirely derived from the
+  // conversation it belongs to), so this joins through `conversations` and
+  // filters *there* — a soft-deleted conversation's transcript reads as
+  // empty, the same way a soft-deleted conversation itself cannot be opened
+  // at all.
   return db
-    .select()
+    .select({
+      id: messages.id,
+      organizationId: messages.organizationId,
+      conversationId: messages.conversationId,
+      personId: messages.personId,
+      courseId: messages.courseId,
+      direction: messages.direction,
+      content: messages.content,
+      surface: messages.surface,
+      channelRef: messages.channelRef,
+      categoryRef: messages.categoryRef,
+      sequence: messages.sequence,
+      createdAt: messages.createdAt,
+    })
     .from(messages)
+    .innerJoin(
+      conversations,
+      and(
+        eq(conversations.id, messages.conversationId),
+        eq(conversations.organizationId, organizationId)
+      )
+    )
     .where(
       and(
         eq(messages.conversationId, conversationId),
-        eq(messages.organizationId, organizationId)
+        eq(messages.organizationId, organizationId),
+        isNull(conversations.deletedAt)
       )
     )
     .orderBy(messages.sequence)
     .all()
+}
+
+/**
+ * DATA-7/WEB-73 — soft-delete one person's own conversation history in one
+ * course: every conversation for (`courseId`, `personId`) not already
+ * deleted, stamped with the *same* timestamp (there is ordinarily at most
+ * one — `course`-scoped courses keep a single row — but a `course_surface`-
+ * scoped course can hold several, one per surface, and WEB-73's own text is
+ * explicit that deleting a person's history in a course means all of it).
+ * `messages` carries no tombstone of its own (`schema.ts`'s own comment) —
+ * `getTranscript`'s own join through `conversations.deletedAt` is what hides
+ * them, so nothing here needs to touch `messages` at all.
+ *
+ * This is the leaf-level target DATA-7 itself names (alongside an account, a
+ * person, an organization, a project and a course) — not something another
+ * entity's delete cascades onto, so there is nothing above it in this
+ * package's own cascade for it to inherit a shared timestamp from.
+ *
+ * Returns every conversation this call actually marked — `[]` when
+ * `courseId`/`personId` does not exist or does not belong to
+ * `organizationId` (TEN-2/TEN-5), or when the person has no undeleted
+ * conversation in this course at all (WEB-73's own "a person who has asked
+ * nothing in the course is offered nothing to delete" — this repo function
+ * does not decide what the panel offers, but an empty result is the fact
+ * that decision reads).
+ *
+ * Known limitation, deliberately left for a later slice (see this package's
+ * own `docs/DECISIONS.md` D-137): `conversations`' own two partial unique
+ * indexes (`schema.ts`) are not conditioned on `deletedAt`, so
+ * `getOrCreateConversation` cannot open a *new* conversation for the same
+ * (course, person, surface) slot once this has run — the insert it would
+ * attempt collides with the now-deleted row still occupying that unique
+ * index. A person who deletes their own history and then asks the course
+ * another question is blocked at the database level rather than starting a
+ * fresh conversation, until a later slice changes those indexes (a second
+ * migration, out of this slice's "one generated migration" scope) or gives
+ * `getOrCreateConversation` a way to revive the same row instead.
+ */
+export function softDeleteConversationsForPerson(
+  organizationId: string,
+  courseId: string,
+  personId: string,
+  deletedByAccountId: string,
+  db: Database
+): Conversation[] {
+  return db
+    .update(conversations)
+    .set({ deletedAt: Date.now(), deletedByAccountId })
+    .where(
+      and(
+        eq(conversations.organizationId, organizationId),
+        eq(conversations.courseId, courseId),
+        eq(conversations.personId, personId),
+        isNull(conversations.deletedAt)
+      )
+    )
+    .returning()
+    .all()
+}
+
+/**
+ * DATA-7 — restore a person's own conversation history in a course: every
+ * conversation for (`courseId`, `personId`) currently deleted. Refuses
+ * (returns `[]`, touching nothing) when the course itself is currently
+ * soft-deleted — restoring a person's history underneath a course that is
+ * itself gone would leave the two disagreeing about whether either exists,
+ * the same hazard `organizations.ts#restoreOrganization`'s own "only
+ * children marked at the same moment" rule exists to avoid one level up.
+ * The course's own restore (`courses.ts#restoreCourse`) is what brings a
+ * deleted course's conversations back; this function is only ever the
+ * narrower, WEB-73-shaped restore of one person's own delete.
+ */
+export function restoreConversationsForPerson(
+  organizationId: string,
+  courseId: string,
+  personId: string,
+  db: Database
+): Conversation[] {
+  return writeTransaction(db, (tx) => {
+    const course = tx
+      .select({ deletedAt: courses.deletedAt })
+      .from(courses)
+      .where(
+        and(
+          eq(courses.id, courseId),
+          eq(courses.organizationId, organizationId)
+        )
+      )
+      .get()
+    if (!course || course.deletedAt !== null) return []
+
+    return tx
+      .update(conversations)
+      .set({ deletedAt: null, deletedByAccountId: null })
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          eq(conversations.courseId, courseId),
+          eq(conversations.personId, personId),
+          isNotNull(conversations.deletedAt)
+        )
+      )
+      .returning()
+      .all()
+  })
 }

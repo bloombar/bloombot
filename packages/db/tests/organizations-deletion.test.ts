@@ -9,16 +9,19 @@ import {
   courseApproval,
   courseAttachments,
   courses,
+  courseWebSources,
   deletions,
   discordServers,
   enrolments,
   jobs,
+  membershipInvitations,
   memberships,
   organizations,
   people,
   projects,
   rosterChannelAssignments,
   schema,
+  selfEnrolment,
   transcriptAccess,
   transcriptExports,
 } from '@bloombot/db'
@@ -175,6 +178,36 @@ function seedFullTenant(testDatabase: TestDatabase) {
   transcriptExports.createPendingExport(
     organizationId,
     { courseId: course.id, requestedByAccountId: instructor.id },
+    testDatabase.db
+  )
+
+  // DATA-7 rework, cheap-fix 5 — `organizations-cascade-schema.test.ts`
+  // only proves the delete statement for these three tables exists in
+  // `deleteOrganizationData`'s own source; seeding one row of each here is
+  // what actually runs it, so a foreign-key-ordering mistake in the
+  // generated cascade (the same class of bug ROST-17's own row above was
+  // added to this fixture to catch) would fail this file's own behavioural
+  // tests, not just the derived one.
+  selfEnrolment.recordSelfEnrolmentIntent(
+    organizationId,
+    { courseId: course.id, personId: survivor.id },
+    testDatabase.db
+  )
+
+  courseWebSources.addWebSource(
+    organizationId,
+    { courseId: course.id, domain: 'example.edu' },
+    testDatabase.db
+  )
+
+  membershipInvitations.createInvitation(
+    organizationId,
+    {
+      email: `invitee-${organizationId}@example.edu`,
+      role: 'instructor',
+      secretHash: `hash-${randomUUID()}`,
+      createdByAccountId: instructor.id,
+    },
     testDatabase.db
   )
 

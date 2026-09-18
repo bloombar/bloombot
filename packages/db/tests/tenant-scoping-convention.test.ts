@@ -178,6 +178,11 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    ROST-20/ADMIN-11, the same class `enrolments.ts#listEnrolmentsForPeople`
 //    already is — an account's own acknowledgements are not scoped to one
 //    organization until this call names them.
+//  - accounts.ts#softDeleteAccount/#restoreAccount: DATA-7, the same class
+//    `disableAccount` already is — `deleted_at`/`deleted_by_account_id`
+//    live on `accounts`, not `memberships`, so deleting (or restoring) an
+//    account is account-wide, not scoped to one organization, the identical
+//    reasoning `disableAccount`'s own comment gives for `disabled_at`.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': [
     'getAccountByEmail',
@@ -185,6 +190,8 @@ const ALLOWLIST: Record<string, string[]> = {
     'disableAccount',
     'setAccountNames',
     'listAccounts',
+    'softDeleteAccount',
+    'restoreAccount',
   ],
   'cost-ledger.ts': [
     'listOrganizationTotals',

@@ -1160,6 +1160,45 @@ describe('answerQuestion: a courseId or personId that does not resolve is caller
     expect(model.calls).toHaveLength(0)
   })
 
+  it('DATA-9: throws for a soft-deleted course, the same as one that never existed — a marked course answers no question', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    const deleter = accounts.createAccount(
+      organizationId,
+      {
+        email: `deleter-${randomUUID()}@example.edu`,
+        displayName: 'Deleter',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    // DATA-7's own tombstone — `courses.getCourse` (the first thing
+    // `answerQuestion` calls) now excludes this row exactly the way it
+    // excludes a foreign or missing course id, so this course "does not
+    // exist" from here on the same way `no-such-course` above does not.
+    courses.softDeleteCourse(organizationId, courseId, deleter.id, testDb.db)
+
+    await expect(
+      answerQuestion(
+        {
+          organizationId,
+          courseId,
+          personId,
+          surface: 'discord',
+          text: 'q',
+          day: '2026-01-01',
+        },
+        { db: testDb.db, model, logger }
+      )
+    ).rejects.toThrow(/course/)
+    expect(model.calls).toHaveLength(0)
+  })
+
   it('throws when personId does not exist in the organization', async () => {
     testDb = createTestDatabase()
     const { organizationId, courseId } = seedCourseAndPerson(testDb.db)

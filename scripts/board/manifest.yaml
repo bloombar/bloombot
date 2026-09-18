@@ -4737,7 +4737,7 @@
   section: §46 Landing Somewhere Usable
   family: WEB
   phase: 41
-  status: In review
+  status: Done
   review: false
 - id: ADMIN-15
   title: The console's screens do not repeat their own navigation
@@ -4749,7 +4749,7 @@
   section: §47 One Place for an Organization's Settings
   family: ADMIN
   phase: 42
-  status: Backlog
+  status: Done
   review: false
 - id: WEB-69
   title: An organization's settings are one tabbed screen, not four drawer entries
@@ -4780,7 +4780,7 @@
   section: §47 One Place for an Organization's Settings
   family: WEB
   phase: 42
-  status: Backlog
+  status: Done
   review: false
 - id: WEB-71
   title: A row's controls stay on the row
@@ -4795,7 +4795,7 @@
   section: §47 One Place for an Organization's Settings
   family: WEB
   phase: 42
-  status: Backlog
+  status: Done
   review: false
 - id: ROST-19
   title: Importing a roster is acknowledged before it can happen

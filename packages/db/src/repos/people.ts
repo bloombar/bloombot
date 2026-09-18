@@ -139,11 +139,16 @@ export function getPerson(
   personId: string,
   db: Executor
 ): Person | undefined {
+  // DATA-9 — a soft-deleted person cannot be opened at their own address.
   return db
     .select()
     .from(people)
     .where(
-      and(eq(people.id, personId), eq(people.organizationId, organizationId))
+      and(
+        eq(people.id, personId),
+        eq(people.organizationId, organizationId),
+        isNull(people.deletedAt)
+      )
     )
     .get()
 }
@@ -173,13 +178,15 @@ export function findPeopleByEmail(
   email: string,
   db: Executor
 ): Person[] {
+  // DATA-9 — a soft-deleted person is not a candidate match here either.
   return db
     .select()
     .from(people)
     .where(
       and(
         eq(people.organizationId, organizationId),
-        sql`lower(${people.email}) = ${email.toLowerCase()}`
+        sql`lower(${people.email}) = ${email.toLowerCase()}`,
+        isNull(people.deletedAt)
       )
     )
     .all()
@@ -187,10 +194,13 @@ export function findPeopleByEmail(
 
 /** Every person in an organization. */
 export function listPeople(organizationId: string, db: Database): Person[] {
+  // DATA-9 — a soft-deleted person never appears in a list.
   return db
     .select()
     .from(people)
-    .where(eq(people.organizationId, organizationId))
+    .where(
+      and(eq(people.organizationId, organizationId), isNull(people.deletedAt))
+    )
     .all()
 }
 
@@ -279,6 +289,8 @@ export function resolveIdentity(
       connectedAt: people.connectedAt,
       mergedIntoPersonId: people.mergedIntoPersonId,
       mergedAt: people.mergedAt,
+      deletedAt: people.deletedAt,
+      deletedByAccountId: people.deletedByAccountId,
       createdAt: people.createdAt,
     })
     .from(people)
@@ -293,7 +305,10 @@ export function resolveIdentity(
       and(
         eq(people.organizationId, organizationId),
         eq(personIdentities.surface, identity.surface),
-        eq(personIdentities.externalId, identity.externalId)
+        eq(personIdentities.externalId, identity.externalId),
+        // DATA-9 — a soft-deleted person cannot be resolved by identity
+        // either.
+        isNull(people.deletedAt)
       )
     )
     .get()
@@ -350,7 +365,10 @@ export function listConnectedOrganizationsForAccount(
       and(
         eq(personIdentities.surface, 'web'),
         eq(personIdentities.externalId, accountId),
-        isNotNull(people.connectedAt)
+        isNotNull(people.connectedAt),
+        // DATA-9 — a soft-deleted person's own connected organization is
+        // not offered here.
+        isNull(people.deletedAt)
       )
     )
     .all()
@@ -395,7 +413,11 @@ export function listConnectedOrganizationsWithNamesForAccount(
       and(
         eq(personIdentities.surface, 'web'),
         eq(personIdentities.externalId, accountId),
-        isNotNull(people.connectedAt)
+        isNotNull(people.connectedAt),
+        // DATA-9 — neither a soft-deleted person nor a soft-deleted
+        // organization is offered here.
+        isNull(people.deletedAt),
+        isNull(organizations.deletedAt)
       )
     )
     .all()
@@ -442,10 +464,13 @@ export function listPeopleForAccount(
   if (connections.length === 0) return []
 
   const personIds = connections.map((connection) => connection.personId)
+  // DATA-9 — belt-and-braces alongside `connections`' own already-filtered
+  // `personIds` above: a soft-deleted person is excluded here too, not only
+  // trusted to have been excluded upstream.
   const personRows = db
     .select()
     .from(people)
-    .where(inArray(people.id, personIds))
+    .where(and(inArray(people.id, personIds), isNull(people.deletedAt)))
     .all()
   const personById = new Map(personRows.map((row) => [row.id, row]))
 
@@ -1390,4 +1415,109 @@ export function hasVerifiedAddress(
 ): boolean | undefined {
   if (!getPerson(organizationId, personId, db)) return undefined
   return getPersonIdentity(organizationId, personId, 'web', db) !== undefined
+}
+
+/**
+ * DATA-7 — soft-delete a person: stamp `deletedAt`/`deletedByAccountId` on
+ * the person itself and, with the *same* timestamp, on every conversation
+ * they own (`schema.ts`'s own `conversations.personId`) — the same
+ * "same timestamp is what a restore reads" cascade
+ * `organizations.ts#softDeleteOrganization`/`courses.ts#softDeleteCourse`
+ * already hold themselves to, for a person's conversations rather than a
+ * course's.
+ *
+ * Distinct from `mergePeople`, above — a merge moves a losing person's rows
+ * onto a survivor; this marks one person's own rows, and touches no other
+ * person's.
+ *
+ * `undefined` when `personId` does not exist, or does not belong to
+ * `organizationId` (TEN-2), or is already deleted.
+ */
+export function softDeletePerson(
+  organizationId: string,
+  personId: string,
+  deletedByAccountId: string,
+  db: Database
+): Person | undefined {
+  return writeTransaction(db, (tx) => {
+    const now = Date.now()
+    const person = tx
+      .update(people)
+      .set({ deletedAt: now, deletedByAccountId })
+      .where(
+        and(
+          eq(people.id, personId),
+          eq(people.organizationId, organizationId),
+          isNull(people.deletedAt)
+        )
+      )
+      .returning()
+      .get()
+    if (!person) return undefined
+
+    tx.update(conversations)
+      .set({ deletedAt: now, deletedByAccountId })
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          eq(conversations.personId, personId),
+          isNull(conversations.deletedAt)
+        )
+      )
+      .run()
+
+    return person
+  })
+}
+
+/**
+ * DATA-7 — restore a soft-deleted person: read their own `deletedAt` first
+ * (unfiltered — the DATA-9 convention test's own named "a restore"
+ * exception, the same reason `organizations.ts#restoreOrganization` needs
+ * it), then un-mark every conversation that carries that *same*
+ * timestamp — never one deleted independently.
+ *
+ * `undefined` when `personId` does not exist, or does not belong to
+ * `organizationId` (TEN-2), or is not currently deleted.
+ */
+export function restorePerson(
+  organizationId: string,
+  personId: string,
+  db: Database
+): Person | undefined {
+  return writeTransaction(db, (tx) => {
+    const existing = tx
+      .select()
+      .from(people)
+      .where(
+        and(eq(people.id, personId), eq(people.organizationId, organizationId))
+      )
+      .get()
+    if (!existing || existing.deletedAt === null) return undefined
+    const deletedAt = existing.deletedAt
+
+    tx.update(conversations)
+      .set({ deletedAt: null, deletedByAccountId: null })
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          eq(conversations.personId, personId),
+          eq(conversations.deletedAt, deletedAt)
+        )
+      )
+      .run()
+
+    return tx
+      .update(people)
+      .set({ deletedAt: null, deletedByAccountId: null })
+      .where(
+        and(
+          eq(people.id, personId),
+          eq(people.organizationId, organizationId),
+          eq(people.deletedAt, deletedAt)
+        )
+      )
+      .returning()
+      .get()
+  })
 }

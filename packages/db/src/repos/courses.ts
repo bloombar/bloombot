@@ -37,6 +37,7 @@ import {
   type CourseServerResolutionRefusal,
 } from './discord-servers.js'
 import {
+  conversations,
   courseCategories,
   courseChannels,
   courses,
@@ -344,7 +345,10 @@ function findCourseNameConflict(
               isNull(projects.archivedAt),
               eq(courses.projectId, includeProjectId)
             )
-          : isNull(projects.archivedAt)
+          : isNull(projects.archivedAt),
+        // DATA-9 — a soft-deleted course names nothing to collide with
+        // either.
+        isNull(courses.deletedAt)
       )
     )
     .all()
@@ -598,13 +602,15 @@ function loadOwnedProject(
 ):
   | { ok: true; project: ProjectRow }
   | { ok: false; conflict: CourseNameConflict } {
+  // DATA-9 — a soft-deleted project cannot own a new course either.
   const project = db
     .select()
     .from(projects)
     .where(
       and(
         eq(projects.id, projectId),
-        eq(projects.organizationId, organizationId)
+        eq(projects.organizationId, organizationId),
+        isNull(projects.deletedAt)
       )
     )
     .get()
@@ -810,11 +816,16 @@ export function getCourse(
   courseId: string,
   db: Executor
 ): CourseWithCategories | undefined {
+  // DATA-9 — a soft-deleted course cannot be opened at its own address.
   const courseRow = db
     .select()
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!courseRow) return undefined
@@ -876,7 +887,11 @@ export function listCourses(
   db: Executor,
   options?: { projectId?: string }
 ): Course[] {
-  const conditions = [eq(courses.organizationId, organizationId)]
+  // DATA-9 — a soft-deleted course never appears in a list.
+  const conditions = [
+    eq(courses.organizationId, organizationId),
+    isNull(courses.deletedAt),
+  ]
   if (options?.projectId) {
     conditions.push(eq(courses.projectId, options.projectId))
   }
@@ -992,7 +1007,14 @@ export function listRoutableCourses(
     .where(
       and(
         eq(courses.organizationId, organizationId),
-        isNull(projects.archivedAt)
+        isNull(projects.archivedAt),
+        // DATA-9 — a soft-deleted course, or one whose project is
+        // soft-deleted, routes and therefore answers nothing. Both are
+        // already kept in lockstep by `softDeleteProject`'s own cascade
+        // (below), but this checks the project's own column too rather than
+        // relying on that invariant alone.
+        isNull(courses.deletedAt),
+        isNull(projects.deletedAt)
       )
     )
     .all()
@@ -1045,11 +1067,16 @@ export function updateCourse(
   input: NewCourse,
   db: Database
 ): SaveCourseResult | undefined {
+  // DATA-9 — a soft-deleted course cannot be updated.
   const existing = db
     .select()
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!existing) return undefined
@@ -1216,11 +1243,16 @@ export function updateCourseSettings(
   input: CourseSettingsUpdate,
   db: Database
 ): SaveCourseResult | undefined {
+  // DATA-9 — a soft-deleted course cannot have its settings updated.
   const existing = db
     .select()
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!existing) return undefined
@@ -1393,13 +1425,16 @@ export function getCourseCategory(
     .get()
   if (!categoryRow) return undefined
 
+  // DATA-9 — a category whose own course is soft-deleted resolves to
+  // nothing either.
   const course = db
     .select()
     .from(courses)
     .where(
       and(
         eq(courses.id, categoryRow.courseId),
-        eq(courses.organizationId, organizationId)
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
       )
     )
     .get()
@@ -1466,13 +1501,16 @@ export function getCourseChannel(
     .get()
   if (!category) return undefined
 
+  // DATA-9 — a channel whose own course is soft-deleted resolves to nothing
+  // either.
   const course = db
     .select()
     .from(courses)
     .where(
       and(
         eq(courses.id, category.courseId),
-        eq(courses.organizationId, organizationId)
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
       )
     )
     .get()
@@ -1569,11 +1607,16 @@ export function addCourseCategory(
   name: string,
   db: Database
 ): CourseCategoryResult | undefined {
+  // DATA-9 — a soft-deleted course gains no new category.
   const course = db
     .select()
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!course) return undefined
@@ -1912,11 +1955,16 @@ export function enableCourse(
   courseId: string,
   db: Database
 ): EnableCourseResult | undefined {
+  // DATA-9 — a soft-deleted course cannot be enabled.
   const existing = db
     .select()
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!existing) return undefined
@@ -1926,13 +1974,21 @@ export function enableCourse(
     // `existing.projectId` was validated against `organizationId` when it
     // was last saved (`loadOwnedProject`, above) — projects are never
     // reassigned outside a save, so it does not need re-checking here.
+    // DATA-9 — a soft-deleted project's own row is read the same as a
+    // missing one here (belt-and-braces: `softDeleteProject`'s own cascade
+    // already soft-deletes every course under it, so `existing` above would
+    // ordinarily already have been excluded — this does not rely on that
+    // invariant alone).
     const project = tx
-      .select({ archivedAt: projects.archivedAt })
+      .select({
+        archivedAt: projects.archivedAt,
+        deletedAt: projects.deletedAt,
+      })
       .from(projects)
       .where(eq(projects.id, existing.projectId))
       .get()
 
-    if (project && project.archivedAt === null) {
+    if (project && project.deletedAt === null && project.archivedAt === null) {
       // TEN-9 — the same "may not enable while undecidable" guard
       // `createCourse`/`updateCourse` apply at save time, re-run here for
       // the same reason the PROJ-3 check just below is re-run: a course
@@ -2082,11 +2138,17 @@ export function setCourseVectorStoreIdIfUnset(
   // that already had a `vectorStoreId` (hand-typed or set by an earlier
   // attachment) is returned unchanged, not as `undefined`, since the id this
   // caller wanted is already the one in place.
+  // DATA-9 — the same read-back cannot answer for a soft-deleted course
+  // either.
   return db
     .select()
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
 }
@@ -2124,7 +2186,10 @@ export function findProjectUnarchiveConflict(
       and(
         eq(courses.organizationId, organizationId),
         eq(courses.projectId, projectId),
-        eq(courses.enabled, true)
+        eq(courses.enabled, true),
+        // DATA-9 — a soft-deleted course is not a candidate for this check
+        // either.
+        isNull(courses.deletedAt)
       )
     )
     .all()
@@ -2163,4 +2228,112 @@ export function findProjectUnarchiveConflict(
   }
 
   return undefined
+}
+
+/**
+ * DATA-7 — soft-delete a course: stamp `deletedAt`/`deletedByAccountId` on
+ * the course itself and, with the *same* timestamp, on every conversation
+ * it owns (`schema.ts`'s own `conversations.courseId`) — the same
+ * "same timestamp is what a restore reads" cascade
+ * `organizations.ts#softDeleteOrganization`/`projects.ts#softDeleteProject`
+ * already hold themselves to, one level down each.
+ *
+ * Distinct from `deletions.ts#deleteCourse`, which still physically removes
+ * the row outright — this function marks, that one removes; this slice does
+ * not connect the two.
+ *
+ * `undefined` when `courseId` does not exist, or does not belong to
+ * `organizationId` (TEN-2), or is already deleted.
+ */
+export function softDeleteCourse(
+  organizationId: string,
+  courseId: string,
+  deletedByAccountId: string,
+  db: Database
+): Course | undefined {
+  return writeTransaction(db, (tx) => {
+    const now = Date.now()
+    const course = tx
+      .update(courses)
+      .set({ deletedAt: now, deletedByAccountId })
+      .where(
+        and(
+          eq(courses.id, courseId),
+          eq(courses.organizationId, organizationId),
+          isNull(courses.deletedAt)
+        )
+      )
+      .returning()
+      .get()
+    if (!course) return undefined
+
+    tx.update(conversations)
+      .set({ deletedAt: now, deletedByAccountId })
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          eq(conversations.courseId, courseId),
+          isNull(conversations.deletedAt)
+        )
+      )
+      .run()
+
+    return course
+  })
+}
+
+/**
+ * DATA-7 — restore a soft-deleted course: read its own `deletedAt` first
+ * (unfiltered — the DATA-9 convention test's own named "a restore"
+ * exception, the same reason `organizations.ts#restoreOrganization` needs
+ * it), then un-mark every conversation that carries that *same* timestamp —
+ * never one deleted independently (WEB-73's own per-person history delete,
+ * say), before or after this course's own delete.
+ *
+ * `undefined` when `courseId` does not exist, or does not belong to
+ * `organizationId` (TEN-2), or is not currently deleted.
+ */
+export function restoreCourse(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): Course | undefined {
+  return writeTransaction(db, (tx) => {
+    const existing = tx
+      .select()
+      .from(courses)
+      .where(
+        and(
+          eq(courses.id, courseId),
+          eq(courses.organizationId, organizationId)
+        )
+      )
+      .get()
+    if (!existing || existing.deletedAt === null) return undefined
+    const deletedAt = existing.deletedAt
+
+    tx.update(conversations)
+      .set({ deletedAt: null, deletedByAccountId: null })
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          eq(conversations.courseId, courseId),
+          eq(conversations.deletedAt, deletedAt)
+        )
+      )
+      .run()
+
+    return tx
+      .update(courses)
+      .set({ deletedAt: null, deletedByAccountId: null })
+      .where(
+        and(
+          eq(courses.id, courseId),
+          eq(courses.organizationId, organizationId),
+          eq(courses.deletedAt, deletedAt)
+        )
+      )
+      .returning()
+      .get()
+  })
 }

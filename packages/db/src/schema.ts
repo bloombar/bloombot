@@ -46,6 +46,24 @@ export const organizations = sqliteTable('organizations', {
   // own "money as INTEGER micros" rule): comparing a float cap against a
   // float running total is exactly how a ledger stops adding up.
   spendingCapMicros: integer('spending_cap_micros'),
+  // DATA-7 — the tombstone: a soft delete marks a record rather than
+  // removing it, reversible for `DELETED_DATA_RETENTION_DAYS` (DATA-8's
+  // sweep, a later slice, is what actually removes it once that window
+  // passes). `deletedAt` null means "not deleted" everywhere this package
+  // reads it (DATA-9); both columns are set together, by
+  // `repos/organizations.ts#softDeleteOrganization`, and both cleared
+  // together by its own `restoreOrganization`. Not to be confused with
+  // ADMIN-5's `deleteOrganizationData`, which still physically removes a
+  // tenant's rows outright — that operation is unrelated to this tombstone
+  // and this slice does not change it.
+  deletedAt: integer('deleted_at'),
+  // `accounts` is declared further down this file — the explicit
+  // `AnySQLiteColumn` return type is what lets Drizzle reference it before
+  // its own declaration, the same forward-reference shape `people.ts`'s own
+  // `mergedIntoPersonId` (below) already uses for its self-reference.
+  deletedByAccountId: text('deleted_by_account_id').references(
+    (): AnySQLiteColumn => accounts.id
+  ),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -68,7 +86,18 @@ export const accounts = sqliteTable('accounts', {
   firstName: text('first_name'),
   lastName: text('last_name'),
   // Set to disable sign-in without deleting the account or anything it owns.
+  // Not a tombstone (DATA-7's own text is explicit about this): a disabled
+  // account still exists, still shows up to a platform administrator, and
+  // is not what this slice's `deletedAt` means.
   disabledAt: integer('disabled_at'),
+  // DATA-7 — the tombstone, the same pair `organizations` above carries and
+  // for the same reason (see that column's own comment). Self-referencing:
+  // an account can be deleted by another account (a platform administrator
+  // deleting somebody else's), so this is not the row's own id.
+  deletedAt: integer('deleted_at'),
+  deletedByAccountId: text('deleted_by_account_id').references(
+    (): AnySQLiteColumn => accounts.id
+  ),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -189,6 +218,14 @@ export const projects = sqliteTable(
       .references(() => organizations.id),
     name: text('name').notNull(),
     archivedAt: integer('archived_at'),
+    // DATA-7 — the tombstone, unrelated to `archivedAt` above (that column's
+    // own comment, and `schema.ts`'s own module note at the top of this
+    // file, are both explicit that the two never merge). Same pair every
+    // other deletable table in this file carries.
+    deletedAt: integer('deleted_at'),
+    deletedByAccountId: text('deleted_by_account_id').references(
+      () => accounts.id
+    ),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
@@ -330,6 +367,15 @@ export const courses = sqliteTable(
       () => accounts.id
     ),
     aiApprovalDecidedAt: integer('ai_approval_decided_at'),
+    // DATA-7 — the tombstone. A soft-deleted course answers nothing
+    // (DATA-9's own "a record marked deleted answers no question on any
+    // surface") — `@bloombot/core`'s own approval check refuses it the same
+    // way it refuses an unapproved course; see that package's own
+    // `answer.ts`.
+    deletedAt: integer('deleted_at'),
+    deletedByAccountId: text('deleted_by_account_id').references(
+      () => accounts.id
+    ),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
@@ -423,6 +469,15 @@ export const people = sqliteTable('people', {
     (): AnySQLiteColumn => people.id
   ),
   mergedAt: integer('merged_at'),
+  // DATA-7 — the tombstone, unrelated to `mergedAt` above: a merged-away
+  // person is never a deletion (that column's own comment — "never
+  // deleted"), and a *deleted* person here is a distinct, later act a
+  // platform administrator takes, never something a merge triggers on its
+  // own.
+  deletedAt: integer('deleted_at'),
+  deletedByAccountId: text('deleted_by_account_id').references(
+    () => accounts.id
+  ),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -495,6 +550,18 @@ export const conversations = sqliteTable(
       .references(() => people.id),
     surface: text('surface', { enum: SURFACES }),
     upstreamThreadId: text('upstream_thread_id'),
+    // DATA-7 — the tombstone: WEB-73's "a person deletes their own
+    // conversation history in a course" is this column, set on every
+    // conversation row for that (course, person) pair. `messages` carries
+    // no tombstone of its own (`schema.ts`'s own module comment on why —
+    // CONV-2's "no delete path for a message" still holds; a message's own
+    // visibility is entirely derived from the conversation it belongs to,
+    // DATA-9's read filter joins through this column rather than
+    // duplicating it onto every message row).
+    deletedAt: integer('deleted_at'),
+    deletedByAccountId: text('deleted_by_account_id').references(
+      () => accounts.id
+    ),
     createdAt: integer('created_at').notNull(),
     lastMessageAt: integer('last_message_at').notNull(),
   },

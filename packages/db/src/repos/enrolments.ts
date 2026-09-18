@@ -225,6 +225,8 @@ export function listPeopleForCourse(
   courseId: string,
   db: Database
 ): Person[] {
+  // DATA-9 — a soft-deleted person is not offered as one of the course's
+  // people either.
   return db
     .select({
       id: people.id,
@@ -237,6 +239,8 @@ export function listPeopleForCourse(
       connectedAt: people.connectedAt,
       mergedIntoPersonId: people.mergedIntoPersonId,
       mergedAt: people.mergedAt,
+      deletedAt: people.deletedAt,
+      deletedByAccountId: people.deletedByAccountId,
       createdAt: people.createdAt,
     })
     .from(enrolments)
@@ -251,7 +255,8 @@ export function listPeopleForCourse(
       and(
         eq(enrolments.organizationId, organizationId),
         eq(enrolments.courseId, courseId),
-        isNull(enrolments.endedAt)
+        isNull(enrolments.endedAt),
+        isNull(people.deletedAt)
       )
     )
     .all()
@@ -466,7 +471,15 @@ export function listEnrolmentsForPeople(
       eq(organizationsTable.id, enrolments.organizationId)
     )
     .where(
-      and(inArray(enrolments.personId, personIds), isNull(enrolments.endedAt))
+      and(
+        inArray(enrolments.personId, personIds),
+        isNull(enrolments.endedAt),
+        // DATA-9 — a soft-deleted course, project or organization is not
+        // offered here either.
+        isNull(coursesTable.deletedAt),
+        isNull(projectsTable.deletedAt),
+        isNull(organizationsTable.deletedAt)
+      )
     )
     .all()
 }

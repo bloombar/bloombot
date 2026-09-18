@@ -13713,3 +13713,92 @@ itself to for the same reason, one level up for the tenant-wide cascade. An ackn
 discipline (no update, no delete function in `repos/roster-import-acknowledgements.ts`) is unchanged — it
 still records exactly what happened and is never revised — but it does not survive the course or tenant it
 is about being deleted, any more than an approval event does.
+
+## D-137 — `packages/db`: DATA-7/DATA-9/TEN-10 — soft deletion's cascade, its read filter, and the tenant cascade derived from the schema
+
+**The cascade is a flat, per-table write, not a walk through the entity tree.** DATA-7's own text says
+"deleting a parent marks its children with the same timestamp" — `organizations.ts#softDeleteOrganization`
+could have walked `organizations → projects → courses → conversations`, cascading one hop at a time the way
+`repos/deletions.ts#emptyCourse`'s own physical delete does. It does not: every one of `projects`/`courses`/
+`people`/`conversations` already carries `organizationId` directly (`schema.ts`), so soft-deleting an
+organization is four independent `UPDATE ... WHERE organizationId = X AND deletedAt IS NULL` statements, not
+a tree walk. `projects.ts#softDeleteProject` and `courses.ts#softDeleteCourse` are narrower versions of the
+same shape, one level down each. Every cascade write filters on `deletedAt IS NULL` for its _own_ table,
+which is what makes DATA-7's "something deleted earlier, on purpose, stays deleted" true without a tree walk
+having to check it explicitly: a row already marked keeps its own, earlier timestamp, because the `UPDATE`
+that would otherwise re-stamp it never matches it.
+
+**Restore reads the parent's own `deletedAt` unfiltered, then narrows every child `UPDATE` to that exact
+value.** `organizations.ts#restoreOrganization`/`projects.ts#restoreProject`/`courses.ts#restoreCourse`/
+`people.ts#restorePerson` all do the same three-step shape: read the parent row by id (no `deletedAt` filter
+— this is the one place in each of these files that legitimately needs to see a tombstoned row), refuse if it
+is not currently deleted, then `UPDATE` every child table `WHERE <scope> AND deletedAt = <the parent's own
+value>`. This is what the DATA-9 convention test's own allowlist means by "a restore" — the four functions
+named in it are exactly these, and no other function in the package reads a deletable table unfiltered for
+this reason.
+
+**A person's own conversation history in a course (WEB-73's own target) is a leaf, not a cascade.**
+`conversations.ts#softDeleteConversationsForPerson`/`#restoreConversationsForPerson` mark or un-mark every
+conversation for one `(courseId, personId)` pair directly — there is nothing above it in this package's own
+cascade for it to inherit a timestamp from, since it is itself one of DATA-7's six named deletable kinds, not
+a table another entity's delete cascades onto. `messages` carries no tombstone of its own (`schema.ts`'s own
+comment): CONV-2's "no delete path for a message" is unchanged, and `conversations.ts#getTranscript`/
+`transcript-access.ts#readCourseTranscript` both hide a soft-deleted conversation's messages by joining
+through `conversations.deletedAt` rather than the table gaining a column that would let it diverge from its
+own conversation's tombstone.
+
+**Known limitation, left for a later slice: `conversations`' own two partial unique indexes are not
+conditioned on `deletedAt`.** After `softDeleteConversationsForPerson` marks the one live conversation for a
+(course, person, surface) slot, `getOrCreateConversation` can no longer open a _new_ one for that same slot —
+its own `INSERT` collides with the SQL unique index the now-deleted row still occupies, since neither
+`conversations_org_course_person_unscoped_unique` nor `..._surface_unique` (`schema.ts`) excludes a
+soft-deleted row. A person who deletes their own history and then asks the course another question is
+therefore blocked at the database level rather than starting a fresh conversation, until a later slice widens
+those two indexes to `WHERE deletedAt IS NULL` (a second migration, out of this slice's own "one generated
+migration" scope) or gives `getOrCreateConversation` a way to revive the same row. Left this way deliberately
+rather than worked around here: closing it correctly needs the WEB-73 UI slice's own call to decide what
+"ask again after deleting your history" should even mean product-side, not a data-layer guess.
+
+**ADMIN-5/PROJ-8/PROJ-9's own hard, permanent deletes (`organizations.ts#deleteOrganizationData`,
+`deletions.ts#deleteCourse`/`#deleteProject`, and their own preview reads) are deliberately left counting and
+removing every row regardless of `deletedAt`.** A permanent, irreversible wipe has to remove a soft-deleted
+course too, not leave it behind because a read filter designed to hide it from the *product* also hid it from
+the operation that is supposed to erase it outright. This is why these six functions are named in the DATA-9
+convention test's own allowlist rather than filtered like every ordinary read — and why this slice does not
+connect soft deletion to either operation at all: DATA-8's later sweep is what is expected to eventually call
+something shaped like `deleteOrganizationData`/`deleteCourse` for what has passed its retention window, not
+this slice.
+
+**An account's own historical record (`cost-ledger.ts#getAccountUsageSummary`,
+`roster-import-acknowledgements.ts#listAcknowledgementsForAccount`) still names a course after that course is
+soft-deleted.** Both already survive a course's _permanent_ deletion this way — `cost_ledger_entries.courseId`
+is nulled, not deleted, on a hard delete (PROJ-8's own carve-out), and `roster_import_acknowledgements` is
+deleted only when the course itself is (ROST-20 rework, D-136, just above) — so hiding either read behind the
+course's own soft-delete tombstone would make an account's own record of its own past spend or its own past
+acknowledgement incomplete for a reason that has nothing to do with the account. Both are named in the
+DATA-9 convention test's own allowlist for this reason.
+
+**`people.ts#mergePeople` is exempted from the DATA-9 convention test as a data-combination operation, not a
+read.** It already moves a losing person's conversations onto a survivor (or combines the two transcripts)
+without inspecting most of their other columns either — a `deletedAt` a moved conversation carries travels
+with it unexamined, the same way `upstreamThreadId` or `lastMessageAt` already does. Deciding what a merge
+_should_ do when one side's history was soft-deleted (keep it hidden? un-hide it because the survivor's own
+identity now owns it?) is a real product question this slice does not have enough context to answer well, and
+the existing behaviour (leave `deletedAt` exactly as it was on whatever moves) is at least not destructive —
+revisit if LINK-4/DATA-7 ever need to interact more deliberately than "neither one currently reads the
+other's tombstone."
+
+**`courseSelfEnrolmentIntents`/`courseWebSources`/`membershipInvitations` added to
+`deleteOrganizationData`'s cascade (TEN-10), and a schema-derived test added so a fourth table cannot drift in
+silently.** All three carry a real foreign key to `organizations.id` (`schema.ts`) and were missing from the
+hand-written list `deleteOrganizationData` walks — the third time this exact class of bug has been found
+(`roster_channel_assignments` and `content_deletions` were each patched in after a real production `FOREIGN
+KEY constraint failed`, this file's own comments on both). `tests/organizations-cascade-schema.test.ts`
+derives the expected table list from `schema.ts` itself (every `.references(() => organizations.id)`,
+matched against whichever `sqliteTable(...)` declaration precedes it) and asserts `deleteOrganizationData`
+calls `tx.delete(...)` for each one — a table added later with a foreign key to `organizations.id`, and not
+added to the cascade, now fails this test rather than a real deletion a fourth time. The cascade itself is
+still a hand-ordered list, not derived or auto-ordered: the brief's own "correctness and FK-safe ordering come
+first" — deriving _removal order_ from the schema's own FK graph (a topological sort) would be a genuine
+improvement but is a larger, separate change than this slice's finding warranted; the test closes the actual
+gap (a table silently missing) without also taking on that risk.

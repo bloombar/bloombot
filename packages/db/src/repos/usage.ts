@@ -14,7 +14,7 @@
  * boundary to behave correctly.
  */
 
-import { and, eq, gte, isNotNull, sql } from 'drizzle-orm'
+import { and, eq, gte, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { courses, people, usageCounters } from '../schema.js'
@@ -63,11 +63,16 @@ export function incrementUsage(
 ): UsageCounter | undefined {
   assertValidDay(day)
 
+  // DATA-9 — a soft-deleted course or person accrues no usage either.
   const course = db
     .select({ id: courses.id })
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!course) return undefined
@@ -76,7 +81,11 @@ export function incrementUsage(
     .select({ id: people.id })
     .from(people)
     .where(
-      and(eq(people.id, personId), eq(people.organizationId, organizationId))
+      and(
+        eq(people.id, personId),
+        eq(people.organizationId, organizationId),
+        isNull(people.deletedAt)
+      )
     )
     .get()
   if (!person) return undefined
@@ -156,11 +165,16 @@ export function reserveUsageSlot(
 ): UsageReservation | undefined {
   assertValidDay(day)
 
+  // DATA-9 — a soft-deleted course or person accrues no reservation either.
   const course = db
     .select({ id: courses.id })
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!course) return undefined
@@ -169,7 +183,11 @@ export function reserveUsageSlot(
     .select({ id: people.id })
     .from(people)
     .where(
-      and(eq(people.id, personId), eq(people.organizationId, organizationId))
+      and(
+        eq(people.id, personId),
+        eq(people.organizationId, organizationId),
+        isNull(people.deletedAt)
+      )
     )
     .get()
   if (!person) return undefined
@@ -267,11 +285,17 @@ export function hasExhaustedDailyLimit(
   day: string,
   db: Database
 ): boolean | undefined {
+  // DATA-9 — a soft-deleted course "cannot tell you" the same as one that
+  // does not exist.
   const course = db
     .select({ maxRequestsPerDay: courses.maxRequestsPerDay })
     .from(courses)
     .where(
-      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.deletedAt)
+      )
     )
     .get()
   if (!course) return undefined
@@ -333,6 +357,10 @@ export function listUsageNearLimit(
         eq(usageCounters.organizationId, organizationId),
         eq(usageCounters.day, day),
         isNotNull(courses.maxRequestsPerDay),
+        // DATA-9 — a soft-deleted course or person is not reported as
+        // "near the limit" either.
+        isNull(courses.deletedAt),
+        isNull(people.deletedAt),
         // `maxRequestsPerDay` is proven non-null by the `isNotNull` guard
         // above; SQL itself has no way to express "and compare it" in the
         // same `WHERE` without repeating the column, so the ratio filter

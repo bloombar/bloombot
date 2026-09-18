@@ -7,7 +7,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, eq, inArray, isNull, isNotNull } from 'drizzle-orm'
+import { and, eq, inArray, isNull, isNotNull, lte } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import { writeTransaction } from '../client.js'
@@ -559,4 +559,24 @@ export function restoreProject(
       .returning()
       .get()
   })
+}
+
+/**
+ * DATA-8 — every project whose `deletedAt` is at or before `cutoff`, across
+ * every organization: the retention sweep's own candidate list for
+ * `deletions.deleteProject`. `lte`, not `lt` — deliberate, the same
+ * "at exactly the boundary is due, not merely close" reasoning
+ * `organizations.ts#listOrganizationsDeletedBefore`'s own doc comment
+ * gives, one level up. Unscoped by `organizationId` — the same "the sweep
+ * is platform-wide" TEN-2/DATA-9 exception that function already is.
+ */
+export function listProjectsDeletedBefore(
+  cutoff: number,
+  db: Database
+): Project[] {
+  return db
+    .select()
+    .from(projects)
+    .where(and(isNotNull(projects.deletedAt), lte(projects.deletedAt, cutoff)))
+    .all()
 }

@@ -9,11 +9,22 @@
  * how sign-in decides whether this is a returning account or a new one.
  */
 
-import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, lte, sql } from 'drizzle-orm'
 
 import type { Database, Executor, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
-import { accounts, memberships, type MembershipRole } from '../schema.js'
+import {
+  accounts,
+  discordInstallStates,
+  mcpOauthAccessTokens,
+  mcpOauthAuthorizationCodes,
+  mcpOauthPendingAuthorizations,
+  mcpOauthRefreshTokens,
+  membershipInvitations,
+  memberships,
+  sessions,
+  type MembershipRole,
+} from '../schema.js'
 import { revokeAllSessionsForAccount } from './sessions.js'
 
 export type Account = typeof accounts.$inferSelect
@@ -356,4 +367,112 @@ export function restoreAccount(
     .where(and(eq(accounts.id, accountId), isNotNull(accounts.deletedAt)))
     .returning()
     .get()
+}
+
+/**
+ * DATA-8 — every account whose `deletedAt` is at or before `cutoff` (an
+ * epoch-millisecond boundary the retention sweep computes from
+ * `DELETED_DATA_RETENTION_DAYS`), across the whole platform: the sweep's
+ * own candidate list for `permanentlyDeleteAccount`, below. `lte`, not
+ * `lt` — deliberate, the same boundary
+ * `organizations.ts#listOrganizationsDeletedBefore`'s own doc comment
+ * explains.
+ *
+ * TEN-2/DATA-9 exception, the same class `organizations.ts#listTenantDeletions`
+ * already is: an account is not scoped to one organization (this file's own
+ * module comment), and the sweep is explicitly named in
+ * `tests/soft-delete-convention.test.ts`'s own module comment as one of the
+ * three deliberate exceptions to "excludes what is marked deleted" — this
+ * *is* that exception, reading exactly what every other function in this
+ * file hides.
+ */
+export function listAccountsDeletedBefore(
+  cutoff: number,
+  db: Database
+): Account[] {
+  return db
+    .select()
+    .from(accounts)
+    .where(and(isNotNull(accounts.deletedAt), lte(accounts.deletedAt, cutoff)))
+    .all()
+}
+
+/**
+ * DATA-8 — permanently remove a soft-deleted account: every table that owns
+ * nothing beyond this account's own sign-in/authorization state (a
+ * membership is the join to an organization, not the organization's own
+ * data — `deleteOrganizationData`'s own doc comment already draws the same
+ * line the other way round), then the account row itself.
+ *
+ * Deliberately does **not** touch the tables DATA-7's own text names as
+ * "records of events" that "cannot themselves be deleted by the person
+ * [they describe]" — `tenant_deletions`, `content_deletions`,
+ * `transcript_access_log`, `roster_import_acknowledgements` — nor the
+ * handful of other tables that record *who did something to a course* that
+ * still exists (`discord_server_bindings.installedByAccountId`,
+ * `course_instruction_revisions.savedByAccountId`,
+ * `course_approval_events.accountId`, `course_join_links.createdByAccountId`,
+ * `transcript_exports.requestedByAccountId`, `cost_ledger_entries.personId`
+ * one level over in `people.ts#permanentlyDeletePerson`): every one of
+ * those columns is `NOT NULL`, by design (COST-2's own "a call that cannot
+ * be attributed is a defect", `schema.ts`'s own comment on
+ * `cost_ledger_entries.personId`), so this function does not attempt to
+ * null or remove any of them. An account that has ever done one of those
+ * things throws `SQLITE_CONSTRAINT` on the final `DELETE` below —
+ * deliberately: the retention sweep's own caller
+ * (`apps/worker/handlers/retention-sweep.ts`) catches that per-account,
+ * exactly the "records what it could not do and moves on" partial-failure
+ * handling DATA-8's own text describes, and the account stays marked
+ * deleted for the next run to retry. Closing this — letting such an
+ * account actually go — needs those columns to become nullable, a real
+ * schema change with its own ripple effects (every reader that joins one
+ * back to an account for display), deliberately left out of this slice's
+ * scope (see docs/DECISIONS.md).
+ *
+ * `undefined` when `accountId` does not exist.
+ */
+export function permanentlyDeleteAccount(
+  accountId: string,
+  db: Database
+): Account | undefined {
+  return writeTransaction(db, (tx) => {
+    tx.delete(memberships).where(eq(memberships.accountId, accountId)).run()
+    // `redeemedByAccountId` is nullable (this table's own comment) — nulled,
+    // not deleted, so an invitation somebody *else* created is not removed
+    // just because the account that later redeemed it is gone.
+    tx.update(membershipInvitations)
+      .set({ redeemedByAccountId: null })
+      .where(eq(membershipInvitations.redeemedByAccountId, accountId))
+      .run()
+    tx.delete(membershipInvitations)
+      .where(eq(membershipInvitations.createdByAccountId, accountId))
+      .run()
+    tx.delete(sessions).where(eq(sessions.accountId, accountId)).run()
+    tx.delete(discordInstallStates)
+      .where(eq(discordInstallStates.accountId, accountId))
+      .run()
+    tx.delete(mcpOauthPendingAuthorizations)
+      .where(eq(mcpOauthPendingAuthorizations.accountId, accountId))
+      .run()
+    tx.delete(mcpOauthAuthorizationCodes)
+      .where(eq(mcpOauthAuthorizationCodes.accountId, accountId))
+      .run()
+    // Access tokens before refresh tokens — an access token's own
+    // `refreshTokenId` (`schema.ts`'s own comment on it) references the
+    // refresh token row it was issued alongside, so it has to go first
+    // (`foreign_keys = ON` on every connection, `client.ts`'s own module
+    // comment).
+    tx.delete(mcpOauthAccessTokens)
+      .where(eq(mcpOauthAccessTokens.accountId, accountId))
+      .run()
+    tx.delete(mcpOauthRefreshTokens)
+      .where(eq(mcpOauthRefreshTokens.accountId, accountId))
+      .run()
+
+    return tx
+      .delete(accounts)
+      .where(eq(accounts.id, accountId))
+      .returning()
+      .get()
+  })
 }

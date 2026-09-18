@@ -749,7 +749,7 @@ describe('conversations repo', () => {
   // already is. Narrowed the identical way — only `emptyCourse`'s own body,
   // not the whole file — so a delete added anywhere else in `deletions.ts`
   // later is still caught.
-  it('no repo source deletes a message or a conversation, anywhere in this package, except ADMIN-5’s tenant deletion and PROJ-8/PROJ-9’s course/project deletion (TEN-6)', () => {
+  it('no repo source deletes a message or a conversation, anywhere in this package, except ADMIN-5’s tenant deletion, PROJ-8/PROJ-9’s course/project deletion, and DATA-8’s retention sweep (TEN-6)', () => {
     const reposDir = fileURLToPath(new URL('../src/repos', import.meta.url))
     const files = readdirSync(reposDir).filter((name) => name.endsWith('.ts'))
     expect(files.length).toBeGreaterThan(0)
@@ -771,6 +771,19 @@ describe('conversations repo', () => {
     const deliberateDeletes: { file: string; functionName: string }[] = [
       { file: 'organizations.ts', functionName: 'deleteOrganizationData' },
       { file: 'deletions.ts', functionName: 'emptyCourse' },
+      // DATA-8 — the retention sweep's own permanent removal, once a
+      // soft-deleted conversation (or the person or course it belonged to)
+      // has passed `DELETED_DATA_RETENTION_DAYS`. `permanentlyDeletePerson`
+      // empties a person's own conversations the same way `emptyCourse`
+      // above empties a course's; `permanentlyDeleteConversation` is the
+      // narrower, leaf-level delete for one conversation swept on its own
+      // (WEB-73's own per-person history delete, once its window has
+      // passed).
+      { file: 'people.ts', functionName: 'permanentlyDeletePerson' },
+      {
+        file: 'conversations.ts',
+        functionName: 'permanentlyDeleteConversation',
+      },
     ]
 
     for (const file of files) {

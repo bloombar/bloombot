@@ -14013,3 +14013,135 @@ callers and both now call `softDeleteCourse`/`softDeleteProject` instead, but it
 existing, already-typed way to reach the administrative capability the paragraph above keeps. Their doc
 comments are updated (the only edit this slice makes to that file) to say they have no caller in this app any
 more, so the next reader is not left believing the row kebab still calls them.
+
+## D-142 — `packages/db`/`apps/worker`: DATA-8 — a platform-wide job needs an organization it is not about, and an account cannot always be forgotten
+
+DATA-8's own text ("a scheduled sweep permanently removes what the retention window has released") is a single,
+platform-wide job — it does not belong to one organization any more than `organizations.ts#listTenantDeletions`
+or `jobs.ts#claimNextJob` do (both already-documented TEN-2 exceptions, `tests/tenant-scoping-convention.test.ts`).
+`jobs.organizationId`, though, is a real, `NOT NULL` foreign key (`schema.ts`) — every other job this platform
+runs really is scoped to one organization, and widening the column to nullable would ripple `string | null`
+through `@bloombot/jobs`' own `runner.ts` (every call it makes to `completeJob`/`markJobFailed`/
+`rescheduleJobForRetry`/`getJob` passes `job.organizationId` straight through) and every existing handler that
+trusts `context.organizationId` is a real id — a change far outside this slice's own scope, and risky enough
+(five processes share one SQLite file, D-2) that it deserves its own slice if it is ever worth doing.
+
+**Chosen instead: `organizations.ts#pickReferenceOrganizationId`** — the sweep's own job row is attached to
+*some* organization (preferring a live one, oldest first, so the row essentially never rides on an organization
+the sweep is about to remove itself, in the same run, out from under it), purely so `jobs.organizationId`'s own
+constraint is satisfied; the sweep's own handler never reads `context.organizationId` to scope anything — it
+queries every deletable entity across every organization directly (`listOrganizationsDeletedBefore` and its four
+siblings, one per entity, each a new, documented TEN-2/DATA-9 exception the same class as the sweep itself). A
+fresh install with no organization at all skips scheduling entirely (logged, not thrown) — there is nothing to
+sweep either way, and `apps/worker/src/index.ts`'s own next restart tries again. If the organization a sweep is
+*currently* running under happens to be the only (or the last) one on the platform, and is itself swept away in
+that same run, the *next* `ensureRetentionSweepScheduled` call (this run's own self-reschedule) finds no
+organization at all and, by the paragraph above, schedules nothing — the successor is silently skipped, not
+retried, until a later worker restart or a new organization exists. Noted, not fixed: the same "a fresh install
+has nothing to sweep either way" reasoning applies, just reached by a different route (a platform that *used to*
+have data rather than one that never did), and `@bloombot/jobs`' own `runner.ts` already reports a claimed job's
+row disappearing out from under it as `outcome: 'superseded'` (logged rather than thrown) for the narrower race
+where the reference organization is removed mid-attempt rather than between runs.
+
+**A first review round (rework) found the byte-removal job itself could be enqueued against an organization already
+gone, permanently orphaning its bytes** — `deleteOrganizationData` committed the organization's own deletion, and
+*then* the byte-removal job's own enqueue, scoped to that same now-gone `organizationId`, threw
+`SQLITE_CONSTRAINT_FOREIGNKEY` (`jobs.organizationId` cannot name a row that no longer exists) for every
+organization that had ever attached a file — every real one. Fixed by widening `deleteOrganizationData` to accept
+`TransactingExecutor`, not just `Database`, so `handlers/retention-sweep.ts` can wrap *both* the delete and the
+enqueue in one outer transaction: the byte-removal job is attached to a *surviving* organization
+(`pickReferenceOrganizationId`, now excluding every organization this same run is about to remove, not only the
+one currently being processed — a second, already-soft-deleted organization in the same candidate list is exactly
+as unfit a target), while the payload carries the *actual* organization the bytes belong to explicitly
+(`content-deletions.ts`'s own `ParsedPayload.organizationId`, optional and unused by an ordinary course/project
+delete, whose organization survives and needs no override).
+
+**A second review round found the round-one fix above still had the identical failure mode, one level up: with no
+surviving organization at all, the round-one code deleted the organization's rows anyway and only logged the gap —
+still a permanent, unreachable byte leak, now with the Jobs screen showing a clean `{failures: 0}` success while it
+happened.** The round-one text here also understated when this applies — not only "the platform's only
+organization," but any run where every remaining candidate lacks a survivor (two organizations, both past their
+window, with no live one between them, orphans both). Fixed the one way this class of bug is fixed everywhere else
+in this handler: `referenceOrganizationId` is now checked *before* the delete's own transaction opens at all: if it
+is `undefined`, the organization is skipped outright — `continue`, no `deleteOrganizationData` call, no
+`writeTransaction` — counted as a failure and logged, exactly the "left marked for the next run" discipline the
+account/person/course/project passes already hold themselves to. Nothing is destroyed: the rows, the bytes, and the
+soft delete's own reversibility all stay exactly as they were, and the next run (once a surviving organization
+exists again) removes it cleanly. The only cost is one more retention cycle's worth of "should already be gone but
+is not yet," which is recoverable — an orphaned file with no row left to name it is not.
+
+**Record, not fixed: a soft-deleted-but-not-yet-due organization can still be chosen as the reference.**
+`pickReferenceOrganizationId` excludes every organization *this run's own* candidate list names, but not one that
+is soft-deleted and simply has not reached its own retention window yet — that organization is a legitimate
+reference target today, and only becomes an illegitimate one on some *later* run, once its own window passes. If
+that later run sweeps it away before a worker has claimed the byte-removal (or sweep-successor) job still attached
+to it, the identical cascade this file's own module comment already describes (`organizations`' own delete removes
+every `jobs` row for the organization it removes) takes that job down too. Genuinely remote in practice — the gap
+is measured in days (the reference organization's own remaining retention window) against ordinary job-claim
+latency (seconds to minutes, `JOB_POLL_INTERVAL_MS`) — and already the same, already-accepted class of race
+`@bloombot/jobs`' own `runner.ts` reports as `outcome: 'superseded'` rather than a crash. Not closed here: doing so
+would mean excluding every *soft-deleted* organization from ever being a reference, live-only, which fails outright
+on a platform where every organization happens to be soft-deleted (the very case the paragraph above exists to keep
+working at all).
+
+**Record, not fixed: the project and course passes still enqueue their own byte-removal job *outside* their
+delete's own transaction.** `deletions.deleteProject`/`deleteCourse` commit, and only then does
+`handlers/retention-sweep.ts` call `enqueueContentBytesRemoval` — the identical delete-then-enqueue structure that
+caused the organization-level bug two paragraphs up. It is safe today only because a project's or a course's own
+organization survives the delete (`jobs.organizationId` still names a real row), the same reason
+`@bloombot/actions`' `enqueueRemoveDeletedContentBytes` — the action this code duplicates — has always done it this
+way for an ordinary delete. Named explicitly here, in the file's own module comment and here, precisely because
+this is now the one place left on this branch with the shape that already caused one real bug — a future change
+that made a project's or a course's own delete remove the organization too (it does not today) would reintroduce
+it silently otherwise.
+
+**An account's own permanent removal is deliberately partial.** DATA-7's own text names four tables an account's
+(or a person's) own deletion must never touch — `tenant_deletions`, `content_deletions`, `transcript_access_log`,
+`roster_import_acknowledgements` — "records of events... [that] cannot themselves be deleted by the person [they
+describe]". Auditing every table with a real, `NOT NULL` foreign key to `accounts.id` (`schema.ts`) found five
+more of the identical shape that DATA-7's own text does not name explicitly: `discord_server_bindings.installedByAccountId`,
+`course_instruction_revisions.savedByAccountId`, `course_approval_events.accountId`,
+`course_join_links.createdByAccountId`, `transcript_exports.requestedByAccountId` — each "who did this" on
+content that is not itself being deleted, not an account's own data. Every one of those nine columns would need
+to become nullable (and nulled at sweep time) to let such an account go — a real, cross-cutting schema change
+whose ripple runs through every reader that joins one of them back to an account for display (the admin console's
+own transcript-access log, the Jobs screen's own job history, and more), squarely out of DATA-8's own scope.
+`accounts.ts#permanentlyDeleteAccount` removes what is unambiguously the account's own operational state
+(memberships, sessions, MCP OAuth tokens, an invitation it created or redeemed) and then attempts the row itself;
+an account still named by one of those nine columns throws `SQLITE_CONSTRAINT` on that last `DELETE`, which the
+sweep's own per-record `try`/`catch` (DATA-8's own "records what it could not do and moves on") turns into a
+logged, retried failure rather than a crash. In practice this means an account that has never installed a
+Discord server, saved a course revision, approved a course, created a join link, requested a transcript export,
+appears in the transcript-access audit trail, deleted a tenant, deleted content, or acknowledged a roster import
+is removed cleanly on schedule; one that has stays marked deleted — reversibly, from the product's own point of
+view (DATA-9 already hides it) — indefinitely, until a later slice decides whether those nine columns should
+become nullable.
+
+**A review round (rework) corrected an understatement here: `people.ts#permanentlyDeletePerson`'s own identical
+gap is not "a person with billing history," it is every person who has ever asked a question — the common case,
+not an edge one.** `cost_ledger_entries.personId` is `NOT NULL` by design (COST-2's own "a call that cannot be
+attributed is a defect"), and this platform writes one row per model call — so any person whose course ever
+answered them at all carries at least one such row, forever, and their own `people` record is retried the same
+way an account's is, indefinitely. What this does *not* mean is that nothing about that person is ever removed on
+schedule: the conversations pass, earlier in the same sweep run, already permanently deletes that person's own
+conversations and messages once *they* are past the window (`permanentlyDeletePerson`'s own doc comment on why a
+tombstoned conversation is removed by this function directly, not left for a separate pass) — that part is not
+blocked by the cost ledger at all. What is retained past the window, indefinitely, for a person who has ever been
+billed against, is narrower than "nothing is erasable": the `people` row itself and its `person_identities`
+(display name, Discord id, connected email) — real PII, not merely an internal accounting record, still retained
+past the deployment's own configured window until a later slice makes `cost_ledger_entries.personId` nullable.
+
+**The sweep's own re-run interval (`RETENTION_SWEEP_INTERVAL_MS`, `handlers/retention-sweep.ts`, one day) is a
+judgment call, not something DATA-8's own text names a config knob for** — only the retention *window*
+(`DELETED_DATA_RETENTION_DAYS`) is. A day is frequent enough that nothing sits releasable for long, and coarse
+enough not to add meaningfully to the queue's own traffic; revisit if a deployment ever needs finer control. The
+startup call (`apps/worker/src/index.ts`) does *not* use this interval — a review round (cheap-fix) found the
+original code scheduled the startup catch-up sweep a further day out, the identical delay the self-reschedule
+uses, which meant a deployment down for a month would wait a day *past its own restart* before the first sweep
+ran; `ensureRetentionSweepScheduled` now takes `availableAt` explicitly, and the startup call passes `Date.now()`.
+
+**The `lte` boundary — a record marked deleted at exactly the retention window is swept, not left for one more
+run — is a considered choice, pinned by a test, not an off-by-one.** It has already had the *whole* configured
+window to be restored in by the moment it is exactly due; every `listXDeletedBefore` function
+(`organizations.ts`, `accounts.ts`, `people.ts`, `conversations.ts`, `courses.ts`, `projects.ts`) makes the
+identical choice for the identical reason, and each says so in its own doc comment now rather than only this one.

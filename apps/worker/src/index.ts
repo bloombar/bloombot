@@ -57,6 +57,11 @@ import {
   DISCORD_SCAFFOLD_JOB_KIND,
 } from './handlers/discord-scaffold.js'
 import {
+  createRetentionSweepHandler,
+  ensureRetentionSweepScheduled,
+  RETENTION_SWEEP_JOB_KIND,
+} from './handlers/retention-sweep.js'
+import {
   createRosterImportHandler,
   ROSTER_IMPORT_JOB_KIND,
 } from './handlers/roster-import.js'
@@ -114,6 +119,12 @@ async function main(): Promise<void> {
   const supportContact = CONFIG.SUPPORT_CONTACT
   const publicAppUrl = CONFIG.PUBLIC_APP_URL
   const nodeEnv = CONFIG.NODE_ENV
+  // DATA-7/DATA-8 — the retention sweep's own window, read once here
+  // alongside every other `CONFIG` value this process reads at startup
+  // (packages never read `CONFIG` themselves, D-29 — `handlers/retention-sweep.ts`
+  // takes it as a plain argument, the same `supportContact`/`publicAppUrl`
+  // threading just above).
+  const deletedDataRetentionDays = CONFIG.DELETED_DATA_RETENTION_DAYS
   // AUTH-5 — the real mail transport's non-secret configuration, the same
   // shape `apps/api/src/index.ts` already reads; `MAIL_SMTP_USER`/
   // `MAIL_SMTP_PASSWORD` are read directly just below, alongside this
@@ -271,6 +282,25 @@ async function main(): Promise<void> {
       logger,
     })
   )
+  // DATA-8 — this process's eighth handler: permanently removes what
+  // DATA-7's soft delete has already released, once
+  // `deletedDataRetentionDays` has passed (`handlers/retention-sweep.ts`'s
+  // own module comment has the full reasoning).
+  handlers.register(
+    RETENTION_SWEEP_JOB_KIND,
+    createRetentionSweepHandler({
+      retentionDays: deletedDataRetentionDays,
+      logger,
+    })
+  )
+  // DATA-8 — one sweep queued at startup, so a deployment that has been
+  // down does not silently stop deleting (`ensureRetentionSweepScheduled`'s
+  // own doc comment); `''` excludes nothing, since this call has no
+  // already-running job of its own to exclude. DATA-8 rework, cheap-fix 4 —
+  // `Date.now()`, not a day out: this is the "has been down" catch-up run
+  // itself, so it must not wait a further `RETENTION_SWEEP_INTERVAL_MS`
+  // past this restart before it runs.
+  ensureRetentionSweepScheduled('', Date.now(), db, logger)
 
   let shuttingDown = false
   // `workerHealthStatus` (finding 6 of this rework — `health.ts`'s own

@@ -1405,11 +1405,17 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
           .map((exportRow) => exportRow.id)
       )
 
-      const summary = organizations.deleteOrganizationData(
+      // DATA-8 — `deleteOrganizationData` now also gathers
+      // `byteRemovals` (one `CourseByteRemoval` per course), for the
+      // retention sweep's own use; this route keeps its own, older,
+      // immediate `sweepStorage` bytes cleanup below unchanged, so only
+      // `preview` (renamed `summary`, this route's own established name)
+      // is unwrapped here.
+      const result = organizations.deleteOrganizationData(
         organizationId,
         deps.db
       )
-      if (!summary) {
+      if (!result) {
         // Unreachable in practice — this handler just confirmed the
         // organization exists moments earlier — but guarded rather than
         // assumed, the same race every action in `@bloombot/actions`
@@ -1417,6 +1423,7 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         res.status(404).json({ error: 'organization_not_found' })
         return
       }
+      const { preview: summary } = result
 
       organizations.recordTenantDeletion(
         organizationId,

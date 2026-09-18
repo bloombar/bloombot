@@ -70,8 +70,9 @@
  * offered — are `components/CoursePeople.tsx`'s own screen, embedded below
  * on the same "existing record only" gate as everything else in this list.
  *
- * WEB-35: an existing course renders these sections under five named tabs
- * (General/AI/Discord/Roster/People) rather than one long scroll — the tab
+ * WEB-35: an existing course renders these sections under named tabs
+ * (General/AI/Discord/Roster/People, joined by Usage and Transcripts —
+ * WEB-63/WEB-64, below) rather than one long scroll — the tab
  * is part of the course's own canonical address
  * (`routing/route.ts#CourseEditorTab`), so `activeTab`, below, is seeded
  * from the `tab` prop `pages/ProjectsPanel.tsx` reads off the route, and a
@@ -189,7 +190,7 @@ export interface CourseEditorProps {
    */
   isOwner?: boolean
   /**
-   * WEB-35 — which of the five tabs is on screen, for an existing course.
+   * WEB-35 — which tab is on screen, for an existing course.
    * `undefined` for a new course (this file's own module comment on why),
    * and optional here besides — every call site that does not care which
    * tab is showing (most of `tests/course-editor.test.tsx`) can leave it
@@ -680,6 +681,57 @@ export function CourseEditor({
         clearTimeout(savedTimeoutRef.current)
     }
   }, [])
+
+  /**
+   * Review must-fix 2 — the synchronous "this is a new course" reset used
+   * to live entirely inside the data-loading `useEffect` below, keyed on
+   * `[organizationId, courseId]`. An effect runs *after* React has already
+   * committed the render it belongs to — on the very render where
+   * `courseId` flips from one course to another (`pages/ProjectsPanel.tsx`
+   * renders this component with no `key`, so a course switch never
+   * remounts it), `visitedTabs` was still the *outgoing* course's set for
+   * that whole render, and a tab visited there (Transcripts, say) mounted
+   * `<TranscriptBrowser key={courseId}>` fresh, under the *incoming*
+   * course's id, before this effect ever ran to reset it — and child
+   * effects run before parent effects, so that fresh instance's own
+   * mount-time reads (`transcripts.read`, ADMIN-2 audited) had already
+   * dispatched by the time the reset landed and unmounted it one render
+   * later. The result: an audited access-log row for a course whose
+   * Transcripts tab a caller never actually opened, reachable by Back/
+   * Forward between two course-editor routes while sitting on that tab.
+   *
+   * Performed here, during render, rather than in an effect — React's own
+   * documented "adjusting state when a prop changes" pattern
+   * (react.dev): calling a state setter while rendering makes React
+   * discard this render's own output and immediately re-render with the
+   * new state already applied, before any child (including
+   * `TranscriptBrowser`) ever mounts against a `courseId` this component's
+   * own `visitedTabs` has not caught up to yet. `resetForCourseIdRef`
+   * guards this to run exactly once per genuine `courseId` change, not on
+   * every render.
+   */
+  const resetForCourseIdRef = useRef(courseId)
+  if (resetForCourseIdRef.current !== courseId) {
+    resetForCourseIdRef.current = courseId
+    const initialTab = tab ?? 'general'
+    activeTabRef.current = initialTab
+    setActiveTab(initialTab)
+    setVisitedTabs(new Set([initialTab]))
+    // WEB-43 (review round 1, note): a `Saved` earned on one course must
+    // not still be showing, for the rest of its timer, beside a
+    // completely different course that was never saved.
+    setJustSaved(false)
+    if (savedTimeoutRef.current !== undefined) {
+      clearTimeout(savedTimeoutRef.current)
+      savedTimeoutRef.current = undefined
+    }
+    // WEB-51 — the same "a previous course's own state must not carry
+    // over" reasoning as `visitedTabs`/`justSaved`, above.
+    setTouchedCategoryKeys(new Set())
+    setCategorySaveAttempted(false)
+    setCategoryConflict(undefined)
+  }
+
   /**
    * Shows `Saved` beside the button, then clears it after `savedClearAfterMs`
    * — restarting the timer rather than stacking a second one, in the
@@ -766,36 +818,15 @@ export function CourseEditor({
     // if `courseId` changes again before this fetch resolves, the response
     // that lands is stale and must not overwrite what the current props
     // asked for.
+    //
+    // Review must-fix 2 — the synchronous "this is a new course" reset
+    // (`visitedTabs`, `activeTab`, `justSaved`, the WEB-51 category-touched
+    // state) no longer lives here; it runs during render instead
+    // (`resetForCourseIdRef`, above this component's own return), so no
+    // child ever mounts against a `courseId` this component's own
+    // `visitedTabs` has not caught up to yet. This effect is left with
+    // only the async fetch itself.
     let stale = false
-    // Rework round 1, must-fix 1: a freshly loaded course starts with only
-    // its own incoming tab "visited" — carrying a previous course's own
-    // visited set into this one would wrongly mount (and fetch for) a tab
-    // nobody has opened on *this* course yet, the moment the same
-    // `CourseEditor` instance is reused for a different `courseId`
-    // (`pages/ProjectsPanel.tsx` does not remount it between courses).
-    const initialTab = tab ?? 'general'
-    activeTabRef.current = initialTab
-    setActiveTab(initialTab)
-    setVisitedTabs(new Set([initialTab]))
-    // WEB-43 (review round 1, note): `pages/ProjectsPanel.tsx` renders this
-    // component with no `key`, so switching which course is being edited
-    // (a Back/Forward between two course-editor routes) changes `courseId`
-    // without remounting — without this, a `Saved` earned on one course
-    // could still be showing, for the rest of its timer, beside a
-    // completely different course that was never saved.
-    setJustSaved(false)
-    if (savedTimeoutRef.current !== undefined) {
-      clearTimeout(savedTimeoutRef.current)
-      savedTimeoutRef.current = undefined
-    }
-    // WEB-51 — the same "a previous course's own state must not carry over"
-    // reasoning as `visitedTabs`/`justSaved`, above: a fresh course's
-    // category rows have not been touched, no save on it has been
-    // attempted, and any conflict named a category on the course this
-    // instance was editing a moment ago.
-    setTouchedCategoryKeys(new Set())
-    setCategorySaveAttempted(false)
-    setCategoryConflict(undefined)
     if (courseId === undefined) {
       const blank = blankForm()
       setForm(blank)
@@ -1103,10 +1134,13 @@ export function CourseEditor({
    * A tab switch a person actually asked for (a click, or the arrow keys),
    * as opposed to the ones this component makes on its own.
    *
-   * The five tabs share one form and one `Save course` button, so an edit
-   * made on one tab is never *lost* by looking at another — but "I changed
-   * something and then wandered off" is exactly how an edit ends up
-   * abandoned, so leaving a tab with unsaved settings asks first. Three
+   * WEB-35's own five tabs (General/AI/Discord/Roster/People) share one
+   * form and one `Save course` button, so an edit made on one is never
+   * *lost* by looking at another — Usage and Transcripts (WEB-63/WEB-64)
+   * hold no editable form state at all, so this guard has nothing to ask
+   * about on either. "I changed something and then wandered off" is
+   * exactly how an edit ends up abandoned, so leaving a *form* tab with
+   * unsaved settings asks first. Three
    * answers, not the usual two: save them and carry on, discard them and
    * carry on, or stay on this tab (Cancel, and `Escape`) — a plain
    * confirm would have to fold "discard" and "stay here" together, and
@@ -1961,7 +1995,8 @@ export function CourseEditor({
             role="tablist"
             aria-label="Course settings"
             // WEB-48: the row itself scrolls on a narrow phone rather than
-            // the page body — five tabs at `text-sm` come close to 375px's
+            // the page body — seven tabs at `text-sm` (WEB-63/WEB-64 added
+            // two to WEB-35's original five) comfortably overflow 375px's
             // own width once padding and gaps are counted, and `overflow-x-
             // auto` here (rather than nothing) keeps that overflow local to
             // the tab bar instead of widening the whole page.
@@ -1994,8 +2029,10 @@ export function CourseEditor({
           </div>
 
           {/* Rework round 1, must-fix 1: this wrapper — id, aria-labelledby,
-              `hidden` — stays mounted for every one of the five tabs,
-              always, so a `role="tab"`'s own `aria-controls` never points
+              `hidden` — stays mounted for every one of these tabs, always
+              (WEB-63/WEB-64's own Usage and Transcripts panels follow the
+              same rule as WEB-35's original five), so a `role="tab"`'s own
+              `aria-controls` never points
               at an id that does not exist in the DOM (rework round 1,
               finding 6). Only the *content* inside is gated on
               `visitedTabs`, and it is that content — not this div — whose

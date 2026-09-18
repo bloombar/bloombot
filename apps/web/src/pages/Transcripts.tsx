@@ -204,6 +204,16 @@ export function Transcripts({
     }
 
     const epoch = ++epochRef.current
+    // Review must-fix 1 — a previous refusal (this screen's own project/
+    // course resolution, not `TranscriptBrowser`'s own) must not outlive
+    // the attempt that produced it: a fresh route naming a course is a
+    // fresh attempt, genuinely different from the one that failed, whether
+    // it lands on a real course or the route simply lost its course
+    // entirely (the branch just below). Left uncleared here, a refusal
+    // from an earlier, invalid route stayed on screen for the life of this
+    // mounted instance even once a later pick resolved cleanly underneath
+    // it — undismissable without a reload.
+    setError(undefined)
 
     if (routeCourseId === undefined) {
       // The route lost its course (the drawer's own bare landing address):
@@ -317,6 +327,11 @@ export function Transcripts({
               epochRef.current += 1
               seedRef.current = null
               seededCourseRef.current = undefined
+              // Review must-fix 1 — this screen's own comment on the
+              // seeding effect's identical clear: a project pick is a
+              // fresh attempt too, and must not leave an earlier refusal
+              // on screen underneath a course that goes on to load fine.
+              setError(undefined)
               setProjectId(nextProjectId)
               // Clearing on a project change is explicit here, not a side
               // effect the `[organizationId, projectId]` effect above bakes
@@ -355,6 +370,9 @@ export function Transcripts({
               epochRef.current += 1
               seedRef.current = null
               seededCourseRef.current = undefined
+              // Review must-fix 1 — the same clear the Project select's own
+              // handler makes, above.
+              setError(undefined)
               setCourseId(next)
               // WEB-64 — an ordinary course pick starts unfiltered; the
               // `courseId` change itself is already enough to mount a

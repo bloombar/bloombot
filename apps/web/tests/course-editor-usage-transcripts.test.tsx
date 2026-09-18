@@ -17,7 +17,7 @@ import type {
   Project,
 } from '../src/api/types.js'
 import { CourseEditor } from '../src/pages/CourseEditor.js'
-import { renderWithModal } from './helpers/render-with-modal.js'
+import { renderWithModal, withModal } from './helpers/render-with-modal.js'
 
 const {
   getCourse,
@@ -100,6 +100,13 @@ const COURSE: Course = {
   aiApprovedAt: 1000,
   categories: [],
 }
+
+// Review must-fix 2 — a second course, in the same project, for the
+// Back/Forward regression below: switching *which* course this same
+// `CourseEditor` instance edits (`pages/ProjectsPanel.tsx` renders it with
+// no `key`) must never fire an audited read for the course being switched
+// *to* before its own Transcripts tab is actually opened.
+const COURSE_B: Course = { ...COURSE, id: 'course-2', title: 'Data Structures' }
 
 function report(
   overrides: Partial<OrganizationUsageReport> = {}
@@ -251,6 +258,12 @@ describe('CourseEditor — Transcripts tab (WEB-64)', () => {
     ).not.toBeInTheDocument()
   })
 
+  // Cheap-fix 3 (coordinator review) — this test's own title always named
+  // both filters, but only the student one was ever exercised;
+  // `TranscriptBrowser`'s own uncontrolled date fallback (only ever
+  // reached from this tab — `pages/Transcripts.tsx` controls the dates
+  // itself, this file's own module comment) otherwise has no coverage at
+  // all.
   it('reads this course’s transcript on its own, filters by student and date, and exports — the same actions pages/Transcripts.tsx dispatches', async () => {
     listTranscriptStudents.mockResolvedValue([
       { personId: 'person-1', personDisplayName: 'Alice' },
@@ -284,11 +297,16 @@ describe('CourseEditor — Transcripts tab (WEB-64)', () => {
     fireEvent.change(screen.getByLabelText('Student'), {
       target: { value: 'person-1' },
     })
+    fireEvent.change(screen.getByLabelText('From date'), {
+      target: { value: '2026-01-05' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
 
+    const expectedStartAt = Date.parse('2026-01-05T00:00:00')
     await waitFor(() =>
       expect(readTranscript).toHaveBeenCalledWith('org-1', COURSE.id, {
         personId: 'person-1',
+        startAt: expectedStartAt,
       })
     )
 
@@ -296,6 +314,7 @@ describe('CourseEditor — Transcripts tab (WEB-64)', () => {
     await waitFor(() =>
       expect(exportTranscript).toHaveBeenCalledWith('org-1', COURSE.id, {
         personId: 'person-1',
+        startAt: expectedStartAt,
       })
     )
   })
@@ -376,5 +395,66 @@ describe('CourseEditor — Usage/Transcripts tabs are real addresses (WEB-33/WEB
 
     fireEvent.click(screen.getByRole('tab', { name: 'Transcripts' }))
     expect(onNavigateTab).toHaveBeenCalledWith('transcripts')
+  })
+})
+
+// Review must-fix 2 — `visitedTabs` used to reset inside the
+// `[organizationId, courseId]` data-loading effect, which commits *after*
+// children have already rendered against the outgoing course's stale
+// `visitedTabs`. Reachable by Back/Forward between two course-editor
+// routes (`pages/ProjectsPanel.tsx` renders this component with no `key`,
+// this file's own module comment on `resetForCourseIdRef`): sitting on one
+// course's Transcripts tab, then switching to a different course, used to
+// mount that course's own `TranscriptBrowser` — and fire its own
+// ADMIN-2-audited read — before the reset had a chance to run.
+describe('CourseEditor — a course switch never audits a Transcripts tab nobody opened for the new course (review must-fix 2)', () => {
+  it('switching from course A’s Transcripts tab to course B’s General tab issues no read for course B', async () => {
+    getCourse.mockImplementation((_organizationId: string, courseId: string) =>
+      Promise.resolve(courseId === COURSE_B.id ? COURSE_B : COURSE)
+    )
+    readTranscript.mockImplementation(
+      (_organizationId: string, courseId: string) =>
+        Promise.resolve({ courseId, courseTitle: 'x', entries: [] })
+    )
+
+    const { rerender } = renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={COURSE.id}
+        tab="transcripts"
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await waitFor(() =>
+      expect(readTranscript).toHaveBeenCalledWith('org-1', COURSE.id, {})
+    )
+    readTranscript.mockClear()
+
+    // The same Back/Forward move `pages/ProjectsPanel.tsx` produces: a new
+    // `courseId`, landing on that course's own General tab.
+    rerender(
+      withModal(
+        <CourseEditor
+          navigate={vi.fn()}
+          organizationId="org-1"
+          project={PROJECT}
+          courseId={COURSE_B.id}
+          tab="general"
+          onSaved={vi.fn()}
+          onOpenChat={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      )
+    )
+
+    await screen.findByDisplayValue(COURSE_B.title)
+    // A moment for any wrongly re-triggered mount to (mis)fire before
+    // asserting its absence.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(readTranscript).not.toHaveBeenCalled()
   })
 })

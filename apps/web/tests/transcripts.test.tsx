@@ -644,6 +644,50 @@ describe('Transcripts — opened from a route-named course/person (WEB-36)', () 
     )
   })
 
+  // Review must-fix 1 — the screen's own `error` (project/course
+  // resolution refusals) used to have no path back to `undefined` at all
+  // once `TranscriptBrowser` took over the entries/students/exports/access
+  // log fetch and its own `error` state: a route-named refusal stayed on
+  // screen for the life of this mounted instance, even once a later,
+  // ordinary pick resolved a real course underneath it — undismissable
+  // without a reload.
+  it('a route-named refusal clears once an ordinary project and course pick resolves cleanly', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    getCourse.mockRejectedValue(new ApiError(404, { error: 'action_refused' }))
+    listCourses.mockResolvedValue([COURSE])
+    listTranscriptStudents.mockResolvedValue([])
+    listTranscriptExports.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    render(
+      <Transcripts
+        organizationId="org-1"
+        isOwner={false}
+        courseId="course-missing"
+        navigate={vi.fn()}
+      />
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not found, or you do not have access to it.'
+    )
+
+    fireEvent.change(screen.getByLabelText('Project'), {
+      target: { value: PROJECT.id },
+    })
+    fireEvent.change(await screen.findByLabelText('Course'), {
+      target: { value: COURSE.id },
+    })
+
+    expect(
+      await screen.findByText('No messages match these filters.')
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('picking a different course pushes the address that names it', async () => {
     const navigate = vi.fn()
     listProjects.mockResolvedValue([PROJECT])

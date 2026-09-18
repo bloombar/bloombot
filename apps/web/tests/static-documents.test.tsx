@@ -257,6 +257,44 @@ describe('/privacy and /terms (published legal documents)', () => {
       )
     })
 
+    // The researched position (see `terms.ts`'s own module comment): never
+    // assert non-compliance, never claim a consent that does not exist, and do
+    // say the factual § 99.31(a)(1)(i)(B) thing. These pin both halves.
+    it('makes no representation of FERPA suitability, and asserts no non-compliance', () => {
+      const body = flat(termsDocument.body)
+      expect(body).toMatch(
+        /make no representation that the service is suitable for education records/i
+      )
+      expect(body).not.toMatch(/not FERPA[- ]compliant/i)
+      expect(body).not.toMatch(/we are not compliant/i)
+    })
+
+    it('states the school-official position as a fact about a written agreement', () => {
+      expect(flat(termsDocument.body)).toMatch(
+        /not acting as a "school official"[^.]*99\.31\(a\)\(1\)\(i\)\(B\)/i
+      )
+    })
+
+    it('denies that anything here is a consent given for a student', () => {
+      expect(flat(termsDocument.body)).toMatch(
+        /Nothing in these terms is a consent given on behalf of any student/i
+      )
+      expect(flat(privacyDocument.body)).toMatch(
+        /is a consent given on behalf of a student under FERPA/i
+      )
+      for (const doc of [privacyDocument, termsDocument]) {
+        expect(flat(doc.body)).not.toMatch(
+          /(?:using|use of) the service (?:constitutes|is) (?:your )?consent/i
+        )
+      }
+    })
+
+    it('offers a route to a data protection agreement rather than a dead end', () => {
+      expect(flat(termsDocument.body)).toMatch(
+        /data protection agreement, a FERPA addendum, or a completed HECVAT/i
+      )
+    })
+
     it('discloses that instructors can read student conversations', () => {
       expect(flat(privacyDocument.body)).toMatch(
         /instructor can read their own students' conversations/i

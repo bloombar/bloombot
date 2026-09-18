@@ -10,6 +10,29 @@
  * an explicit statement that this is a pilot. See `privacy.ts`'s own module
  * comment for why that is the honest form rather than a gap to be filled in
  * later.
+ *
+ * **On FERPA, and on what this deliberately does not say.** The obvious clause
+ * — "this app is not FERPA-compliant, and using it is your consent to that" —
+ * is not written here, on purpose, and should not be added:
+ *
+ * - FERPA binds institutions, not vendors, so "we are not FERPA-compliant" is
+ *   not a coherent statement about us. Published against ourselves it is an
+ *   admission that ends a procurement review rather than informing one.
+ * - The consent half would be ineffective and misleading. FERPA consent must be
+ *   written, signed and dated, and must name the records, the purpose and the
+ *   recipient (34 CFR § 99.30); it runs from the student to their institution,
+ *   not from anyone to us; an instructor cannot give it for a student; and this
+ *   service's own students never assent to anything at all, because an
+ *   instructor's roster import creates their account (see "Accounts", below).
+ *   Claiming a consent that does not exist is the kind of term the FTC charged
+ *   as an unfair practice in its 2023 Edmodo action.
+ *
+ * What stands in its place says the true and useful things instead: no
+ * representation of FERPA suitability, the factual § 99.31(a)(1)(i)(B) position
+ * that we are not a school official absent a written agreement, the
+ * institution's own determination and notices as the instructor's to make, an
+ * explicit denial that anything here consents for a student, and a route to a
+ * DPA/FERPA addendum/HECVAT.
  */
 import { OPERATOR, type StaticDocument } from './document.js'
 
@@ -77,6 +100,45 @@ are used for, and it means:
   run the server and the database it lives on. We offer you no privacy
   guarantee against that, and neither should you offer your students one. The
   [Privacy policy](/privacy) says so in full.
+- **Do not use the service with students under 13**, and tell your students not
+  to type information about their health, immigration status, or sexual
+  orientation or gender identity into it. The service stores what it is told,
+  indefinitely, and cannot be made to forget one student's part of it.
+
+### Student records, FERPA, and whose decision this is
+
+We make no representation that the service is suitable for education records, or
+that using it complies with the Family Educational Rights and Privacy Act
+(FERPA, 20 U.S.C. § 1232g; 34 CFR Part 99), with your institution's policies, or
+with any other law governing student records. Whether it is suitable is your
+institution's determination, and it is not one we can make for you.
+
+Unless we have signed a written agreement with your institution saying so, **we
+are not acting as a "school official" with a "legitimate educational interest"**
+under 34 CFR § 99.31(a)(1)(i)(B): we are not under your institution's direct
+control with respect to education records, and no institution should treat us as
+though we were. That designation is something an institution makes in its own
+annual FERPA notification. It is not something we can give ourselves.
+
+If you bring students to this service, you confirm that you may do so on behalf
+of your institution and, where it requires review or approval of third-party
+software, that you have obtained it; that you have decided the service is
+appropriate for the data you will put into it; that you have given your students
+the notices your institution and applicable law require and obtained any consents
+they require; and that you will not upload anything you have no right to disclose
+to us. That determination is yours to make.
+
+**Nothing in these terms is a consent given on behalf of any student.** Consent
+under FERPA can only be given by the student, in writing, to their institution,
+naming the records, the purpose and the recipient (34 CFR § 99.30) — and we do
+not collect it. What you accept by using the service you accept on your own
+behalf: that the [Privacy policy](/privacy) describes indefinite retention, no
+per-student deletion, students' questions sent un-redacted to a third-party model
+provider, and instructor and operator access to what is stored.
+
+An institution that needs a written data protection agreement, a FERPA addendum,
+or a completed HECVAT before adopting the service should write to
+${OPERATOR.contactEmail} before its students start using it.
 
 ## AI-generated content
 

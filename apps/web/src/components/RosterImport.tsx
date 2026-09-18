@@ -94,6 +94,20 @@ export interface RosterImportProps {
   courseId: string
   /** ROST-15: the course's own title — this component's own base-name field defaults to `${courseTitle} - STUDENTS`, CFG-4's own convention. */
   courseTitle: string
+  /**
+   * Rework finding (cheap-fix): the signed-in account's own id, the same
+   * `viewerAccountId` shape `components/Team.tsx` already takes
+   * (`pages/Shell.tsx`'s own module comment on ENRL-11) — this component has
+   * no read that turns an acknowledging account id into an email or display
+   * name (`components/CourseInstructions.tsx`'s own comment on the
+   * identical D-54 gap for `savedByAccountId`), so the acknowledgements list
+   * below names the viewer's own entries "you" and falls back to the bare id
+   * for anyone else's, rather than showing a UUID even for the instructor
+   * reading their own action. Optional, defaulting to `undefined` (every
+   * entry falls back to its bare id) — most of `tests/roster-import.test.tsx`
+   * does not care which account is viewing.
+   */
+  viewerAccountId?: string
   /** Test-only override of `DEFAULT_STILL_QUEUED_HINT_AFTER_MS`. */
   stillQueuedHintAfterMs?: number
   /** Test-only override of `DEFAULT_POLL_INTERVAL_MS`. */
@@ -136,6 +150,7 @@ export function RosterImport({
   organizationId,
   courseId,
   courseTitle,
+  viewerAccountId,
   stillQueuedHintAfterMs = DEFAULT_STILL_QUEUED_HINT_AFTER_MS,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 }: RosterImportProps) {
@@ -745,8 +760,13 @@ export function RosterImport({
                 key={entry.id}
                 className="rounded-md border border-neutral-200 p-2 text-sm text-neutral-700"
               >
-                {entry.filename} — acknowledged by {entry.accountId} on{' '}
-                {new Date(entry.acknowledgedAt).toLocaleString()}
+                {/* Rework finding (cheap-fix): "you" for the viewer's own
+                    entry, the bare id otherwise — this component's own doc
+                    comment on `viewerAccountId` has the D-54 gap this works
+                    around. */}
+                {entry.filename} — acknowledged by{' '}
+                {entry.accountId === viewerAccountId ? 'you' : entry.accountId}{' '}
+                on {new Date(entry.acknowledgedAt).toLocaleString()}
               </li>
             ))}
           </ul>

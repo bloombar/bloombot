@@ -35,6 +35,7 @@ import {
   personLinkChallenges,
   projects,
   rosterChannelAssignments,
+  rosterImportAcknowledgements,
   tenantDeletions,
   transcriptAccessLog,
   transcriptExports,
@@ -353,6 +354,17 @@ export function deleteOrganizationData(
     // rather than one course).
     tx.delete(courseApprovalEvents)
       .where(eq(courseApprovalEvents.organizationId, organizationId))
+      .run()
+    // ROST-20 rework finding: `roster_import_acknowledgements` is a real
+    // foreign key to `courses.id`, `jobs.id` and `organizations.id` alike
+    // (`schema.ts`'s own comment on why none of the three outlive it),
+    // deleted here — ahead of `courses`, `jobs` and `organizations` below —
+    // the same COST-8 "does not outlive the course, must not block the
+    // delete" carve-out `courseApprovalEvents` just above already gets, one
+    // level up (a whole tenant here, rather than one course,
+    // `deletions.ts#emptyCourse`'s own identical line).
+    tx.delete(rosterImportAcknowledgements)
+      .where(eq(rosterImportAcknowledgements.organizationId, organizationId))
       .run()
     tx.delete(enrolments)
       .where(eq(enrolments.organizationId, organizationId))

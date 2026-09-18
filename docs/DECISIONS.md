@@ -13699,3 +13699,17 @@ brief's own "add no new permission, reuse the existing one." The account-wide re
 admin router instead, the same way every other ADMIN-11 cross-tenant read in that file already bypasses
 `dispatch` entirely (`costLedger.listAccountTotals`, `memberships.listMembershipsForAccountWithOrganizations`,
 etc.) — this router is not reached through the organization-scoped action pipeline at all.
+
+**Rework finding (must-fix): "never deleted and never edited" describes what an ordinary operation can
+reach, not what outlives the course, organization or job a row names.** `roster_import_acknowledgements`
+carries a real foreign key to `courses.id`, `organizations.id`, `accounts.id` and `jobs.id`, all `ON DELETE
+no action`, and `foreign_keys = ON` on every connection actually enforces that — so neither
+`repos/deletions.ts#emptyCourse` (PROJ-8) nor `repos/organizations.ts#deleteOrganizationData` (ADMIN-5)
+originally emptied this table before deleting the `courses`/`jobs`/`organizations` row it references, and
+both aborted outright (`FOREIGN KEY constraint failed`) on any course or tenant that had ever had a roster
+imported. Both now delete this table's own rows first, in FK-safe position — the identical COST-8
+"does not outlive the course, must not block the delete" carve-out `course_approval_events` already holds
+itself to for the same reason, one level up for the tenant-wide cascade. An acknowledgement's own append-only
+discipline (no update, no delete function in `repos/roster-import-acknowledgements.ts`) is unchanged — it
+still records exactly what happened and is never revised — but it does not survive the course or tenant it
+is about being deleted, any more than an approval event does.

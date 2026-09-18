@@ -513,6 +513,56 @@ describe('ADMIN-5 — deleting a tenant’s data is explicit, confirmed and audi
     expect(auditBody.deletions[0]?.organizationId).toBe(organizationId)
   })
 
+  // ROST-20 rework finding: `roster_import_acknowledgements` is a real
+  // foreign key to `courses.id`, `jobs.id` and `organizations.id` alike
+  // (`schema.ts`'s own comment) — a tenant that ever had a roster imported
+  // used to throw `FOREIGN KEY constraint failed` on this very delete,
+  // aborting it entirely, before `organizations.ts#deleteOrganizationData`
+  // emptied this table first.
+  it('deletes a tenant that has an acknowledged roster import', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: `instructor-${randomUUID()}@example.edu`,
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    const job = jobs.enqueueJob(
+      organizationId,
+      { kind: 'roster.import', payload: {}, maxAttempts: 5 },
+      testDb.db
+    )
+    rosterImportAcknowledgements.recordAcknowledgement(
+      organizationId,
+      {
+        courseId,
+        accountId: instructor.id,
+        filename: 'roster.csv',
+        jobId: job.id,
+        acknowledgementVersion: '2026-09-18',
+        acknowledgedAt: Date.now(),
+      },
+      testDb.db
+    )
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/admin/organizations/${organizationId}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'A Real Tenant' })
+
+    expect(response.status).toBe(200)
+    expect(
+      organizations.getOrganizationById(organizationId, testDb.db)
+    ).toBeUndefined()
+  })
+
   it('refuses a non-administrator (403), and deletes nothing', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)

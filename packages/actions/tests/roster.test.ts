@@ -275,6 +275,42 @@ describe('roster.import (ROST-9/ROST-20)', () => {
     expect(allAcknowledgementRows(testDb.db)).toHaveLength(0)
   })
 
+  // Rework finding (cheap-fix): the test above only proves a *policy*
+  // refusal — one that never reaches `execute` at all — writes nothing; it
+  // would still pass if the enqueue and the acknowledgement write were ever
+  // split back into two transactions. This is what actually pins the
+  // "structurally, not by two calls a crash could split" claim
+  // (`actions/roster.ts`'s own module comment, D-136): a bogus `accountId`
+  // reaches `execute` and trips `rosterImportAcknowledgements`' own foreign
+  // key on `accounts.id` (`dispatch` never validates `accountId` against the
+  // `accounts` table itself — it is passed straight through) *inside* the
+  // transaction, after `jobs.enqueueJob` has already run — so if the two
+  // writes were not atomic, the job row would survive this throw. It does
+  // not.
+  it('rolls back the enqueue too when the acknowledgement write itself fails inside the transaction', async () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrganizationWithBoundServer(testDb.db)
+    const courseId = seedCourse(organizationId, testDb.db)
+    const bogusAccountId = crypto.randomUUID()
+    const before = allJobRows(testDb.db).length
+
+    await expect(
+      dispatch(
+        importRosterAction,
+        {
+          courseId,
+          csvText: CSV,
+          filename: 'roster.csv',
+          acknowledgementVersion: ACKNOWLEDGEMENT_VERSION,
+        },
+        { organizationId, accountId: bogusAccountId, db: testDb.db }
+      )
+    ).rejects.toThrow()
+
+    expect(allJobRows(testDb.db)).toHaveLength(before)
+    expect(allAcknowledgementRows(testDb.db)).toHaveLength(0)
+  })
+
   // ROST-20: an unversioned record is exactly what this requirement exists
   // to prevent — refused outright, before the policy runs, the same
   // ActionInputError shape an empty CSV already gets above.

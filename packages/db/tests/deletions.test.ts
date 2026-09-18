@@ -14,10 +14,12 @@ import {
   courses,
   deletions,
   enrolments,
+  jobs,
   organizations,
   people,
   projects,
   rosterChannelAssignments,
+  rosterImportAcknowledgements,
   schema,
   selfEnrolment,
   transcriptAccess,
@@ -39,9 +41,10 @@ afterEach(() => {
  * message, a cost-ledger entry, a course attachment, an instruction
  * revision, an enrolment, a join link, a self-enrolment intent, a web
  * source, a remembered roster channel, and a transcript access-log row plus
- * a pending export, and a COST-8 approval event — so `deleteCourse`
- * (PROJ-8) is exercised against the same shape a real course would leave
- * behind. Synthetic data only (QA-3).
+ * a pending export, a COST-8 approval event, and (rework finding, ROST-20) a
+ * roster-import acknowledgement with the job it accompanied — so
+ * `deleteCourse` (PROJ-8) is exercised against the same shape a real course
+ * would leave behind. Synthetic data only (QA-3).
  */
 function seedFullCourse(testDatabase: TestDatabase) {
   const organizationId = randomUUID()
@@ -217,6 +220,28 @@ function seedFullCourse(testDatabase: TestDatabase) {
     testDatabase.db
   )
 
+  // ROST-20 rework finding: a roster-import acknowledgement is a real
+  // foreign key to `courses.id`, `jobs.id` and `organizations.id` alike
+  // (`schema.ts`'s own comment) — seeded here so `deleteCourse` is exercised
+  // against a course that has actually had a roster imported.
+  const job = jobs.enqueueJob(
+    organizationId,
+    { kind: 'roster.import', payload: {}, maxAttempts: 5 },
+    testDatabase.db
+  )
+  rosterImportAcknowledgements.recordAcknowledgement(
+    organizationId,
+    {
+      courseId: course.id,
+      accountId: instructor.id,
+      filename: 'roster.csv',
+      jobId: job.id,
+      acknowledgementVersion: '2026-09-18',
+      acknowledgedAt: Date.now(),
+    },
+    testDatabase.db
+  )
+
   return {
     ...organization,
     project,
@@ -336,6 +361,17 @@ describe('deletions.deleteCourse (PROJ-8)', () => {
       testDb.db
         .select()
         .from(schema.courseApprovalEvents)
+        .all()
+        .filter((row) => row.courseId === course.id)
+    ).toHaveLength(0)
+    // ROST-20 rework finding: the roster-import acknowledgement
+    // `seedFullCourse` recorded is gone too — it used to throw `FOREIGN KEY
+    // constraint failed` on the `courses` delete above instead, since
+    // `emptyCourse` never emptied this table first.
+    expect(
+      testDb.db
+        .select()
+        .from(schema.rosterImportAcknowledgements)
         .all()
         .filter((row) => row.courseId === course.id)
     ).toHaveLength(0)

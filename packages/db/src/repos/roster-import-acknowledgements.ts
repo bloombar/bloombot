@@ -12,7 +12,15 @@
  *
  * There is no update or delete function in this file, on purpose — the same
  * "an account of something that happened, not a setting" discipline
- * `repos/course-approval.ts` already holds `course_approval_events` to.
+ * `repos/course-approval.ts` already holds `course_approval_events` to. That
+ * is a statement about what an ordinary write can reach, not about outliving
+ * the course, organization or job a row names: `repos/deletions.ts#emptyCourse`
+ * and `repos/organizations.ts#deleteOrganizationData` both delete this
+ * table's own rows ahead of the `courses`/`organizations`/`jobs` row they
+ * reference (`schema.ts`'s own comment on `rosterImportAcknowledgements` has
+ * the full FK-ordering reasoning) — a course's roster-import history does
+ * not survive the course being deleted, the same as `course_approval_events`
+ * above does not survive it either.
  *
  * Every function here is scoped by `organizationId`, its first parameter,
  * except `listAcknowledgementsForAccount` — ADMIN-11's own cross-tenant

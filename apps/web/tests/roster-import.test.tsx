@@ -128,6 +128,7 @@ function renderRosterImport(
   overrides: {
     pollIntervalMs?: number
     stillQueuedHintAfterMs?: number
+    viewerAccountId?: string
   } = {}
 ) {
   return render(
@@ -835,6 +836,27 @@ describe('ROST-20 — the roster acknowledgement is recorded, and readable after
     expect(entries).toHaveLength(2)
     expect(entries[0]).toHaveTextContent('second.csv')
     expect(entries[1]).toHaveTextContent('first.csv')
+  })
+
+  // Rework finding (cheap-fix): `entry.accountId` used to render as a bare
+  // UUID even for the instructor reading their own acknowledgement — this
+  // component has no read that turns an account id into an email or display
+  // name (its own doc comment on the D-54 gap), so the viewer's own entry
+  // now reads "you" instead, and only a peer's entry still falls back to the
+  // bare id.
+  it('names the viewer\'s own acknowledgement "you", and a peer\'s by their bare account id', async () => {
+    listRosterAcknowledgements.mockResolvedValue([
+      acknowledgement({ id: 'ack-1', accountId: 'account-1' }),
+      acknowledgement({ id: 'ack-2', accountId: 'account-2' }),
+    ])
+
+    renderRosterImport({ viewerAccountId: 'account-1' })
+
+    const list = await screen.findByTestId('roster-acknowledgements')
+    const entries = list.querySelectorAll('li')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]).toHaveTextContent('acknowledged by you')
+    expect(entries[1]).toHaveTextContent('acknowledged by account-2')
   })
 
   it('shows an empty state when the course has no acknowledgements yet', async () => {

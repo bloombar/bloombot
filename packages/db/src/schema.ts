@@ -2092,6 +2092,17 @@ export const discordGatewayStatus = sqliteTable('discord_gateway_status', {
 // `repos/roster-import-acknowledgements.ts` exposes no update or delete, the
 // same "an account of something that happened, not a setting" discipline
 // `courseApprovalEvents` above already holds itself to.
+//
+// "Never deleted and never edited" describes what an ordinary operation can
+// reach, not what outlives the course, organization or job it is about — the
+// same distinction `courseApprovalEvents`' own comment draws for COST-8.
+// This table's four foreign keys are all `ON DELETE no action`
+// (`foreign_keys = ON` on every connection, `client.ts`'s own module
+// comment, actually enforces that), so `repos/deletions.ts#emptyCourse` and
+// `repos/organizations.ts#deleteOrganizationData` both empty it ahead of
+// `courses`/`organizations`/`jobs` — an acknowledgement does not outlive the
+// course it is about, exactly the ADMIN-5/PROJ-8 rework finding
+// `docs/DECISIONS.md` D-136 records.
 export const rosterImportAcknowledgements = sqliteTable(
   'roster_import_acknowledgements',
   {

@@ -477,7 +477,14 @@ export function previewDeleteProject(
   )
 }
 
-/** PROJ-9: permanently delete a project, and every course in it. Cannot be undone. */
+/**
+ * PROJ-9: permanently delete a project, and every course in it. Cannot be
+ * undone. PROJ-11 — no caller in this app any more: `useProjectMenu.tsx`'s
+ * row kebab and the project's own Danger zone both call `softDeleteProject`
+ * below now, and this wrapper is kept only so `projects.delete`
+ * (`@bloombot/actions`, owner-gated) stays reachable as an administrative
+ * capability without a second copy of this `dispatchAction` plumbing.
+ */
 export function deleteProject(
   organizationId: string,
   projectId: string
@@ -493,18 +500,13 @@ export function deleteProject(
  * WEB-72/DATA-7: delete a project — reversible for the deployment's
  * retention window, then permanent. Only an existing owner of the
  * organization may call this. Distinct from `deleteProject` above (PROJ-9's
- * own permanent wipe).
+ * own permanent wipe) — PROJ-11 is what made that distinction matter: the
+ * two are no longer two equally-reachable "Delete" controls on the same
+ * project, since `deleteProject` has no UI caller left.
  *
- * **No caller yet (cheap-fix, review).** WEB-72's own Danger-zone list names
- * an account, an organization, a course and — through the console — a
- * course, a project and an account again; it names no owner-facing screen
- * for a *single* project the way `pages/CourseEditor.tsx` is one for a
- * course. `projects.softDelete` (`@bloombot/actions`) is registered and
- * tested at the action layer (`packages/actions/tests/soft-delete.test.ts`)
- * regardless — the repo/action pair this slice's own brief asked for exists
- * whether or not a screen calls it yet — this wrapper is kept alongside it
- * so a future single-project screen has an existing, already-tested call to
- * reach for rather than reinventing the same `dispatchAction` plumbing.
+ * Called from two places: the project's own Danger zone, and (PROJ-11)
+ * `useProjectMenu.tsx`'s own row kebab, which used to call the permanent
+ * `deleteProject` above.
  */
 export function softDeleteProject(
   organizationId: string,
@@ -643,7 +645,14 @@ export function previewDeleteCourse(
   )
 }
 
-/** PROJ-8: permanently delete a course. Cannot be undone. */
+/**
+ * PROJ-8: permanently delete a course. Cannot be undone. PROJ-11 — no
+ * caller in this app any more: `CourseRows.tsx`'s row kebab and the
+ * course's own Danger zone both call `softDeleteCourse` below now, and this
+ * wrapper is kept only so `courses.delete` (`@bloombot/actions`,
+ * owner-gated) stays reachable as an administrative capability without a
+ * second copy of this `dispatchAction` plumbing.
+ */
 export function deleteCourse(
   organizationId: string,
   courseId: string
@@ -661,11 +670,18 @@ export function deleteCourse(
  * WEB-72/DATA-7: delete a course — reversible for the deployment's
  * retention window, then permanent. Only an existing owner of the
  * organization may call this. Distinct from `deleteCourse` above (PROJ-8's
- * own permanent wipe). Typed narrower than `Course` above (`courses.get`'s
- * own shape, with categories) — `courses.softDelete`'s own action hands
- * back the plain deleted row (`@bloombot/db`'s `courses.ts#softDeleteCourse`),
- * never re-reading its categories, and no caller of this function needs
- * them: the panel navigates away once the delete succeeds.
+ * own permanent wipe) — PROJ-11 is what made that distinction matter: the
+ * two are no longer two equally-reachable "Delete" controls on the same
+ * course, since `deleteCourse` has no UI caller left. Typed narrower than
+ * `Course` above (`courses.get`'s own shape, with categories) —
+ * `courses.softDelete`'s own action hands back the plain deleted row
+ * (`@bloombot/db`'s `courses.ts#softDeleteCourse`), never re-reading its
+ * categories, and no caller of this function needs them: the panel
+ * navigates away once the delete succeeds.
+ *
+ * Called from two places: the course's own Danger zone, and (PROJ-11)
+ * `CourseRows.tsx`'s own row kebab, which used to call the permanent
+ * `deleteCourse` above.
  */
 export function softDeleteCourse(
   organizationId: string,

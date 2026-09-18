@@ -1,10 +1,10 @@
 /**
  * WEB-72/DATA-7, end to end: an owner deletes a course from its own
  * General tab's own Danger zone, confirmed by typing its title — the same
- * harness `e2e/delete-project-course.spec.ts` already uses for PROJ-8's
- * own permanent delete, one level over (this is the reversible, soft
- * delete `courses.softDelete` adds, distinct from `courses.delete`, and
- * left unconnected to it — see `docs/DECISIONS.md` D-140).
+ * harness, and (since PROJ-11) the same `courses.softDelete` action,
+ * `e2e/delete-project-course.spec.ts` now drives from the row kebab. The
+ * permanent `courses.delete` (PROJ-8) is no longer reachable from either
+ * surface — see `docs/DECISIONS.md` D-140/D-141.
  */
 
 import { randomUUID } from 'node:crypto'

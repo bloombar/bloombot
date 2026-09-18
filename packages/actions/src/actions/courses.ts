@@ -811,10 +811,18 @@ export const previewDeleteCourseAction: Action<
  * PROJ-8: permanently delete a course, and everything that exists only
  * because of it, in one transaction (`@bloombot/db`'s `deletions.ts#deleteCourse`
  * does the actual removal — see its own module comment for the full
- * ordering and for why `cost_ledger_entries` survives). Same access as
- * `courses.disable` (this file's own module comment on the brief this
- * mirrors) — deleting is not a step up in privilege from disabling, it is
- * the same "stop this course" decision taken further.
+ * ordering and for why `cost_ledger_entries` survives).
+ *
+ * PROJ-11: this is the *irreversible* half of PROJ-8, so it takes the same
+ * owner check `courses.softDelete` (below) already holds itself to — an
+ * adversarial review found this action checking no role at all while the
+ * reversible delete of the same course was owner-only, backwards from what
+ * the two deserve. Retired from the ordinary UI (the row kebab on
+ * `CourseRows.tsx` calls `courses.softDelete` now, same as the Danger
+ * zone); kept as an administrative capability rather than removed — see
+ * `docs/DECISIONS.md` for why — so it stays owner-gated and unreachable by
+ * accident, never a step *up* in privilege from what disabling used to
+ * require.
  */
 export const deleteCourseAction: Action<
   'courses.delete',
@@ -824,7 +832,7 @@ export const deleteCourseAction: Action<
 > = {
   name: 'courses.delete',
   description:
-    'Permanently delete a course (PROJ-8) and everything that exists only because of it — categories and channels, knowledge files, conversations and their messages, enrolments and join links. Spending already recorded survives. Cannot be undone.',
+    'Permanently delete a course (PROJ-8) and everything that exists only because of it — categories and channels, knowledge files, conversations and their messages, enrolments and join links. Spending already recorded survives. Only an existing owner of the organization may call this. Cannot be undone.',
   inputSchema: courseIdInputSchema,
   policy: {
     descriptor: { resource: 'course', access: 'write' },
@@ -832,6 +840,22 @@ export const deleteCourseAction: Action<
   },
   execute: ({ organizationId, entity, accountId, db }) => {
     const deletedByAccountId = requireAccountId(accountId)
+
+    // PROJ-11/TEN-5 — the same `callerMembership` owner check
+    // `courses.softDelete` below holds itself to: a policy cannot see the
+    // caller's own account id, so the check lives here rather than in the
+    // descriptor. A non-owner member is refused (`ActionRefusedError`,
+    // ACT-3), and the refusal reads as not-found, same as every other
+    // TEN-5 refusal in this file.
+    const callerMembership = memberships.getMembership(
+      organizationId,
+      deletedByAccountId,
+      db
+    )
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new ActionRefusedError()
+    }
+
     const result = deletions.deleteCourse(
       organizationId,
       entity.id,
@@ -860,10 +884,10 @@ export const deleteCourseAction: Action<
  * once DATA-8's sweep runs.
  *
  * Distinct from `courses.delete` (PROJ-8, above) — that action *permanently*
- * wipes a course, no name confirmation past the panel's own dialog, no
- * restore, ever; this one is CourseEditor's own Danger-zone delete, the
- * ordinary reversible kind. The two are not connected, and this slice
- * leaves `courses.delete` exactly as it was.
+ * wipes a course outright, no restore, ever; this one is what
+ * `CourseRows.tsx`'s own row kebab and `CourseEditor.tsx`'s Danger zone both
+ * call now (PROJ-11). The two share the identical owner check below rather
+ * than one being the guarded path and the other not.
  *
  * **Only an existing owner of the organization may call this** — the same
  * `callerMembership` check `organizations.ts#softDeleteOrganizationAction`

@@ -13972,3 +13972,44 @@ the database level" limitation `conversations.ts#softDeleteConversationsForPerso
 name, and now no longer does. Proven directly: `apps/api/tests/routes/chat.test.ts` asserts a follow-up
 question after deleting history is answered on a fresh conversation, by the same person, and that deleting
 twice in a row is a harmless no-op the second time.
+
+## D-141 — `packages/actions`/`apps/web`: PROJ-11 — the permanent delete is owner-gated and retired from the UI, but kept as an administrative capability
+
+D-140 named the duplication and left it for whoever decided whether to resolve it: `courses.delete`/
+`projects.delete` (PROJ-8/PROJ-9's permanent wipe) and `courses.softDelete`/`projects.softDelete` (WEB-72/
+DATA-7's reversible one) coexisted, reachable from the identical row kebab, with the permanent one checking no
+role at all. An adversarial review of WEB-72 is what actually forced the decision: the more destructive path
+was the less protected one, and two controls both labelled "Delete" on the same object, with opposite
+consequences, is a trap no dialog wording fully closes.
+
+**The owner check lands on `courses.delete`/`projects.delete` first, as its own commit** — the same
+`callerMembership` check the soft-delete pair already holds itself to, refusing a non-owner
+`ActionRefusedError` (TEN-5: not-found-shaped). This half stands alone and is reviewable independently of
+what follows.
+
+**The row kebab (`CourseRows.tsx`, `useProjectMenu.tsx`) now calls `courses.softDelete`/`projects.softDelete`
+instead of the permanent pair**, keeping the preview (`courses.previewDelete`/`projects.previewDelete`) and
+the typed-name gate exactly as WEB-50 describes them, but wording the dialog "reversible for the deployment's
+retention window, and permanent after that" rather than "cannot be undone" — the same wording the Danger zone
+already uses, so the same control reads the same way everywhere it appears now.
+
+**`courses.delete`/`projects.delete` are kept, not removed**, even though nothing in this app's UI calls
+either any more (the admin console's own Danger zones already called the soft-delete pair before this slice —
+`admin/CourseDetail.tsx`/`ProjectDetail.tsx`'s own module comments). Two reasons: PROJ-8/PROJ-9 remain
+documented requirements in `docs/SPEC.md`, describing a real, transactional, audited permanent wipe that this
+slice's own brief explicitly preserves ("What remains of PROJ-8/PROJ-9 is the preview — an administrator
+still sees what a deletion will take with it before confirming" is the *preview* staying reachable, not the
+whole action disappearing); and the worker's own `contentDeletions.removeBytes` job
+(`apps/worker/src/handlers/content-deletions.ts`) — which this slice does not touch, DATA-8 (in flight
+concurrently) reuses it for the sweep rather than building a second implementation — still needs a real
+producer to exercise against in the meantime, and `deleteCourseAction`/`deleteProjectAction` remain that
+producer's own test coverage (`packages/actions/tests/actions.test.ts`) unchanged. Owner-gated and unreachable
+from ordinary UI is the position this slice leaves them in: an administrative capability, not a dead one, and
+no longer the unguarded half of a guarded pair.
+
+**`apps/web/src/api/client.ts`'s own `deleteCourse`/`deleteProject` wrappers are kept, for the identical
+reason** — removing them would break nothing today, since `CourseRows.tsx`/`useProjectMenu.tsx` are their only
+callers and both now call `softDeleteCourse`/`softDeleteProject` instead, but it would also delete the one
+existing, already-typed way to reach the administrative capability the paragraph above keeps. Their doc
+comments are updated (the only edit this slice makes to that file) to say they have no caller in this app any
+more, so the next reader is not left believing the row kebab still calls them.

@@ -544,9 +544,16 @@ export const previewDeleteProjectAction: Action<
  * PROJ-9: permanently delete a project — every course in it exactly as
  * `courses.delete` describes, then the project itself, in one transaction
  * (`@bloombot/db`'s `deletions.ts#deleteProject` does the actual removal).
- * Same access as `projects.archive` (this action's own sibling): deleting is
- * not a step up in privilege from archiving, and an archived project is
- * deleted exactly as readily as a live one (nothing here reads `archivedAt`).
+ *
+ * PROJ-11: this is the *irreversible* half of PROJ-9, so it takes the same
+ * owner check `projects.softDelete` (below) already holds itself to — the
+ * same fix `courses.ts#deleteCourseAction` gets, for the identical reason
+ * (an adversarial review found the permanent path checking no role at all
+ * while the reversible delete of the same project was owner-only). Retired
+ * from the ordinary UI (`useProjectMenu.tsx`'s row kebab calls
+ * `projects.softDelete` now, same as the Danger zone); kept as an
+ * administrative capability rather than removed — see `docs/DECISIONS.md`
+ * for why.
  */
 export const deleteProjectAction: Action<
   'projects.delete',
@@ -556,7 +563,7 @@ export const deleteProjectAction: Action<
 > = {
   name: 'projects.delete',
   description:
-    'Permanently delete a project (PROJ-9) and every course in it — categories and channels, knowledge files, conversations and their messages, enrolments and join links. Spending already recorded survives. Cannot be undone.',
+    'Permanently delete a project (PROJ-9) and every course in it — categories and channels, knowledge files, conversations and their messages, enrolments and join links. Spending already recorded survives. Only an existing owner of the organization may call this. Cannot be undone.',
   inputSchema: projectIdInputSchema,
   policy: {
     descriptor: { resource: 'project', access: 'write' },
@@ -564,6 +571,20 @@ export const deleteProjectAction: Action<
   },
   execute: ({ organizationId, entity, accountId, db }) => {
     const deletedByAccountId = requireAccountId(accountId)
+
+    // PROJ-11/TEN-5 — the same `callerMembership` owner check
+    // `projects.softDelete` below holds itself to: a non-owner member is
+    // refused (`ActionRefusedError`, ACT-3), reading as not-found the same
+    // way every other TEN-5 refusal in this file does.
+    const callerMembership = memberships.getMembership(
+      organizationId,
+      deletedByAccountId,
+      db
+    )
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new ActionRefusedError()
+    }
+
     const result = deletions.deleteProject(
       organizationId,
       entity.id,
@@ -590,10 +611,10 @@ export const deleteProjectAction: Action<
  * DATA-8's sweep runs.
  *
  * Distinct from `projects.delete` (PROJ-9, above) — that action
- * *permanently* wipes a project, no restore, ever; this one is the
- * ordinary, reversible delete this slice's own Danger zone offers. The two
- * are not connected, and this slice leaves `projects.delete` exactly as it
- * was.
+ * *permanently* wipes a project outright, no restore, ever; this one is what
+ * `useProjectMenu.tsx`'s own row kebab and the Danger zone both call now
+ * (PROJ-11). The two share the identical owner check below rather than one
+ * being the guarded path and the other not.
  *
  * **Only an existing owner of the organization may call this** — the same
  * `callerMembership` check `organizations.ts#softDeleteOrganizationAction`/

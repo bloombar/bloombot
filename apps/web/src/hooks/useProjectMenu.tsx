@@ -61,10 +61,10 @@ import { type ReactNode, useState } from 'react'
 
 import {
   archiveProject,
-  deleteProject,
   duplicateProject,
   previewDeleteProject,
   renameProject,
+  softDeleteProject,
   unarchiveProject,
 } from '../api/client.js'
 import { ApiError } from '../api/client.js'
@@ -252,12 +252,17 @@ export function useProjectMenu(
   }
 
   /**
-   * PROJ-9/WEB-50: preview, then confirm by typing the project's own name,
-   * then permanently delete — the same shape `pages/Admin.tsx#handleDelete`
-   * already gives ADMIN-5's own tenant deletion, and the same one
-   * `components/CourseRows.tsx#handleDelete` gives one course at a time.
-   * `onDeleted()` — not `onChanged` — is the caller's cue: the project is
-   * gone, not merely different.
+   * PROJ-9/WEB-50/PROJ-11: preview, then confirm by typing the project's own
+   * name, then delete — the same preview-then-typed-confirm shape
+   * `pages/Admin.tsx#handleDelete` gives ADMIN-5's own tenant deletion, and
+   * `components/CourseRows.tsx#handleDelete` gives one course at a time. The
+   * delete itself is `projects.softDelete` (WEB-72/DATA-7), the same
+   * reversible-then-permanent action the project's own Danger zone calls —
+   * PROJ-11 retired this row kebab's own call to the permanent
+   * `projects.delete`, so the two "Delete" controls this product used to
+   * offer on the same project, with opposite consequences, are one control
+   * now. `onDeleted()` — not `onChanged` — is the caller's cue: the project
+   * is gone, not merely different.
    */
   const handleDelete = async (project: Project) => {
     onError(undefined)
@@ -273,11 +278,12 @@ export function useProjectMenu(
     const typed = await prompt({
       title: `Delete ${project.name}?`,
       description:
-        `This permanently deletes ${preview.courses} course(s), ` +
+        `This deletes ${preview.courses} course(s), ` +
         `${preview.conversations} conversation(s), ${preview.messages} message(s), ` +
         `${preview.enrolments} enrolment(s) and ${preview.courseAttachments} ` +
         'knowledge file(s). Spending already recorded survives. Discord channels ' +
-        'and roles are not touched. This cannot be undone. Type the project’s ' +
+        'and roles are not touched. It is reversible for the deployment’s ' +
+        'retention window, and permanent after that. Type the project’s ' +
         'name to confirm.',
       label: 'Project name',
       placeholder: project.name,
@@ -292,7 +298,7 @@ export function useProjectMenu(
 
     setBusyProjectId(project.id)
     try {
-      await deleteProject(organizationId, project.id)
+      await softDeleteProject(organizationId, project.id)
       onDeleted()
     } catch (caught) {
       if (caught instanceof ApiError) onError(caught)

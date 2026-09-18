@@ -24,12 +24,12 @@
 import { useState } from 'react'
 
 import {
-  deleteCourse,
   disableCourse,
   downloadTextFile,
   enableCourse,
   exportCourse,
   previewDeleteCourse,
+  softDeleteCourse,
 } from '../api/client.js'
 import { ApiError } from '../api/client.js'
 import type { CourseSummary } from '../api/types.js'
@@ -138,12 +138,18 @@ export function CourseRows({
   }
 
   /**
-   * PROJ-8/WEB-50: preview, then confirm by typing the course's own title,
-   * then permanently delete — the same shape `pages/Admin.tsx#handleDelete`
-   * already gives ADMIN-5's own tenant deletion. On success, `onChanged()`
-   * (the caller's own refetch) is what makes the row disappear — this
-   * component never removes it from `courses` itself. On failure the row
-   * stays and the error is reported the usual way (WEB-5).
+   * PROJ-8/WEB-50/PROJ-11: preview, then confirm by typing the course's own
+   * title, then delete — the same preview-then-typed-confirm shape
+   * `pages/Admin.tsx#handleDelete` gives ADMIN-5's own tenant deletion, but
+   * the delete itself is `courses.softDelete` (WEB-72/DATA-7), the same
+   * reversible-then-permanent action `pages/CourseEditor.tsx`'s own Danger
+   * zone calls — PROJ-11 retired this row kebab's own call to the
+   * permanent `courses.delete`, so the two "Delete" controls this product
+   * used to offer on the same course, with opposite consequences, are one
+   * control now. On success, `onChanged()` (the caller's own refetch) is
+   * what makes the row disappear — this component never removes it from
+   * `courses` itself. On failure the row stays and the error is reported
+   * the usual way (WEB-5).
    */
   const handleDelete = async (course: CourseSummary) => {
     setError(undefined)
@@ -159,11 +165,12 @@ export function CourseRows({
     const typed = await prompt({
       title: `Delete ${course.title}?`,
       description:
-        `This permanently deletes ${preview.conversations} conversation(s), ` +
+        `This deletes ${preview.conversations} conversation(s), ` +
         `${preview.messages} message(s), ${preview.enrolments} enrolment(s) and ` +
         `${preview.courseAttachments} knowledge file(s). Spending already recorded ` +
         'survives. Discord channels and roles are not touched. ' +
-        'This cannot be undone. Type the course’s title to confirm.',
+        'It is reversible for the deployment’s retention window, and permanent ' +
+        'after that. Type the course’s title to confirm.',
       label: 'Course title',
       placeholder: course.title,
       confirmLabel: 'Delete',
@@ -177,7 +184,7 @@ export function CourseRows({
 
     setBusyCourseId(course.id)
     try {
-      await deleteCourse(organizationId, course.id)
+      await softDeleteCourse(organizationId, course.id)
       onChanged()
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)

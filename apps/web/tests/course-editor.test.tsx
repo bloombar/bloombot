@@ -1952,6 +1952,55 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
   })
 
+  // WEB-74: each option's visible text is the binding's own name (WEB-68's
+  // `serverName`) rather than the bare snowflake id, falling back to the id
+  // for a binding recorded before that column existed — and saving still
+  // sends the id, never the label.
+  it("shows a binding's name when one was recorded, falls back to the id when not, and saves the chosen id either way", async () => {
+    const named: DiscordServerBindingSummary = {
+      ...BINDING_A,
+      serverName: 'CS 101 Study Group',
+    }
+    listDiscordServers.mockResolvedValue([named, BINDING_B])
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue({ ...COURSE, discordServerId: 'guild-a' })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    const select = await screen.findByLabelText('Discord server')
+
+    // The named binding reads by name, not by id.
+    expect(
+      within(select).getByRole('option', { name: 'CS 101 Study Group' })
+    ).toHaveValue('guild-a')
+    // The unnamed binding still falls back to its id, exactly as before.
+    expect(within(select).getByRole('option', { name: 'guild-b' })).toHaveValue(
+      'guild-b'
+    )
+
+    fireEvent.change(select, { target: { value: 'guild-a' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({ discordServerId: 'guild-a' })
+      )
+    )
+  })
+
   it('does not send discordServerId at all while the selector is hidden — never forces every course to null the moment a second server is installed', async () => {
     listDiscordServers.mockResolvedValue([])
     getCourse.mockResolvedValue(COURSE)

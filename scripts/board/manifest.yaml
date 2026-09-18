@@ -4812,5 +4812,23 @@
   section: §48 Acknowledging What a Roster Upload Is
   family: ROST
   phase: 43
+  status: Done
+  review: false
+- id: ROST-20
+  title: A roster acknowledgement is recorded, and readable afterwards by the
+    people it concerns
+  full: "ROST-19's acknowledgement is only worth what it can be shown to have
+    been. Every roster import records one entry: who acknowledged, when, which
+    course and organization it was for, the file they imported, the import job
+    it started, and which wording they were shown — an identifier for the
+    acknowledgement text as it stood that day, so a later edit to that wording
+    cannot be mistaken for what an earlier instructor agreed to. The entry is
+    written as part of starting the import, so an import that never started
+    records nothing and an import that started can never lack one. An entry is
+    never deleted and never edited. It is an account of something that happened,
+    not a setting. Three screens read it…"
+  section: §48 Acknowledging What a Roster Upload Is
+  family: ROST
+  phase: 43
   status: In progress
   review: false

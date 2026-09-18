@@ -521,4 +521,4 @@ said nothing about that. This phase puts an acknowledgement in front of it, tick
 FERPA, state student-data law, whose determination it is, and the fact that this service cannot forget one
 student's part of what it is given.
 
-**In scope:** ROST-19
+**In scope:** ROST-19, ROST-20

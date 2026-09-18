@@ -50,7 +50,7 @@ export function CoursesView({
   const search = useListSearch(
     courses,
     (course) =>
-      `${course.courseTitle} ${course.projectName} ${course.organizationName} ${course.ownerEmails.join(' ')}`
+      `${course.courseTitle} ${course.projectName} ${course.organizationName} ${course.owners.map((owner) => owner.email).join(' ')}`
   )
 
   if (courses === undefined) {
@@ -172,13 +172,14 @@ export function CoursesView({
  * above, the same "one row shape, two action columns" the `<Button>`
  * alone differs between.
  *
- * ADMIN-6 — the title is a link into `'admin-course'`. ADMIN-12 — the
- * organization is now a link into `'admin-organization'` too, the same
- * "every entity named here is a real link" treatment `OrganizationsList`
- * already gives its own rows. The project stays plain text: `AdminCourseSummary`
- * (`courseApproval.CourseForApproval`, `packages/db`) carries `projectName`
- * but no `projectId` — this slice touches `apps/web`/`e2e` only, so making
- * the project a link too is out of scope here (`docs/DECISIONS.md` D-128).
+ * ADMIN-6 — the title is a link into `'admin-course'`. ADMIN-12/ADMIN-7 —
+ * the project, the organization and every owner are now links too (into
+ * `'admin-project'`, `'admin-organization'` and `'admin-account'`
+ * respectively), the same "every entity named here is a real link"
+ * treatment `OrganizationsList` already gives its own rows — the last gap
+ * two reviews flagged, closed by `AdminCourseSummary` (`courseApproval.CourseForApproval`,
+ * `packages/db`) now carrying `projectId` and each owner's `accountId`
+ * alongside its name/email (`docs/DECISIONS.md` D-130).
  */
 function CourseRowDetail({
   course,
@@ -197,7 +198,14 @@ function CourseRowDetail({
         {course.courseTitle}
       </AppLink>
       <p className="text-xs text-neutral-500">
-        {course.projectName} ·{' '}
+        <AppLink
+          to={{ kind: 'admin-project', projectId: course.projectId }}
+          navigate={navigate}
+          className="text-brand-700 underline-offset-2 hover:underline"
+        >
+          {course.projectName}
+        </AppLink>{' '}
+        ·{' '}
         <AppLink
           to={{
             kind: 'admin-organization',
@@ -208,7 +216,23 @@ function CourseRowDetail({
         >
           {course.organizationName}
         </AppLink>
-        {course.ownerEmails.length > 0 && ` · ${course.ownerEmails.join(', ')}`}
+        {course.owners.length > 0 && (
+          <>
+            {' · '}
+            {course.owners.map((owner, index) => (
+              <span key={owner.accountId}>
+                {index > 0 && ', '}
+                <AppLink
+                  to={{ kind: 'admin-account', accountId: owner.accountId }}
+                  navigate={navigate}
+                  className="text-brand-700 underline-offset-2 hover:underline"
+                >
+                  {owner.email}
+                </AppLink>
+              </span>
+            ))}
+          </>
+        )}
       </p>
       <p className="text-xs text-neutral-400">
         Created {new Date(course.createdAt).toLocaleString()}

@@ -345,9 +345,18 @@ describe('courseApproval.isAdministratorOwnedOrganization (COST-8)', () => {
 })
 
 describe('courseApproval.listCoursesForApproval (COST-8/WEB-53)', () => {
-  it('lists pending and approved courses across every organization, with owner emails', () => {
+  it('lists pending and approved courses across every organization, with owner ids and emails (ADMIN-12)', () => {
     testDb = createTestDatabase()
-    const { organizationId, course, owner } = seedOrganizationWithCourse(testDb)
+    const { organizationId, project, course, owner } =
+      seedOrganizationWithCourse(testDb)
+    // A second owner on the same organization — proves the batched lookup
+    // (`listCoursesForApproval`'s own comment on "one query, not one per
+    // course") still returns every owner, not merely the first.
+    const secondOwner = accounts.createAccount(
+      organizationId,
+      { email: 'co-owner@example.edu', displayName: 'Co-Owner', role: 'owner' },
+      testDb.db
+    )
     courseApproval.approveCourse(
       organizationId,
       course.id,
@@ -390,19 +399,29 @@ describe('courseApproval.listCoursesForApproval (COST-8/WEB-53)', () => {
     )
     expect(approvedRow).toMatchObject({
       courseTitle: 'Web Design',
+      projectId: project.id,
       projectName: 'Fall 2026',
       organizationName: 'Org',
-      ownerEmails: ['owner@example.edu'],
       // WEB-53's "who acted" — the deliberate `'approve'` above names the
       // owner both by id and by email.
       aiApprovedByAccountId: owner.id,
       aiApprovedByEmail: 'owner@example.edu',
     })
+    expect(approvedRow?.owners).toEqual(
+      expect.arrayContaining([
+        { accountId: owner.id, email: 'owner@example.edu' },
+        { accountId: secondOwner.id, email: 'co-owner@example.edu' },
+      ])
+    )
+    expect(approvedRow?.owners).toHaveLength(2)
     expect(approvedRow?.aiApprovedAt).not.toBeNull()
     expect(pendingRow).toMatchObject({
       courseTitle: 'Pending Course',
+      projectId: otherProject.id,
       projectName: 'Spring 2027',
       organizationName: 'Other Org',
+      // `otherOrg` has no owner account seeded — a course with no owners.
+      owners: [],
       aiApprovedByAccountId: null,
       aiApprovedByEmail: null,
     })

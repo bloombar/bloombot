@@ -81,6 +81,19 @@ describe('Jobs (JOB-2)', () => {
     expect(screen.getByText('Attempt 0 of 5')).toBeInTheDocument()
   })
 
+  // WEB-70: a job names the ordinary-language work it did, not only its
+  // internal `kind` string — this asserts the readable title and
+  // description `describeJob` (`pages/job-descriptions.ts`) returns for
+  // `roster.import`, the kind this screen's other tests already seed.
+  it('shows a readable title and description for the job, not only its internal kind', async () => {
+    listJobs.mockResolvedValue([job({ kind: 'roster.import' })])
+
+    renderWithModal(<Jobs organizationId="org-1" />)
+
+    expect(await screen.findByText('Import roster')).toBeInTheDocument()
+    expect(screen.getByText(/enrolled them in the course/)).toBeInTheDocument()
+  })
+
   it('a running job reads distinctly from both pending and failed', async () => {
     listJobs.mockResolvedValue([job({ status: 'running', attempts: 1 })])
 

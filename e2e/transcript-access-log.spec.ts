@@ -140,7 +140,11 @@ test('an owner reads a course transcript, then reads its own access log — a di
   await page.getByRole('button', { name: 'Apply filters' }).click()
 
   // 4. ADMIN-2: the Access log section, owner-only, names who read and
-  //    whose conversation it named — display names, never an email.
+  //    whose conversation it named — display names, never an email
+  //    (`transcripts.ts`'s own module comment: this is specifically about
+  //    `TranscriptAccessLogRow`, resolved through `actorDisplayName`/
+  //    `personDisplayName`, never `people.email`/`accounts.email`).
+  const accessLog = page.getByTestId('transcript-access-log')
   await expect(page.getByRole('heading', { name: 'Access log' })).toBeVisible()
   await expect(
     page.getByText(`${ownerDisplayName} read ${studentDisplayName}`)
@@ -149,5 +153,12 @@ test('an owner reads a course transcript, then reads its own access log — a di
   await expect(
     page.getByText(`${ownerDisplayName} read the whole course`)
   ).toBeVisible()
-  await expect(page.locator('body')).not.toContainText(studentEmail)
+  // WEB-65 — scoped to the Access log section specifically, not the whole
+  // page: this screen's own entry list now applies WEB-52's own
+  // identification rule to a message's own heading, which *does* fall back
+  // to an email when no name is known (this seeded student's own case) —
+  // a deliberate behaviour change from before this slice, not a regression
+  // of the access log's own narrower "never an email" guarantee this
+  // assertion is actually about.
+  await expect(accessLog).not.toContainText(studentEmail)
 })

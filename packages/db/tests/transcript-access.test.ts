@@ -154,6 +154,91 @@ describe('transcriptAccess.readCourseTranscript (ADMIN-1, ADMIN-2)', () => {
     expect(result?.entries[0]?.content).toBe('Is class cancelled?')
   })
 
+  // WEB-66 — a surface filter narrows a transcript read, combining with
+  // (not replacing) the student and date filters already proven above.
+  // Fails without the `input.surface` condition this slice adds to
+  // `readCourseTranscript`'s own query.
+  it('filters by surface (WEB-66)', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, instructor, alice } =
+      seedCourseWithMessages(testDb)
+
+    const discordConversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId: course.id, personId: alice.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!discordConversation) throw new Error('setup failed: conversation')
+    conversations.appendMessage(
+      organizationId,
+      discordConversation.id,
+      {
+        direction: 'from_person',
+        content: 'Asked over Discord',
+        surface: 'discord',
+        createdAt: 4_000,
+      },
+      testDb.db
+    )
+
+    const result = transcriptAccess.readCourseTranscript(
+      organizationId,
+      {
+        courseId: course.id,
+        actorAccountId: instructor.id,
+        surface: 'discord',
+        kind: 'read',
+      },
+      testDb.db
+    )
+
+    expect(result?.entries).toHaveLength(1)
+    expect(result?.entries[0]?.content).toBe('Asked over Discord')
+    expect(result?.entries[0]?.surface).toBe('discord')
+  })
+
+  // WEB-66 — the surface filter combines with the student filter rather
+  // than replacing it: Bob has no Discord message at all, so a Discord
+  // filter on Bob returns nothing, even though an unfiltered read for Bob
+  // (proven above) returns one.
+  it('combines the surface filter with the student filter (WEB-66)', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, instructor, alice, bob } =
+      seedCourseWithMessages(testDb)
+
+    const discordConversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId: course.id, personId: alice.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!discordConversation) throw new Error('setup failed: conversation')
+    conversations.appendMessage(
+      organizationId,
+      discordConversation.id,
+      {
+        direction: 'from_person',
+        content: 'Asked over Discord',
+        surface: 'discord',
+        createdAt: 4_000,
+      },
+      testDb.db
+    )
+
+    const result = transcriptAccess.readCourseTranscript(
+      organizationId,
+      {
+        courseId: course.id,
+        actorAccountId: instructor.id,
+        personId: bob.id,
+        surface: 'discord',
+        kind: 'read',
+      },
+      testDb.db
+    )
+
+    expect(result?.entries).toHaveLength(0)
+  })
+
   it('filters by date range (ADMIN-1)', () => {
     testDb = createTestDatabase()
     const { organizationId, course, instructor } =
@@ -209,6 +294,54 @@ describe('transcriptAccess.readCourseTranscript (ADMIN-1, ADMIN-2)', () => {
       kind: 'read',
     })
     expect(log[0]?.createdAt).toBeGreaterThanOrEqual(before)
+  })
+
+  // "Also worth doing" (review) — the audit row exists to say what an
+  // access covered (ADMIN-2's own "an institution has to be able to
+  // account for"), the same reasoning `startAt`/`endAt` already carry —
+  // without this, a Discord-only read logged identically to a whole-course
+  // one over the same dates.
+  it('records the surface filter on the audit entry (WEB-66)', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, instructor } =
+      seedCourseWithMessages(testDb)
+
+    transcriptAccess.readCourseTranscript(
+      organizationId,
+      {
+        courseId: course.id,
+        actorAccountId: instructor.id,
+        surface: 'discord',
+        kind: 'read',
+      },
+      testDb.db
+    )
+
+    const log = transcriptAccess.listAccessLogForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+    expect(log[0]?.surface).toBe('discord')
+  })
+
+  it('records an unfiltered access with surface: null when no surface filter is given', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, instructor } =
+      seedCourseWithMessages(testDb)
+
+    transcriptAccess.readCourseTranscript(
+      organizationId,
+      { courseId: course.id, actorAccountId: instructor.id, kind: 'read' },
+      testDb.db
+    )
+
+    const log = transcriptAccess.listAccessLogForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+    expect(log[0]?.surface).toBeNull()
   })
 
   it('records an unfiltered read with personId: null', () => {

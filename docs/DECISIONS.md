@@ -13180,3 +13180,151 @@ implementation detail of the extraction.
   caught up to yet. The data-loading effect itself is left with only the async `getCourse` fetch. New test:
   `tests/course-editor-usage-transcripts.test.tsx` — "switching from course A's Transcripts tab to course
   B's General tab issues no read for course B".
+
+## D-125 — `packages/db`/`packages/actions`/`apps/worker`/`apps/web`/`apps/api`: WEB-65/WEB-66 — a message's own provenance, and a surface filter
+
+**`TranscriptEntry` (`@bloombot/db`'s `transcript-access.ts`) is widened, not replaced.** WEB-65 asks every
+message a reader sees to say where it came from and who said it. The rows this file already selected (a
+join against `people`) had only `personDisplayName` (that person's own Discord display name, despite the
+generic field name) to go on; `messages.surface`/`channelRef`/`categoryRef` were already columns on
+`messages`, unread by this function until now. The change is additive on both sides:
+`personFirstName`/`personLastName`/`personEmail`
+join `personDisplayName` so a caller can apply WEB-52's own "who is this" rule (full name, else email, else
+Discord name, else id) to a message's own heading — not only to a `CoursePeople.tsx` row — and
+`surface`/`channelRef`/`categoryRef` are carried straight through. `apps/web/src/person-identity.ts` is a new,
+small shared function applying that rule for a heading specifically (narrower than `CoursePeople.tsx`'s own
+`identityFields`/`primaryField`, which labels every known identifier for a People row rather than picking one
+for a heading) — the same "one shared function, not a second copy" reasoning `surface-label.ts`'s own module
+comment already gives for COST-7's vocabulary, which this slice also extends with `TRANSCRIPT_SURFACES` (the
+three real surfaces, for the filter's own options — narrower than `CostBySurface['surface']`, which also
+carries `'unknown'` for a cost-ledger row from before surfaces were tracked, a case a *message's* own surface
+can never be in).
+
+**`transcript_exports` grows a `surface` column (migration `0034`), the same shape `startAt`/`endAt` already
+have.** WEB-66 asks an export to reflect whatever filter is in force, exactly as it already does for the
+other two — so the filter has to survive from the action's own input, onto the pending row, into
+`apps/worker`'s own handler, which is the only thing that can apply it (the row is read back inside a
+separate job, not inside the same request that created it). `drizzle-kit generate`'s own output for this
+column had to be hand-fixed: SQLite's own "rebuild the table" recipe for a new, checked column selected
+`"surface"` off the *old* table (which has no such column) in its own `INSERT ... SELECT`, rather than a
+literal — the same class of defect `0030_uneven_human_torch.sql`'s own comment already documents for
+`cost_ledger_entries.surface`, though that column was `NOT NULL` and backfilled to `'unknown'`; this one is
+nullable, and `NULL` (no filter was ever requested) is the accurate backfill, not a guess.
+
+**The worker handler projects its own export entries explicitly now, rather than spreading `transcript.entries`
+for the identified (student-filtered) case.** Before this slice, an *unfiltered* export already projected
+explicitly (`participant`/`direction`/`content`/`createdAt`, PPL-5's own gate) while a *filtered* export
+spread every field `TranscriptEntry` carried straight into the file — safe only because that type carried
+nothing beyond `personId`/`personDisplayName`/`direction`/`content`/`createdAt` at the time. Widening
+`TranscriptEntry` with `personFirstName`/`personLastName`/`personEmail` for the panel's own heading would
+otherwise have silently added a student's full name and email to every filtered export's own file — a real
+disclosure this slice's brief never asked for and PPL-5's own gate was never re-examined against. Both
+branches of `apps/worker/src/handlers/transcripts.ts` now project explicitly, carrying only
+`surface`/`channelRef`/`categoryRef` as new fields; `personEmail`/`personFirstName`/`personLastName` never
+reach either export shape.
+
+**Chat's own heading needed a name from somewhere the browser does not otherwise have.** `ChatMessageEntry`
+carried no identity field at all before this slice — `pages/Chat.tsx` is a one-to-one thread, and CORE-7/
+CORE-8's own `addressPersonForWeb` already decided the *model's* own address for the student, not what the
+*panel* shows. WEB-65's heading rule needs one name for the whole thread (every message is either from this
+account or addressed to it), so `routes/chat.ts`'s own `GET .../messages` now returns `studentName` alongside
+`messages` — computed server-side by a new `chatStudentName`, the identical WEB-52 rule
+`person-identity.ts`'s own `personIdentity` applies in the browser, necessarily duplicated rather than
+shared: the two operate on different input shapes across the PLAT-2 app boundary (`people.Person` fields
+server-side, `TranscriptEntry`'s own fields in the browser), the same "duplicated by necessity, not by
+laziness" precedent this file's own `today()` helper already sets across `apps/bot`/`apps/api`.
+
+**The surface filter is uncontrolled, like `personId`, not controlled like the two dates.**
+`components/TranscriptBrowser.tsx`'s own module comment already explains why `startDate`/`endDate` are
+controlled props (`pages/Transcripts.tsx` must survive an *ordinary* course change) while `personId` resets
+on every fresh mount. Nothing in WEB-66's own text asks a surface filter to survive a course change either,
+so it follows `personId`'s own shape — local state, reset by a fresh mount — rather than adding a third
+controlled prop pair for no requirement that asked for one.
+
+Verification: new repository tests (`packages/db/tests/transcript-access.test.ts` — a surface filter narrows a
+read, combined with the student filter — both proven to fail at the pre-change commit in a throwaway `git
+worktree`), action tests (`packages/actions/tests/transcripts.test.ts` — the filter narrows `.read`, an
+unknown surface value is refused by the schema, `.export` carries the filter onto the pending row), a worker
+test (`apps/worker/tests/handlers/transcripts.test.ts` — the file's own `filters.surface` and each entry's own
+`surface` reflect the request), an API test (`apps/api/tests/routes/chat.test.ts` — every message on a chat
+thread carries its own surface, and the response carries `studentName` once), and web tests across
+`chat-message.test.tsx`, `chat.test.tsx`, `transcripts.test.tsx` and `course-editor-usage-transcripts.test.tsx`
+(headings, surface/category/channel display, the filter rendering between Student and From on both the
+screen and the tab, and narrowing what is read). A new e2e spec, `e2e/transcript-surface-filter.spec.ts`,
+seeds messages from two surfaces in one course, filters to one, and checks the export request's own row
+carries the same filter (read back directly — no worker runs in this harness, `course-usage-transcripts-tabs.spec.ts`'s
+own precedent).
+
+**A pre-existing e2e assertion (`e2e/transcript-access-log.spec.ts`) had to narrow its own scope, deliberately,
+not merely to make it pass.** It asserted the *whole page* never contained its seeded student's own email;
+that student was seeded with a display name and an email but no first/last name, so at the point this was
+first written (WEB-52's own literal order — name, else email, else Discord name, else id), the entry's own
+heading showed that email. Correct, deliberate behaviour this slice's brief asks for, not a leak — but the
+review round below moved a Discord display name ahead of an email for a heading specifically, and this
+fixture's own `displayName` is exactly that field, so the entry now shows the Discord display name instead
+and the email no longer reaches the entry list at all. The assertion is left narrowed regardless: what it was
+actually guarding — `transcripts.ts`'s own "No email, ever" module comment — is narrower than "the whole
+page" on its own terms, specifically about `TranscriptAccessLogRow` (ADMIN-2's audit trail), resolved through
+`actorDisplayName`/`personDisplayName` and never `people.email`/`accounts.email`, a guarantee this slice does
+not touch — the fixture's own name field happening to change which fallback tier fires is not a reason to
+widen the assertion back to a scope it never actually needed. Scoped to
+`[data-testid="transcript-access-log"]`, which is what the code it is testing actually promises.
+
+**Review round — four must-fixes, one design change, and the access log gets the same filter.**
+
+1. **The export's PII projection had no test that would fail without it** (`apps/worker/src/handlers/transcripts.ts`,
+   the student-filtered branch's explicit projection this file already describes above). Restoring the old
+   `...transcript.entries` spread there left `npx vitest run apps/worker` green while an instructor's own
+   downloaded, student-filtered export gained that student's email — the existing shape assertions covered
+   only `personId`/`content`, and `seedCourseWithTranscript`'s own student carries no email or name at all, so
+   even a whole-file string search passed vacuously. New test,
+   `apps/worker/tests/handlers/transcripts.test.ts` — "never carries a student's email, first or last name
+   into a student-filtered export, even though it carries their identity" — seeds a student with all three
+   (`people.createPerson` + `connectIdentity`, for PPL-5's own `hasVerifiedAddress` gate) and asserts both
+   that the properties are absent (not merely that their values don't appear as a string — a `null`-valued
+   field would defeat that) and that the raw bytes never contain them. Confirmed to fail (restoring the old
+   spread, by hand, in this same working tree) before the fix, passing after.
+2. **Chat could render a heading with no name.** `studentName` starts `''` while the composer was already
+   enabled — a message sent before the `GET .../messages` response landed rendered an empty heading, and a
+   reply arriving first read "Bloombot to " with nothing after it. Fixed at the source, in `pages/Chat.tsx`,
+   not in `ChatMessage.tsx`: `canSend` (`messages !== undefined`, the same condition the `.then` that sets
+   both `messages` and `studentName` together already gates) disables the composer and the Send button, and
+   `handleSend` itself no-ops without it — a message that will only ever land with a real name should not be
+   possible to send before one is known, not merely hidden once it exists without one.
+3. **Two mocks were stale, silently.** `shell.test.tsx`/`app.test.tsx` both had `getChatMessages.mockResolvedValue([])`
+   — the shape this function returned before this slice added `studentName` alongside `messages`.
+   `Chat.tsx#loadMessages` reads `result.messages`, `undefined` off a bare array, so every test in both files
+   left `Chat` stuck in its own loading skeleton forever; neither file asserts on the thread itself, so nothing
+   noticed. Fixed to `{ messages: [], studentName: 'Jordan' }`, the same harmless default shape
+   `chat.test.tsx`'s own `beforeEach` already uses.
+4. **WEB-52's identification order was untested in both copies** (`apps/web/src/person-identity.ts` and
+   `routes/chat.ts`'s own `chatStudentName`) — every heading test elsewhere in this suite set only
+   `personDisplayName`, never exercising the ordering against the other fields, and the one API assertion
+   that touched `studentName` at all (`.length > 0`) would have passed identically for a bare person id. New:
+   `apps/web/tests/person-identity.test.ts` (four tests, one per tier, each with every lower-priority field
+   also populated so a tier winning actually proves the ordering) and four scenarios in
+   `apps/api/tests/routes/chat.test.ts` (a name tier pinned exactly, `discordPersonId`'s own bare-id case
+   strengthened from `.length > 0` to an exact match, plus the Discord-name-over-email and email-over-id
+   tiers below).
+
+**Design change, not mine — the coordinator's call, recorded here as asked: a heading prefers a Discord
+display name over an email.** Final order: full name, then Discord display name, then email, then the bare
+id — WEB-52's own order (name, email, Discord name, id) with the last two swapped, in both
+`person-identity.ts` and `chatStudentName`. WEB-52's ordering was written for `CoursePeople.tsx`'s own
+*labelled* row, where `Email: jane@x.edu` cannot be mistaken for anything else; a heading carries no label at
+all — it *is* the name slot — and a bare, unlabelled address sitting there reads as nobody in particular,
+exactly the discomfort `CoursePeople.tsx`'s own `Email:` prefix exists to avoid in the first place. A Discord
+display name is a name in the sense a heading wants; an email is not, so it now sits ahead of only the bare
+id, never ahead of a Discord name.
+
+**Also worth doing, done: the ADMIN-2 access-log row now names the surface filter an access applied.**
+`transcript_access_log` gains a `surface` column (migration `0035`, the same nullable/checked shape
+`transcript_exports.surface` already has, and the same drizzle-kit hand-fix `0034`'s own comment already
+documents — `INSERT ... SELECT` selecting a `"surface"` column off the pre-migration table rather than a
+`NULL` literal). `readCourseTranscript` records `input.surface` on the audit insert it already writes;
+`transcripts.listAccessLog` (`@bloombot/actions`) carries it straight through — no new resolution needed, it
+is not another identity to look up. `TranscriptBrowser.tsx`'s own access-log line appends `· <surface label>`
+when one was applied, omitted (not "any surface") otherwise, the same discipline an entry's own missing
+surface already holds itself to. Without this, a Discord-only read and a whole-course read over the same
+dates were indistinguishable on this row, even though ADMIN-2's own "an institution has to be able to account
+for" means what an access covered, not merely that one happened.

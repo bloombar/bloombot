@@ -113,9 +113,15 @@ async function selectProjectAndCourse(
       {
         personId: 'person-1',
         personDisplayName: 'Alice',
+        personFirstName: null,
+        personLastName: null,
+        personEmail: null,
         direction: 'from_person',
         content: 'What is the deadline?',
         createdAt: Date.now(),
+        surface: null,
+        channelRef: null,
+        categoryRef: null,
       },
     ],
   })
@@ -217,6 +223,89 @@ describe('Transcripts (ADMIN-1)', () => {
         endAt: expectedEndAt,
       })
     )
+  })
+
+  // WEB-66 — the surface filter renders between Student and From, and
+  // narrows what `readTranscript` is called with, combined with (not
+  // replacing) the other filters.
+  it('offers a surface filter between Student and From, narrowing readTranscript’s own call', async () => {
+    await selectProjectAndCourse()
+    readTranscript.mockClear()
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    const labels = screen
+      .getAllByText(/^(Student|Surface|From)$/)
+      .map((el) => el.textContent)
+    expect(labels).toEqual(['Student', 'Surface', 'From'])
+
+    const { fireEvent } = await import('@testing-library/react')
+    fireEvent.change(await screen.findByLabelText('Surface'), {
+      target: { value: 'discord' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    await waitFor(() =>
+      expect(readTranscript).toHaveBeenLastCalledWith('org-1', COURSE.id, {
+        surface: 'discord',
+      })
+    )
+  })
+
+  // WEB-65 — a student's own message is headed by their name alone, and
+  // the bot's reply "Bloombot to `<name>`" — replacing the former
+  // "asked"/"answered" pairing.
+  it('heads a student message by their own name, and the reply "Bloombot to `<name>`" (WEB-65)', async () => {
+    await selectProjectAndCourse()
+    // Waits for this screen's own mount-triggered read to resolve before
+    // clicking "Apply filters" again — otherwise that button still reads
+    // "Loading…" (`components/TranscriptBrowser.tsx`'s own `loading` state)
+    // from the first read `selectProjectAndCourse` just started.
+    expect(await screen.findByText('What is the deadline?')).toBeInTheDocument()
+    readTranscript.mockClear()
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [
+        {
+          personId: 'person-1',
+          personDisplayName: 'Alice',
+          personFirstName: null,
+          personLastName: null,
+          personEmail: null,
+          direction: 'from_person',
+          content: 'What is the deadline?',
+          createdAt: Date.now(),
+          surface: 'discord',
+          channelRef: 'general',
+          categoryRef: 'Help',
+        },
+        {
+          personId: 'person-1',
+          personDisplayName: 'Alice',
+          personFirstName: null,
+          personLastName: null,
+          personEmail: null,
+          direction: 'to_person',
+          content: 'Friday.',
+          createdAt: Date.now(),
+          surface: null,
+          channelRef: null,
+          categoryRef: null,
+        },
+      ],
+    })
+    const { fireEvent } = await import('@testing-library/react')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(await screen.findByText('Alice')).toBeInTheDocument()
+    expect(screen.getByText('Bloombot to Alice')).toBeInTheDocument()
+    // WEB-65 — Discord names its category and channel; a message with no
+    // recorded surface shows nothing for it.
+    expect(screen.getByText(/Discord — Help \/ general/)).toBeInTheDocument()
   })
 
   it('shows an empty state when nothing matches the filters', async () => {
@@ -456,6 +545,7 @@ describe('Transcripts — Access log (ADMIN-2)', () => {
         kind: 'read',
         startAt: null,
         endAt: null,
+        surface: null,
         createdAt: Date.now(),
       },
       {
@@ -467,6 +557,7 @@ describe('Transcripts — Access log (ADMIN-2)', () => {
         kind: 'read',
         startAt: null,
         endAt: null,
+        surface: null,
         createdAt: Date.now() - 1000,
       },
     ])
@@ -480,6 +571,30 @@ describe('Transcripts — Access log (ADMIN-2)', () => {
       screen.getByText('Owner Person read the whole course')
     ).toBeInTheDocument()
     expect(listTranscriptAccessLog).toHaveBeenCalledWith('org-1', COURSE.id)
+  })
+
+  // "Also worth doing" (review) — the access log names what an access
+  // covered, the same way it already names who and whose; an unfiltered
+  // row (above) shows no surface at all.
+  it('names the surface a read was filtered to, on the access log row (WEB-66)', async () => {
+    await selectProjectAndCourse(true, [
+      {
+        id: 'log-1',
+        actorAccountId: 'account-1',
+        actorDisplayName: 'Owner Person',
+        personId: null,
+        personDisplayName: null,
+        kind: 'read',
+        startAt: null,
+        endAt: null,
+        surface: 'discord',
+        createdAt: Date.now(),
+      },
+    ])
+
+    expect(
+      await screen.findByText('Owner Person read the whole course · Discord')
+    ).toBeInTheDocument()
   })
 
   // ADMIN-2's own restriction: `transcripts.listAccessLog` refuses anyone
@@ -519,9 +634,15 @@ describe('Transcripts — opened from a route-named course/person (WEB-36)', () 
         {
           personId: 'person-1',
           personDisplayName: 'Alice',
+          personFirstName: null,
+          personLastName: null,
+          personEmail: null,
           direction: 'from_person',
           content: 'What is the deadline?',
           createdAt: Date.now(),
+          surface: null,
+          channelRef: null,
+          categoryRef: null,
         },
       ],
     })
@@ -826,12 +947,18 @@ describe('Transcripts — route changes while mounted (WEB-36 rework round 1, mu
             personId: filters.personId ?? 'nobody',
             personDisplayName:
               filters.personId === 'person-2' ? 'Bob' : 'Alice',
+            personFirstName: null,
+            personLastName: null,
+            personEmail: null,
             direction: 'from_person' as const,
             content:
               filters.personId === 'person-2'
                 ? "Bob's message"
                 : "Alice's message",
             createdAt: Date.now(),
+            surface: null,
+            channelRef: null,
+            categoryRef: null,
           },
         ],
       })
@@ -946,9 +1073,15 @@ describe('Transcripts — route changes while mounted (WEB-36 rework round 1, mu
         {
           personId: 'person-1',
           personDisplayName: 'Alice',
+          personFirstName: null,
+          personLastName: null,
+          personEmail: null,
           direction: 'from_person',
           content: 'What is the deadline?',
           createdAt: Date.now(),
+          surface: null,
+          channelRef: null,
+          categoryRef: null,
         },
       ],
     })

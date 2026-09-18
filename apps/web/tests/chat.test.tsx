@@ -45,7 +45,7 @@ vi.mock('../src/api/client.js', async () => {
 // every pre-existing test can render past unnoticed; the WEB-24 tests
 // further down override it with their own values.
 beforeEach(() => {
-  getChatMessages.mockResolvedValue([])
+  getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
   postChatMessage.mockResolvedValue({
     kind: 'answered',
     conversationId: 'stub-conversation',
@@ -308,7 +308,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
   })
 
   it('sending a message scrolls the thread to its newest message — fails without the fix (no maximum height meant nothing needed scrolling)', async () => {
-    getChatMessages.mockResolvedValue([])
+    getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
 
     render(
       <Chat
@@ -340,7 +340,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
   })
 
   it('a reply arriving while the reader is at the bottom scrolls the thread again, not only for the student’s own message', async () => {
-    getChatMessages.mockResolvedValue([])
+    getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
     let resolvePost: (result: ChatAnswerResult) => void = () => {
       throw new Error('resolvePost not assigned yet')
     }
@@ -389,7 +389,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
   })
 
   it('a reply arriving while the reader has scrolled up does not move them — and tells them instead', async () => {
-    getChatMessages.mockResolvedValue([])
+    getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
     let resolvePost: (result: ChatAnswerResult) => void = () => {
       throw new Error('resolvePost not assigned yet')
     }
@@ -459,7 +459,7 @@ describe('Chat — declined-not-approved notice (COST-8/SURF-10)', () => {
     listChatCourses.mockResolvedValue([
       { id: 'course-1', title: 'Intro to Testing' },
     ])
-    getChatMessages.mockResolvedValue([])
+    getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
   })
 
   // `routes/chat.ts` already renders the full notice server-side and

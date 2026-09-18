@@ -258,6 +258,41 @@ describe('CourseEditor — Transcripts tab (WEB-64)', () => {
     ).not.toBeInTheDocument()
   })
 
+  // WEB-66 — the same surface filter `pages/Transcripts.tsx` offers,
+  // between Student and From, on this tab too — no project or course
+  // selector, but every filter works the same way it does there.
+  it('offers a surface filter between Student and From, narrowing readTranscript’s own call', async () => {
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    renderEditor('transcripts')
+    // Waits for this tab's own mount-triggered read to resolve — otherwise
+    // "Apply filters" (below) still reads "Loading…"
+    // (`components/TranscriptBrowser.tsx`'s own `loading` state).
+    expect(
+      await screen.findByText('No messages match these filters.')
+    ).toBeInTheDocument()
+
+    const labels = screen
+      .getAllByText(/^(Student|Surface|From)$/)
+      .map((el) => el.textContent)
+    expect(labels).toEqual(['Student', 'Surface', 'From'])
+
+    fireEvent.change(screen.getByLabelText('Surface'), {
+      target: { value: 'web' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    await waitFor(() =>
+      expect(readTranscript).toHaveBeenLastCalledWith('org-1', COURSE.id, {
+        surface: 'web',
+      })
+    )
+  })
+
   // Cheap-fix 3 (coordinator review) — this test's own title always named
   // both filters, but only the student one was ever exercised;
   // `TranscriptBrowser`'s own uncontrolled date fallback (only ever
@@ -275,9 +310,15 @@ describe('CourseEditor — Transcripts tab (WEB-64)', () => {
         {
           personId: 'person-1',
           personDisplayName: 'Alice',
+          personFirstName: null,
+          personLastName: null,
+          personEmail: null,
           direction: 'from_person',
           content: 'What is the deadline?',
           createdAt: Date.now(),
+          surface: null,
+          channelRef: null,
+          categoryRef: null,
         },
       ],
     })

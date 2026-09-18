@@ -258,7 +258,13 @@ beforeEach(() => {
   // `vi.fn()` returning `undefined` would throw on `.then`, the same
   // reason `listProjects`/`listCourses` default above. Individual tests
   // override this where the transcript itself is what they are testing.
-  getChatMessages.mockResolvedValue([])
+  // Must-fix 3 (review) — this used to resolve to a bare `[]`, the shape
+  // `getChatMessages` returned before WEB-65 added `studentName` alongside
+  // `messages`; `Chat.tsx#loadMessages` reads `result.messages`, which is
+  // `undefined` off a bare array, so every test in this file left `Chat`
+  // stuck in its own loading skeleton forever without any of them
+  // asserting on the thread to notice.
+  getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
 })
 
 afterEach(() => {

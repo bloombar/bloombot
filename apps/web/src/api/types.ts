@@ -588,12 +588,27 @@ export interface RosterImportReport {
   limitations: string[]
 }
 
-/** WEB-10 — one message on a chat transcript (`GET .../chat/courses/:courseId/messages`), and the shape `POST .../messages` appends locally once its own `ChatAnswerResult` confirms the reply. */
+/**
+ * WEB-10 — one message on a chat transcript (`GET .../chat/courses/:courseId/messages`),
+ * and the shape `POST .../messages` appends locally once its own
+ * `ChatAnswerResult` confirms the reply.
+ *
+ * WEB-65 — `surface`/`channelRef`/`categoryRef` mirror `TranscriptEntry`'s
+ * own fields below, for the identical reason: a chat thread can carry
+ * messages from more than one surface (a course whose own `conversationScope`
+ * merges them, `schema.ts`'s own comment on that column), so the same
+ * "where did this one come from" a Discord-mixed transcript needs applies
+ * here too. `null` for a message recorded before surfaces were tracked, or
+ * (`channelRef`/`categoryRef`) for any surface but Discord.
+ */
 export interface ChatMessageEntry {
   id: string
   role: 'student' | 'assistant'
   text: string
   createdAt: number
+  surface: 'discord' | 'web' | 'mcp' | null
+  channelRef: string | null
+  categoryRef: string | null
 }
 
 /**
@@ -625,13 +640,34 @@ export type ChatAnswerResult =
   // "this app does not import `@bloombot/config`" boundary).
   | { kind: 'declined-not-approved'; notice: string }
 
-/** ADMIN-1: one message in a read-back transcript — mirrors `@bloombot/db`'s own `transcriptAccess.TranscriptEntry` by hand, the same "this app does not import `@bloombot/db`" boundary this whole file's own module comment already explains for every other shape here. */
+/**
+ * ADMIN-1: one message in a read-back transcript — mirrors `@bloombot/db`'s
+ * own `transcriptAccess.TranscriptEntry` by hand, the same "this app does
+ * not import `@bloombot/db`" boundary this whole file's own module comment
+ * already explains for every other shape here.
+ *
+ * WEB-65 — `personFirstName`/`personLastName`/`personEmail` join
+ * `personDisplayName` (the person's own Discord display name — never
+ * renamed, matching `@bloombot/db`'s own field, even though it reads
+ * ambiguously alongside the other three; `components/CoursePeople.tsx`'s
+ * own `entry.displayName` carries the identical meaning) so a caller can
+ * apply WEB-52's own "who is this" rule to a message's own heading, not
+ * only to a People row. `surface`/`channelRef`/`categoryRef` say where the
+ * message arrived — `null` for a message recorded before surfaces were
+ * tracked, or (`channelRef`/`categoryRef`) for any surface but Discord.
+ */
 export interface TranscriptEntry {
   personId: string
   personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
+  personEmail: string | null
   direction: 'from_person' | 'to_person'
   content: string
   createdAt: number
+  surface: 'discord' | 'web' | 'mcp' | null
+  channelRef: string | null
+  categoryRef: string | null
 }
 
 /** `transcripts.read`'s own result — a course's transcript, already filtered by whatever the request asked for. */
@@ -671,6 +707,8 @@ export interface TranscriptAccessLogEntry {
   kind: 'read' | 'export'
   startAt: number | null
   endAt: number | null
+  /** WEB-66 — the surface filter this access actually applied; `null` covered every surface. */
+  surface: 'discord' | 'web' | 'mcp' | null
   createdAt: number
 }
 

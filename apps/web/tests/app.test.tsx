@@ -983,7 +983,11 @@ describe('App — / home resolution (WEB-25, WEB-34)', () => {
       alreadyEnrolled: false,
     })
     listChatCourses.mockResolvedValue([{ id: 'course-1', title: 'A Course' }])
-    getChatMessages.mockResolvedValue([])
+    // Must-fix 3 (review) — `getChatMessages` now resolves
+    // `{ messages, studentName }`, not a bare array (`Chat.tsx#loadMessages`
+    // reads `result.messages`); a bare `[]` left `Chat` stuck in its own
+    // loading skeleton with nothing here to notice.
+    getChatMessages.mockResolvedValue({ messages: [], studentName: 'Jordan' })
     fetchMe.mockResolvedValue({
       account: {
         id: 'account-1',

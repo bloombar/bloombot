@@ -1127,14 +1127,24 @@ export function listChatCourses(organizationId: string): Promise<ChatCourse[]> {
   ).then((response) => response.courses)
 }
 
-/** This account's own transcript with one course. Throws `ApiError` (404, `chat_course_not_found`) exactly like any other unauthorized read when it is not enrolled (ENRL-2, TEN-5). */
+/**
+ * This account's own transcript with one course. Throws `ApiError` (404,
+ * `chat_course_not_found`) exactly like any other unauthorized read when it
+ * is not enrolled (ENRL-2, TEN-5).
+ *
+ * WEB-65 — `studentName` is this account's own identity, resolved
+ * server-side by `routes/chat.ts` through WEB-52's own rule: every message
+ * in this one-to-one thread is either from this account or addressed to it,
+ * so one name (not a per-message field) is enough to head every bubble
+ * (`ChatMessage.tsx`'s own `heading` prop).
+ */
 export function getChatMessages(
   organizationId: string,
   courseId: string
-): Promise<ChatMessageEntry[]> {
-  return request<{ messages: ChatMessageEntry[] }>(
+): Promise<{ messages: ChatMessageEntry[]; studentName: string }> {
+  return request<{ messages: ChatMessageEntry[]; studentName: string }>(
     `/organizations/${organizationId}/chat/courses/${courseId}/messages`
-  ).then((response) => response.messages)
+  )
 }
 
 /** Ask a question, through the exact same `answerQuestion` pipeline the Discord surface calls. */
@@ -1162,6 +1172,8 @@ export interface TranscriptFilters {
   /** Inclusive bounds, epoch milliseconds — a date-only picker in `pages/Transcripts.tsx` converts a calendar day into these before calling through here. */
   startAt?: number
   endAt?: number
+  /** WEB-66 — narrows to messages that arrived on this surface only; combines with the other filters rather than replacing them, applied server-side by `transcripts.read`/`.export` (`@bloombot/actions`'s own module comment on that action). */
+  surface?: 'discord' | 'web' | 'mcp'
 }
 
 function filtersToInput(filters: TranscriptFilters): Record<string, unknown> {
@@ -1169,6 +1181,7 @@ function filtersToInput(filters: TranscriptFilters): Record<string, unknown> {
     ...(filters.personId !== undefined ? { personId: filters.personId } : {}),
     ...(filters.startAt !== undefined ? { startAt: filters.startAt } : {}),
     ...(filters.endAt !== undefined ? { endAt: filters.endAt } : {}),
+    ...(filters.surface !== undefined ? { surface: filters.surface } : {}),
   }
 }
 

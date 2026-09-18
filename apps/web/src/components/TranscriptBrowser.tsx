@@ -60,6 +60,8 @@ import type {
   TranscriptExport,
   TranscriptStudent,
 } from '../api/types.js'
+import { personIdentity } from '../person-identity.js'
+import { surfaceLabel, TRANSCRIPT_SURFACES } from '../surface-label.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FormField } from './FormField.js'
@@ -140,6 +142,41 @@ function accessLogVerb(kind: TranscriptAccessLogEntry['kind']): string {
   return kind === 'export' ? 'exported' : 'read'
 }
 
+/**
+ * WEB-65 — an entry's own heading: the student's own name alone
+ * (`from_person`), or "Bloombot to `<name>`" (`to_person`) — replacing the
+ * former "`<name>` — asked"/"`<name>` — answered" pairing. The name is
+ * WEB-52's own rule, applied through `person-identity.ts`.
+ */
+function entryHeading(entry: TranscriptEntry): string {
+  const name = personIdentity({
+    personId: entry.personId,
+    personFirstName: entry.personFirstName,
+    personLastName: entry.personLastName,
+    personEmail: entry.personEmail,
+    personDiscordName: entry.personDisplayName,
+  })
+  return entry.direction === 'from_person' ? name : `Bloombot to ${name}`
+}
+
+/**
+ * WEB-65 — where an entry arrived, and (Discord only) which category and
+ * channel — `undefined` when the surface itself was never recorded, so
+ * nothing is guessed at (`ChatMessage.tsx`'s own `messageOrigin` mirrors
+ * this for the chat surface, across the two components' own duplicated-by-
+ * necessity boundary — this file has no reason to import from a component
+ * file, and vice versa).
+ */
+function entryOrigin(entry: TranscriptEntry): string | undefined {
+  if (!entry.surface) return undefined
+  const label = surfaceLabel(entry.surface)
+  if (entry.surface !== 'discord') return label
+  const place = [entry.categoryRef, entry.channelRef]
+    .filter(Boolean)
+    .join(' / ')
+  return place ? `${label} — ${place}` : label
+}
+
 export function TranscriptBrowser({
   organizationId,
   courseId,
@@ -155,6 +192,12 @@ export function TranscriptBrowser({
   // `initialPersonId` at that instant only — this file's own module comment
   // on why a *later* change to that prop is never watched here.
   const [personId, setPersonId] = useState(initialPersonId ?? '')
+  // WEB-66 — uncontrolled, the same way `personId` above is: unlike
+  // `startDate`/`endDate` (which must survive an ordinary course change,
+  // this file's own module comment on why those are controlled), nothing
+  // asks this filter to survive one, so a fresh mount starting unfiltered
+  // is the right default, the same one `personId` already uses.
+  const [surface, setSurface] = useState<'' | 'discord' | 'web' | 'mcp'>('')
   const [students, setStudents] = useState<TranscriptStudent[]>([])
   // Uncontrolled fallback for the course tab (WEB-64), which never passes
   // `startDate`/`endDate` at all — this file's own module comment on why
@@ -212,8 +255,12 @@ export function TranscriptBrowser({
       ...(personId ? { personId } : {}),
       ...(startAt !== undefined ? { startAt } : {}),
       ...(endAt !== undefined ? { endAt } : {}),
+      // WEB-66 — combines with the filters above rather than replacing
+      // them; the server (`transcripts.read`/`.export`) applies all of
+      // them together, in the same query.
+      ...(surface ? { surface } : {}),
     }
-  }, [personId, startDate, endDate])
+  }, [personId, startDate, endDate, surface])
 
   const runSearch = useCallback(async () => {
     const epoch = ++readEpochRef.current
@@ -316,6 +363,25 @@ export function TranscriptBrowser({
             ))}
           </select>
         </FormField>
+        {/* WEB-66 — between the Student filter and From, listing the real
+            surfaces plus an "any" default. */}
+        <FormField label="Surface">
+          <select
+            aria-label="Surface"
+            value={surface}
+            onChange={(event) =>
+              setSurface(event.target.value as typeof surface)
+            }
+            className={textInputClasses}
+          >
+            <option value="">Any surface</option>
+            {TRANSCRIPT_SURFACES.map((candidate) => (
+              <option key={candidate} value={candidate}>
+                {surfaceLabel(candidate)}
+              </option>
+            ))}
+          </select>
+        </FormField>
         <FormField label="From">
           <input
             aria-label="From date"
@@ -387,9 +453,12 @@ export function TranscriptBrowser({
               className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3"
             >
               <div className="flex items-center justify-between text-xs text-neutral-500">
+                {/* WEB-65 — a student's own name alone, or "Bloombot to
+                    `<name>`" for the reply; replaces the former
+                    "`<name>` — asked"/"`<name>` — answered" pairing. */}
                 <span>
-                  {entry.personDisplayName ?? entry.personId} —{' '}
-                  {entry.direction === 'from_person' ? 'asked' : 'answered'}
+                  {entryHeading(entry)}
+                  {entryOrigin(entry) && ` · ${entryOrigin(entry)}`}
                 </span>
                 <time dateTime={new Date(entry.createdAt).toISOString()}>
                   {new Date(entry.createdAt).toLocaleString()}
@@ -472,6 +541,12 @@ export function TranscriptBrowser({
                   <span>
                     {entry.actorDisplayName} {accessLogVerb(entry.kind)}{' '}
                     {entry.personDisplayName ?? 'the whole course'}
+                    {/* WEB-66 — what the access covered, the same "what
+                        it covered" the date columns already carry on this
+                        row; omitted, not "any surface," when no filter was
+                        applied (`entryOrigin`'s own doc comment above holds
+                        the same discipline for an entry's own surface). */}
+                    {entry.surface && ` · ${surfaceLabel(entry.surface)}`}
                   </span>
                   <time dateTime={new Date(entry.createdAt).toISOString()}>
                     {new Date(entry.createdAt).toLocaleString()}

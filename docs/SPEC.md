@@ -1618,9 +1618,12 @@ read.
 
 The platform-administrator console shows organizations, their usage and their health. It does not
 grant a route into a tenant's transcripts: administering the platform is not the same as reading
-a student's questions, and AUTH-4's allowlist is not a master key. The one exception is ADMIN-6: to
-decide an approval (COST-8), an administrator may read a course's settings read-only — never its
-people, transcripts or join links.
+a student's questions, and AUTH-4's allowlist is not a master key. What it may show is the platform's
+structure and what it costs — organizations, projects, courses, the accounts and people on them, who
+belongs to what, and the usage each has run up (ADMIN-6 to ADMIN-11) — because an administrator cannot
+run the platform without knowing who is on it. The line is conversation content: no message a student
+sent or a course answered is reachable from the console, on any screen, however the administrator
+arrives at it.
 
 #### ADMIN-5 Deleting a tenant's data is explicit, confirmed and audited
 
@@ -3209,8 +3212,9 @@ Unapprove button. Approving and revoking are recorded with who acted and when.
 #### ADMIN-6 A platform administrator can read a course's settings, read-only
 
 Clicking a course on the approval screen shows its settings as the owner sees them — general, AI and
-knowledge (instructions, files and web sources) — with nothing editable. The People tab, transcripts,
-join links and anything identifying a student stay out of reach, as ADMIN-4 requires.
+knowledge (instructions, files and web sources) — with nothing editable. Transcripts and join links stay
+out of reach, as ADMIN-4 requires; ADMIN-9 adds the people enrolled in the course to the same screen,
+naming who is in it without reaching what they said.
 
 #### WEB-54 The administrator console carries its own navigation, and process health sits at the foot of every screen
 
@@ -3316,3 +3320,63 @@ student filter and the date range, listing the surfaces a message can arrive on.
 transcript to messages from that surface; the filter combines with the student and date filters rather than
 replacing them, is applied by the server rather than by hiding rows in the browser, and an export reflects
 whatever filter is in force, as it already does for the others.
+
+### 45. The Administrator Console as a Map of the Platform
+
+#### ADMIN-7 An organization has its own console screen, laid out to be read
+
+Clicking an organization in the console opens a full screen about that organization rather than expanding its
+row in the list. It names the organization, when it was created, whether it is a personal organization, its
+spending cap, and the accounts that own it; it reports its usage — total cost, call count, and the breakdown
+by surface ADMIN-4 already shows. Below that it lists the organization's projects, and within each project
+its courses, each course naming its approval state and how many people are enrolled in it. It lists the
+organization's members with their roles. Every project, course and account named on this screen is a link to
+that entity's own console screen (ADMIN-8, ADMIN-9, ADMIN-11), so an administrator moves through the platform
+by following what is on screen rather than by going back to a list. The layout is a page, not a dense row:
+sections with headings, generous spacing, and values that can be read at a glance.
+
+#### ADMIN-8 A project has its own console screen
+
+A project named anywhere in the console opens a screen of its own: its name, its organization, when it was
+created, whether it is archived, and its courses — each with its approval state, its enrolment count, its
+usage, and a link to the course's own screen. The organization is a link back to ADMIN-7's screen.
+
+#### ADMIN-9 A course's console screen shows the course and the people in it
+
+ADMIN-6's read-only settings screen becomes a full course overview in the same relaxed layout: the course's
+general, AI and knowledge settings as before, plus its organization and project as links, its approval
+history, its usage, and the people enrolled in it — each named as WEB-52 names them, with when they enrolled
+and their own usage in the course, and each a link to that account's console screen when the person is
+connected to one. Transcripts stay out of reach: this screen names who is in a course, never what they said.
+
+#### ADMIN-10 The console lists the platform's accounts
+
+The console's navigation carries a Users screen listing every account on the platform — name, email, when it
+joined, whether it is disabled, how many organizations it belongs to, and its total cost — newest first, with
+a search field at the top that filters the list by name or email as the administrator types. Each row opens
+that account's own screen.
+
+#### ADMIN-11 An account has its own console screen
+
+An account's screen names the account: its display name, first and last name, email, when it joined, whether
+and when it was disabled, and whether it is a platform administrator. It lists the organizations the account
+belongs to, with its role in each, and the organizations it is merely connected to; the courses it is enrolled
+in, with when it enrolled; and the people records (PPL-1) associated with it, each with the organization it
+belongs to, the identities it has been proven on (PPL-2), and when it was connected. It reports the account's
+activity: its total cost and call count, broken down by surface and by course, and when it was last active.
+Every organization, project and course named on it links to that entity's own screen. As ADMIN-4 requires,
+none of this reaches a transcript.
+
+#### ADMIN-12 Every console list can be searched
+
+Each list screen in the console carries a search field at the top that filters the rows on screen as the
+administrator types: organizations by name, courses by title, project, organization or owner email, accounts
+by name or email, and deletion history by organization name. The field says what it searches, reports how many
+rows matched, and offers a way to clear it. A search that matches nothing says so rather than showing an empty
+list.
+
+#### ADMIN-13 Approving or revoking a course is confirmed first
+
+Approving a course and revoking its approval both ask for confirmation in a dialog naming the course before
+anything is sent, wherever the decision is offered — the Courses screen and the course's own screen alike.
+Revoking is presented as the destructive action it is. Cancelling leaves the course exactly as it was.

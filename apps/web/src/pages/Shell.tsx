@@ -743,6 +743,10 @@ function ShellInner({
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
           supportContact={supportContact}
+          // WEB-63/WEB-64 — the same `isOwner` shape every other tab above
+          // already takes (this file's own module comment), threaded
+          // through to `CourseEditor`'s own Usage/Transcripts tabs.
+          isOwner={isOwner}
           route={route}
           navigate={navigate}
           onOpenChat={(courseId) => openChatForCourse(courseId)}

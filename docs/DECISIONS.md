@@ -13085,3 +13085,98 @@ inside the drawer and `click` on the dialog, and pins that the drawer stays open
 guard. The two existing backdrop-click tests needed a matching `fireEvent.mouseDown` added alongside their
 own `fireEvent.click`, since `fireEvent.click` alone (unlike a real click) does not synthesize a preceding
 `mousedown`.
+
+## D-124 — `apps/web`: WEB-63/WEB-64 — a course's own Usage and Transcripts tabs, and the extraction underneath both
+
+**Usage extraction (WEB-63) is a faithful one.** `hooks/useOrganizationUsage.ts` (the `costLedger.organizationUsage`
+fetch, and `today()`) and `components/usageFormat.ts` (`formatMicros`/`formatBySurface`/`studentLabel`) are
+pulled out of `pages/Usage.tsx` unchanged and reused, verbatim, by the new `components/CourseUsage.tsx` — the
+organization-wide report is the only read `costLedger.organizationUsage` offers (there is no course-scoped
+version), so the course tab filters that same report down to its own `courseId` rather than adding a second
+action. `pages/Usage.tsx` itself is otherwise untouched; `tests/usage.test.tsx` passed unedited throughout.
+
+**Transcripts extraction (WEB-64) is also faithful, not the "extract what you can" fallback the brief allowed
+for** — worth recording why, since the brief's own text (`docs/ROADMAP.md`'s "reaching things where they
+already are", phase 38 brief) flagged this as the likely case for a partial extraction given
+`pages/Transcripts.tsx`'s WEB-36 rework history (`epochRef`/`seedRef`/`readEpochRef`, three rounds of races
+found and fixed). The key realization: WEB-64's own tab has **no course-switching and no route-seeded
+person** at all — its `courseId` is a fixed prop for the component's whole life. That is exactly the
+degenerate case `components/TranscriptBrowser.tsx` was written for: everything downstream of "a course is
+chosen" (student/date filters, the entries list, export + its own list of requested exports, the ADMIN-2
+access log) moved there, parameterized by a `courseId` that never changes under one mounted instance. The
+race conditions the WEB-36 rework fixed were all about a *changing* course/person while mounted — with no
+course changes inside `TranscriptBrowser` itself, most of that machinery (`epochRef`'s course-selection half,
+`seedRef`, the seeded chain's own sequencing) simply does not apply and was not carried over.
+
+`pages/Transcripts.tsx` keeps its own project/course picker and the WEB-36 route-seeding logic (resolving a
+route-named course's project via `getCourse`, the disabled-course exception, the `appliedRouteRef` echo
+check) — genuinely irreducible, since only that screen has a picker and a route to seed from — but delegates
+everything past "a course is chosen" to `TranscriptBrowser`, mounted **keyed** by
+`` `${courseId}:${seedGeneration}` ``. A course change already changes the key (via `courseId`); `seedGeneration`
+is bumped only when the *route* names a genuinely new person for the *same* course (WEB-36 rework round 1's
+own "a routePersonId change alone" case) — the one scenario a bare `courseId` key would not remount for. This
+replaces the entries/students/exports/access-log half of the old `epochRef`/`seedRef` machinery with React's
+own remount-on-key-change primitive, rather than hand-rolled epoch counters, for that half specifically.
+`startDate`/`endDate` are the one piece of state that could not move into `TranscriptBrowser` outright: WEB-36
+rework round 1 found a date filter must *survive* an ordinary course change (only the student filter clears),
+which means it cannot live inside a component that remounts on exactly that change — `pages/Transcripts.tsx`
+owns the two dates and passes them down as controlled props; `TranscriptBrowser` falls back to owning them
+itself when a caller (the course tab) never passes any, which is the uncontrolled default a component like
+this normally takes.
+
+All of `tests/transcripts.test.tsx` (30+ cases pinning the WEB-36 rework's own race-condition fixes) passed
+unedited against the rewritten `pages/Transcripts.tsx` — the strongest evidence the extraction is behaviourally
+faithful, not merely typechecking. New coverage: `tests/course-editor-usage-transcripts.test.tsx` (both tabs,
+proven to fail at the pre-change commit in a throwaway `git worktree`) and
+`e2e/course-usage-transcripts-tabs.spec.ts` (an instructor reading both tabs on a real course, filtering by
+student, and exporting, against a live API and database).
+
+**One judgment call inside the e2e spec**: the export step exports unfiltered rather than filtered to the
+seeded student. `transcripts.export` (PPL-5, `packages/actions/src/actions/transcripts.ts`) refuses an
+export filtered to one student unless that student has a *verified* address, and this spec's student is
+inserted directly (`people.createPerson`, the same device `e2e/transcript-access-log.spec.ts` already uses),
+never verified. The student filter is still exercised, for the read; the export step switches back to "Every
+student" first, which is what the seeded-message assertions already prove works for a filtered read.
+
+**A deliberate behaviour change the spec review round found, worth writing down since nothing pinned it
+before now**: the old route-seeded read in `pages/Transcripts.tsx` sent `{ personId }` only — never the two
+date fields already showing on screen, even if an instructor had set them before a fresh seed landed (a
+same-project course pick while a date filter was still applied, say). `TranscriptBrowser`'s own mount-time
+read goes through `currentFilters()` instead, the same function an ordinary "Apply filters" click uses, so a
+seeded mount now honours whatever dates are already showing exactly the way every other read on this screen
+already does. This is the better behaviour — a seeded read ignoring an on-screen filter for no visible reason
+was never a feature — but it is a real, user-visible difference from before this slice, not merely an
+implementation detail of the extraction.
+
+**Review round 2 — two must-fixes, both confirmed to fail pre-fix in a throwaway `git worktree`.**
+
+- **The screen-level `error` in `pages/Transcripts.tsx` had no path back to `undefined`.** Before this
+  extraction, one shared `error` state covered project/course resolution *and* the entries/students/exports/
+  access-log fetch, and `runSearch`'s own `setError(undefined)` — called at the start of every read — was
+  what cleared a stale refusal on the way to a fresh one. Once that read moved into `TranscriptBrowser`, its
+  own `setError(undefined)` only ever clears *its* state; `pages/Transcripts.tsx`'s own `error` (project/
+  course refusals — a deleted or otherwise unreadable route-named course, say) had nothing left to clear it,
+  so a refusal from an invalid route stayed on screen for the life of the mounted instance even once a later,
+  ordinary project/course pick resolved a real course underneath it — undismissable without a reload. Fixed
+  with an explicit `setError(undefined)` at the three places a fresh attempt at resolving a project or course
+  begins: the seeding effect (once a route change is confirmed genuine, not an echo) and both `<select>`
+  `onChange` handlers. New test: `tests/transcripts.test.tsx` — "a route-named refusal clears once an
+  ordinary project and course pick resolves cleanly".
+- **A course switch in `pages/CourseEditor.tsx` could audit a Transcripts tab nobody opened for the new
+  course.** `visitedTabs` used to reset entirely inside the `[organizationId, courseId]` data-loading effect
+  — but `pages/ProjectsPanel.tsx` renders this component with no `key`, so a course switch is a prop change,
+  not a remount, and an effect only runs *after* React commits the render it belongs to. On the very render
+  where `courseId` flips from one course to another, `visitedTabs` was still the *outgoing* course's set —
+  if Transcripts had been visited there, `<TranscriptBrowser key={courseId}>` mounted fresh under the
+  *incoming* course's id before the effect ever ran to reset it, and child effects run before parent effects,
+  so its own mount-time reads (`transcripts.read`, ADMIN-2 audited) had already dispatched by the time the
+  reset landed and unmounted it one render later — an audited access-log row for a course whose Transcripts
+  tab was never actually opened. Fixed by moving the synchronous "this is a new course" reset
+  (`visitedTabs`/`activeTab`/`justSaved`/the WEB-51 category-touched state) out of that effect and into the
+  render itself, guarded by a ref (`resetForCourseIdRef`) so it runs exactly once per genuine `courseId`
+  change — React's own documented "adjusting state when a prop changes" pattern: calling a state setter
+  during render makes React discard that render's own output and re-render immediately with the new state
+  already applied, so no child ever mounts against a `courseId` this component's own `visitedTabs` has not
+  caught up to yet. The data-loading effect itself is left with only the async `getCourse` fetch. New test:
+  `tests/course-editor-usage-transcripts.test.tsx` — "switching from course A's Transcripts tab to course
+  B's General tab issues no read for course B".

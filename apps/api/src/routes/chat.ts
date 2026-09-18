@@ -166,22 +166,25 @@ function toChatMessageView(message: conversations.Message): ChatMessageView {
 }
 
 /**
- * WEB-65/WEB-52 — this account's own identity, by the same rule
- * `components/CoursePeople.tsx`'s own People row already applies: a full
- * name (first and last, joined by a space, or whichever exists), else an
- * email, else a Discord display name, else the bare person id. Computed
- * here rather than in the browser — this router already has `person` in
- * hand for every request below, and PLAT-2's own boundary keeps
- * `apps/web` from reading `@bloombot/db`'s `people.Person` fields
- * directly.
+ * WEB-65/WEB-52 — this account's own identity, for a heading rather than a
+ * labelled row: a full name (first and last, joined by a space, or
+ * whichever exists), else a Discord display name, else an email, else the
+ * bare person id — WEB-52's own order with the last two swapped, the same
+ * deviation `apps/web/src/person-identity.ts`'s own module comment records
+ * in full (`docs/DECISIONS.md` D-125): a heading is a name slot, and an
+ * unlabelled email sitting in it reads as nobody in particular, so a
+ * Discord display name (still a name) outranks it here. Computed here
+ * rather than in the browser — this router already has `person` in hand
+ * for every request below, and PLAT-2's own boundary keeps `apps/web` from
+ * reading `@bloombot/db`'s `people.Person` fields directly.
  */
 function chatStudentName(person: people.Person): string {
   const parts = [person.firstName, person.lastName].filter(
     (part): part is string => part !== null && part !== ''
   )
   if (parts.length > 0) return parts.join(' ')
-  if (person.email) return person.email
   if (person.displayName) return person.displayName
+  if (person.email) return person.email
   return person.id
 }
 

@@ -707,6 +707,8 @@ export interface TranscriptAccessLogEntry {
   kind: 'read' | 'export'
   startAt: number | null
   endAt: number | null
+  /** WEB-66 — the surface filter this access actually applied; `null` covered every surface. */
+  surface: 'discord' | 'web' | 'mcp' | null
   createdAt: number
 }
 

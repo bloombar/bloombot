@@ -545,6 +545,7 @@ describe('Transcripts — Access log (ADMIN-2)', () => {
         kind: 'read',
         startAt: null,
         endAt: null,
+        surface: null,
         createdAt: Date.now(),
       },
       {
@@ -556,6 +557,7 @@ describe('Transcripts — Access log (ADMIN-2)', () => {
         kind: 'read',
         startAt: null,
         endAt: null,
+        surface: null,
         createdAt: Date.now() - 1000,
       },
     ])
@@ -569,6 +571,30 @@ describe('Transcripts — Access log (ADMIN-2)', () => {
       screen.getByText('Owner Person read the whole course')
     ).toBeInTheDocument()
     expect(listTranscriptAccessLog).toHaveBeenCalledWith('org-1', COURSE.id)
+  })
+
+  // "Also worth doing" (review) — the access log names what an access
+  // covered, the same way it already names who and whose; an unfiltered
+  // row (above) shows no surface at all.
+  it('names the surface a read was filtered to, on the access log row (WEB-66)', async () => {
+    await selectProjectAndCourse(true, [
+      {
+        id: 'log-1',
+        actorAccountId: 'account-1',
+        actorDisplayName: 'Owner Person',
+        personId: null,
+        personDisplayName: null,
+        kind: 'read',
+        startAt: null,
+        endAt: null,
+        surface: 'discord',
+        createdAt: Date.now(),
+      },
+    ])
+
+    expect(
+      await screen.findByText('Owner Person read the whole course · Discord')
+    ).toBeInTheDocument()
   })
 
   // ADMIN-2's own restriction: `transcripts.listAccessLog` refuses anyone

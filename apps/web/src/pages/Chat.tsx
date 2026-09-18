@@ -269,9 +269,18 @@ export function Chat({
     setNewMessageWaiting(false)
   }
 
+  // Must-fix 2 (review) — `messages`/`studentName` both resolve together,
+  // in the same `loadMessages` `.then` (above): while `messages` is still
+  // `undefined`, `studentName` is still its own initial `''`, and sending
+  // before either lands would render a heading with no name at all (a
+  // student's own optimistic bubble headed nothing, or a reply landing
+  // first reading "Bloombot to "). Held here, at the source, rather than
+  // in `ChatMessage.tsx` itself — a message that will only ever land with
+  // a real name should not exist on screen without one even briefly.
+  const canSend = messages !== undefined
   const handleSend = async () => {
     const text = draft.trim()
-    if (!text || !selectedCourseId) return
+    if (!text || !selectedCourseId || !canSend) return
     setNotice(undefined)
     setMessagesError(undefined)
     setSending(true)
@@ -643,7 +652,7 @@ export function Chat({
           }}
           rows={2}
           placeholder="Ask a question…"
-          disabled={sending}
+          disabled={sending || !canSend}
           className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-base sm:text-sm text-neutral-900 focus:border-brand-500"
         />
         <Button
@@ -651,7 +660,7 @@ export function Chat({
           variant="primary"
           aria-label="Send"
           icon={<SendIcon aria-hidden="true" className="size-4" />}
-          disabled={sending || draft.trim().length === 0}
+          disabled={sending || !canSend || draft.trim().length === 0}
         >
           {sending ? 'Sending…' : 'Send'}
         </Button>

@@ -1426,6 +1426,13 @@ export const transcriptAccessLog = sqliteTable(
     // says not just *that* a read happened but what it covered.
     startAt: integer('start_at'),
     endAt: integer('end_at'),
+    // WEB-66 — the surface filter actually applied, if any, the same
+    // "what it covered" reasoning `startAt`/`endAt` already give: without
+    // this, a Discord-only read and a whole-course read over the same
+    // dates were indistinguishable on this row, even though ADMIN-2's own
+    // "an institution has to be able to account for" means what an access
+    // covered, not merely that one happened.
+    surface: text('surface', { enum: SURFACES }),
     // A real tiebreaker for `listAccessLogForCourse`'s "newest first" order
     // — the same reason `messages.sequence`/`transcript_exports.sequence`
     // exist (those tables' own comments): `createdAt` is millisecond
@@ -1464,6 +1471,13 @@ export const transcriptAccessLog = sqliteTable(
     check(
       'transcript_access_log_kind_check',
       sql`${table.kind} in ('read', 'export')`
+    ),
+    // WEB-66 — the same "null or one of `SURFACES`" shape
+    // `messages_surface_check`/`transcript_exports_surface_check` already
+    // give their own `surface` column.
+    check(
+      'transcript_access_log_surface_check',
+      sql`${table.surface} is null or ${table.surface} in ('discord', 'web', 'mcp')`
     ),
   ]
 )

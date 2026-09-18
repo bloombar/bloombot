@@ -296,6 +296,54 @@ describe('transcriptAccess.readCourseTranscript (ADMIN-1, ADMIN-2)', () => {
     expect(log[0]?.createdAt).toBeGreaterThanOrEqual(before)
   })
 
+  // "Also worth doing" (review) — the audit row exists to say what an
+  // access covered (ADMIN-2's own "an institution has to be able to
+  // account for"), the same reasoning `startAt`/`endAt` already carry —
+  // without this, a Discord-only read logged identically to a whole-course
+  // one over the same dates.
+  it('records the surface filter on the audit entry (WEB-66)', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, instructor } =
+      seedCourseWithMessages(testDb)
+
+    transcriptAccess.readCourseTranscript(
+      organizationId,
+      {
+        courseId: course.id,
+        actorAccountId: instructor.id,
+        surface: 'discord',
+        kind: 'read',
+      },
+      testDb.db
+    )
+
+    const log = transcriptAccess.listAccessLogForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+    expect(log[0]?.surface).toBe('discord')
+  })
+
+  it('records an unfiltered access with surface: null when no surface filter is given', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, instructor } =
+      seedCourseWithMessages(testDb)
+
+    transcriptAccess.readCourseTranscript(
+      organizationId,
+      { courseId: course.id, actorAccountId: instructor.id, kind: 'read' },
+      testDb.db
+    )
+
+    const log = transcriptAccess.listAccessLogForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+    expect(log[0]?.surface).toBeNull()
+  })
+
   it('records an unfiltered read with personId: null', () => {
     testDb = createTestDatabase()
     const { organizationId, course, instructor } =

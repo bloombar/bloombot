@@ -541,6 +541,12 @@ export function TranscriptBrowser({
                   <span>
                     {entry.actorDisplayName} {accessLogVerb(entry.kind)}{' '}
                     {entry.personDisplayName ?? 'the whole course'}
+                    {/* WEB-66 — what the access covered, the same "what
+                        it covered" the date columns already carry on this
+                        row; omitted, not "any surface," when no filter was
+                        applied (`entryOrigin`'s own doc comment above holds
+                        the same discipline for an entry's own surface). */}
+                    {entry.surface && ` · ${surfaceLabel(entry.surface)}`}
                   </span>
                   <time dateTime={new Date(entry.createdAt).toISOString()}>
                     {new Date(entry.createdAt).toLocaleString()}

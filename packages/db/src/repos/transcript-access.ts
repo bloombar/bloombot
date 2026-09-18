@@ -252,6 +252,9 @@ export function readCourseTranscript(
         kind: input.kind,
         startAt: input.startAt ?? null,
         endAt: input.endAt ?? null,
+        // WEB-66 — the surface filter this access actually applied, the
+        // same "what it covered" reasoning `startAt`/`endAt` already carry.
+        surface: input.surface ?? null,
         sequence: accessSequence,
         createdAt: Date.now(),
       })

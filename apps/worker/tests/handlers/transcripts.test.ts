@@ -861,6 +861,111 @@ describe('transcripts.export handler (ADMIN-3)', () => {
     expect(parsed.transcript[0]?.content).toBe('When is office hours?')
   })
 
+  // Must-fix 1 (review) — the explicit projection in the student-filtered
+  // branch (`createTranscriptExportHandler`'s own comment on why it no
+  // longer spreads `transcript.entries`) had no test that would fail
+  // without it: `seedCourseWithTranscript`'s own student carries no email
+  // or name at all, so even a whole-file string search for those fields
+  // passed vacuously, and the shape assertions above only ever checked
+  // `personId`/`content`. This seeds a student with all three
+  // (`people.createPerson` + `connectIdentity`, for PPL-5's own
+  // `hasVerifiedAddress` gate) and proves none of them reach the file —
+  // restoring the old `...entry` spread here makes this fail.
+  it('never carries a student’s email, first or last name into a student-filtered export, even though it carries their identity (WEB-65)', async () => {
+    const storage = await setUp()
+    const { organizationId, course, instructor } = seedCourseWithTranscript(
+      testDb.db
+    )
+
+    const student = people.createPerson(
+      organizationId,
+      {
+        displayName: 'Discordy',
+        firstName: 'Priya',
+        lastName: 'Shah',
+        email: 'priya.shah@example.edu',
+      },
+      testDb.db
+    )
+    // PPL-5 — a student-filtered export refuses unless this student has a
+    // verified address (`hasVerifiedAddress`'s own doc comment); `web` is
+    // this platform's only proxy for one.
+    people.connectIdentity(
+      organizationId,
+      student.id,
+      { surface: 'web', externalId: randomUUID() },
+      testDb.db
+    )
+    const conversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId: course.id, personId: student.id, surface: 'web' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('setup failed: conversation')
+    conversations.appendMessage(
+      organizationId,
+      conversation.id,
+      { direction: 'from_person', content: 'When is office hours?' },
+      testDb.db
+    )
+
+    const exportRow = transcriptExports.createPendingExport(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: student.id,
+        requestedByAccountId: instructor.id,
+      },
+      testDb.db
+    )
+    jobs.enqueueJob(
+      organizationId,
+      {
+        kind: TRANSCRIPT_EXPORT_JOB_KIND,
+        payload: { exportId: exportRow.id },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register(
+      TRANSCRIPT_EXPORT_JOB_KIND,
+      createTranscriptExportHandler({ attachmentStorage: storage })
+    )
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 30_000,
+      handlerTimeoutMs: 5_000,
+      retryPolicy,
+    })
+    expect(result.outcome).toBe('succeeded')
+
+    const bytes = await storage.read(organizationId, exportRow.id)
+    if (!bytes) throw new Error('setup failed: no bytes written')
+    const text = bytes.toString('utf8')
+    const parsed = JSON.parse(text) as {
+      transcript: { personId: string; content: string }[]
+    }
+
+    // The disclosure this export exists to make — unchanged.
+    expect(parsed.transcript).toHaveLength(1)
+    expect(parsed.transcript[0]?.personId).toBe(student.id)
+
+    // The disclosure it must not make — a plain-object key check, not only
+    // a string search, since a field present with a `null` value would
+    // still defeat a bare `.not.toContain('priya.shah@example.edu')`.
+    expect(parsed.transcript[0]).not.toHaveProperty('personEmail')
+    expect(parsed.transcript[0]).not.toHaveProperty('personFirstName')
+    expect(parsed.transcript[0]).not.toHaveProperty('personLastName')
+    expect(text).not.toContain('priya.shah@example.edu')
+    expect(text).not.toContain('Priya')
+    expect(text).not.toContain('Shah')
+  })
+
   // WEB-66 — an export reflects the surface filter it was requested with,
   // the same way it already reflects `startAt`/`endAt`: fails without this
   // slice's own `exportRow.surface` being read and passed through to

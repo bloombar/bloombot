@@ -358,6 +358,8 @@ export interface TranscriptAccessLogRow {
   kind: transcriptAccess.TranscriptAccessLogEntry['kind']
   startAt: number | null
   endAt: number | null
+  /** WEB-66 — the surface filter this access actually applied, if any; `null` covered every surface. */
+  surface: transcriptAccess.TranscriptAccessLogEntry['surface']
   createdAt: number
 }
 
@@ -423,6 +425,7 @@ export const listTranscriptAccessLogAction: Action<
         kind: row.kind,
         startAt: row.startAt,
         endAt: row.endAt,
+        surface: row.surface,
         createdAt: row.createdAt,
       }
     })

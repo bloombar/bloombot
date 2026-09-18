@@ -377,6 +377,29 @@ describe('transcripts.listExports (ADMIN-3)', () => {
 })
 
 describe('transcripts.listAccessLog (ADMIN-2)', () => {
+  // "Also worth doing" (review) — the surface filter reaches the log row
+  // through the same action every other filter already goes through.
+  it('records the surface filter a read applied, on the audit row (WEB-66)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+
+    await dispatch(
+      readTranscriptAction,
+      { courseId: course.id, surface: 'discord' },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    const result = await dispatch(
+      listTranscriptAccessLogAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    expect(result[0]?.surface).toBe('discord')
+  })
+
   it('an owner reads the log, most recent first, with a display name resolved for the actor and the student — never an email', async () => {
     testDb = createTestDatabase()
     const { organizationId, ownerId, course } = seedOrganizationWithCourse(

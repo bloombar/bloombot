@@ -13257,11 +13257,74 @@ own precedent).
 
 **A pre-existing e2e assertion (`e2e/transcript-access-log.spec.ts`) had to narrow its own scope, deliberately,
 not merely to make it pass.** It asserted the *whole page* never contained its seeded student's own email;
-that student was seeded with a display name and an email but no first/last name, so WEB-65's own heading rule
-(WEB-52's "name, else email, else Discord name, else id") now shows that email as the entry's own heading —
-correct, deliberate behaviour this slice's brief asks for, not a leak. What the assertion was actually
-guarding — `transcripts.ts`'s own "No email, ever" module comment — is narrower than "the whole page": it is
-specifically about `TranscriptAccessLogRow` (ADMIN-2's audit trail), resolved through
+that student was seeded with a display name and an email but no first/last name, so at the point this was
+first written (WEB-52's own literal order — name, else email, else Discord name, else id), the entry's own
+heading showed that email. Correct, deliberate behaviour this slice's brief asks for, not a leak — but the
+review round below moved a Discord display name ahead of an email for a heading specifically, and this
+fixture's own `displayName` is exactly that field, so the entry now shows the Discord display name instead
+and the email no longer reaches the entry list at all. The assertion is left narrowed regardless: what it was
+actually guarding — `transcripts.ts`'s own "No email, ever" module comment — is narrower than "the whole
+page" on its own terms, specifically about `TranscriptAccessLogRow` (ADMIN-2's audit trail), resolved through
 `actorDisplayName`/`personDisplayName` and never `people.email`/`accounts.email`, a guarantee this slice does
-not touch. The assertion now scopes to `[data-testid="transcript-access-log"]` instead of `body`, which is
-what the code it is testing actually promises.
+not touch — the fixture's own name field happening to change which fallback tier fires is not a reason to
+widen the assertion back to a scope it never actually needed. Scoped to
+`[data-testid="transcript-access-log"]`, which is what the code it is testing actually promises.
+
+**Review round — four must-fixes, one design change, and the access log gets the same filter.**
+
+1. **The export's PII projection had no test that would fail without it** (`apps/worker/src/handlers/transcripts.ts`,
+   the student-filtered branch's explicit projection this file already describes above). Restoring the old
+   `...transcript.entries` spread there left `npx vitest run apps/worker` green while an instructor's own
+   downloaded, student-filtered export gained that student's email — the existing shape assertions covered
+   only `personId`/`content`, and `seedCourseWithTranscript`'s own student carries no email or name at all, so
+   even a whole-file string search passed vacuously. New test,
+   `apps/worker/tests/handlers/transcripts.test.ts` — "never carries a student's email, first or last name
+   into a student-filtered export, even though it carries their identity" — seeds a student with all three
+   (`people.createPerson` + `connectIdentity`, for PPL-5's own `hasVerifiedAddress` gate) and asserts both
+   that the properties are absent (not merely that their values don't appear as a string — a `null`-valued
+   field would defeat that) and that the raw bytes never contain them. Confirmed to fail (restoring the old
+   spread, by hand, in this same working tree) before the fix, passing after.
+2. **Chat could render a heading with no name.** `studentName` starts `''` while the composer was already
+   enabled — a message sent before the `GET .../messages` response landed rendered an empty heading, and a
+   reply arriving first read "Bloombot to " with nothing after it. Fixed at the source, in `pages/Chat.tsx`,
+   not in `ChatMessage.tsx`: `canSend` (`messages !== undefined`, the same condition the `.then` that sets
+   both `messages` and `studentName` together already gates) disables the composer and the Send button, and
+   `handleSend` itself no-ops without it — a message that will only ever land with a real name should not be
+   possible to send before one is known, not merely hidden once it exists without one.
+3. **Two mocks were stale, silently.** `shell.test.tsx`/`app.test.tsx` both had `getChatMessages.mockResolvedValue([])`
+   — the shape this function returned before this slice added `studentName` alongside `messages`.
+   `Chat.tsx#loadMessages` reads `result.messages`, `undefined` off a bare array, so every test in both files
+   left `Chat` stuck in its own loading skeleton forever; neither file asserts on the thread itself, so nothing
+   noticed. Fixed to `{ messages: [], studentName: 'Jordan' }`, the same harmless default shape
+   `chat.test.tsx`'s own `beforeEach` already uses.
+4. **WEB-52's identification order was untested in both copies** (`apps/web/src/person-identity.ts` and
+   `routes/chat.ts`'s own `chatStudentName`) — every heading test elsewhere in this suite set only
+   `personDisplayName`, never exercising the ordering against the other fields, and the one API assertion
+   that touched `studentName` at all (`.length > 0`) would have passed identically for a bare person id. New:
+   `apps/web/tests/person-identity.test.ts` (four tests, one per tier, each with every lower-priority field
+   also populated so a tier winning actually proves the ordering) and four scenarios in
+   `apps/api/tests/routes/chat.test.ts` (a name tier pinned exactly, `discordPersonId`'s own bare-id case
+   strengthened from `.length > 0` to an exact match, plus the Discord-name-over-email and email-over-id
+   tiers below).
+
+**Design change, not mine — the coordinator's call, recorded here as asked: a heading prefers a Discord
+display name over an email.** Final order: full name, then Discord display name, then email, then the bare
+id — WEB-52's own order (name, email, Discord name, id) with the last two swapped, in both
+`person-identity.ts` and `chatStudentName`. WEB-52's ordering was written for `CoursePeople.tsx`'s own
+*labelled* row, where `Email: jane@x.edu` cannot be mistaken for anything else; a heading carries no label at
+all — it *is* the name slot — and a bare, unlabelled address sitting there reads as nobody in particular,
+exactly the discomfort `CoursePeople.tsx`'s own `Email:` prefix exists to avoid in the first place. A Discord
+display name is a name in the sense a heading wants; an email is not, so it now sits ahead of only the bare
+id, never ahead of a Discord name.
+
+**Also worth doing, done: the ADMIN-2 access-log row now names the surface filter an access applied.**
+`transcript_access_log` gains a `surface` column (migration `0035`, the same nullable/checked shape
+`transcript_exports.surface` already has, and the same drizzle-kit hand-fix `0034`'s own comment already
+documents — `INSERT ... SELECT` selecting a `"surface"` column off the pre-migration table rather than a
+`NULL` literal). `readCourseTranscript` records `input.surface` on the audit insert it already writes;
+`transcripts.listAccessLog` (`@bloombot/actions`) carries it straight through — no new resolution needed, it
+is not another identity to look up. `TranscriptBrowser.tsx`'s own access-log line appends `· <surface label>`
+when one was applied, omitted (not "any surface") otherwise, the same discipline an entry's own missing
+surface already holds itself to. Without this, a Discord-only read and a whole-course read over the same
+dates were indistinguishable on this row, even though ADMIN-2's own "an institution has to be able to account
+for" means what an access covered, not merely that one happened.

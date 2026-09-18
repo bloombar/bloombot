@@ -259,6 +259,37 @@ export function isAdministratorOwnedOrganization(
   )
 }
 
+/**
+ * Every active (non-disabled) `owner` membership's email for
+ * `organizationId` — ADMIN-14's own "carrying the course, its project, its
+ * organization and its owner" (`docs/SPEC.md` §45): the pending-approval
+ * notification names who owns the organization a course landed in, not
+ * merely whether one of them happens to be a platform administrator (the
+ * question `isAdministratorOwnedOrganization`, just above, answers instead —
+ * same query shape, a different projection of the same rows, factored out
+ * here rather than duplicated).
+ */
+export function listActiveOwnerEmails(
+  organizationId: string,
+  db: Executor
+): string[] {
+  const owners = db
+    .select({ email: accounts.email, disabledAt: accounts.disabledAt })
+    .from(memberships)
+    .innerJoin(accounts, eq(accounts.id, memberships.accountId))
+    .where(
+      and(
+        eq(memberships.organizationId, organizationId),
+        eq(memberships.role, 'owner')
+      )
+    )
+    .all()
+
+  return owners
+    .filter((owner) => owner.disabledAt === null)
+    .map((owner) => owner.email)
+}
+
 /** One row `listCoursesForApproval` below returns — everything WEB-53's admin console (next slice) needs to render one course, pending or approved. */
 export interface CourseForApproval {
   courseId: string

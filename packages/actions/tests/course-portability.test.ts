@@ -15,12 +15,14 @@ import {
   courses,
   courseWebSources,
   enrolments,
+  jobs,
   people,
 } from '@bloombot/db'
 import { parse as parseYaml } from 'yaml'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND,
   exportCourseAction,
   importCourseAction,
   courseExportFilename,
@@ -423,6 +425,16 @@ describe('courses.import', () => {
     )
 
     expect(result.course.aiApprovedAt).not.toBeNull()
+    // ADMIN-14 — approved on import, so no support-address notification is
+    // needed: this course never became pending in the first place.
+    const queued = jobs.listJobsForOrganization(
+      destination.organizationId,
+      10,
+      testDb.db
+    )
+    expect(
+      queued.some((job) => job.kind === COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND)
+    ).toBe(false)
   })
 
   // No approval predicate wired — the safe default: an import into a
@@ -450,6 +462,20 @@ describe('courses.import', () => {
     )
 
     expect(result.course.aiApprovedAt).toBeNull()
+    // ADMIN-14 — this course landed pending: `courses.import` must enqueue
+    // one `courseApproval.notifyPending` job naming it.
+    const queued = jobs.listJobsForOrganization(
+      destination.organizationId,
+      10,
+      testDb.db
+    )
+    const notifyJob = queued.find(
+      (job) => job.kind === COURSE_APPROVAL_NOTIFY_PENDING_JOB_KIND
+    )
+    expect(notifyJob).toBeDefined()
+    expect(JSON.parse(notifyJob?.payload ?? '{}')).toMatchObject({
+      courseId: result.course.id,
+    })
   })
 
   // COST-8 — no course owner can set approval through an import: the file

@@ -35,9 +35,9 @@ import {
 import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { createAdmissionGate } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
+import { buildEmailSender } from '@bloombot/mail'
 import { createOpenAiModelClient } from '@bloombot/openai'
 
-import { buildEmailSender } from './logging-email-sender.js'
 import { buildApp } from './server.js'
 import { buildSignInLink } from './sign-in-link.js'
 
@@ -259,9 +259,11 @@ async function main(): Promise<void> {
     ...(joinLinkEncryptionKey ? { joinLinkEncryptionKey } : {}),
     // Must-fix 1 of the API-1..6 rework: refuses outright rather than
     // silently logging sign-in links in production — see
-    // `logging-email-sender.ts`.
+    // `@bloombot/mail#buildEmailSender` (ADMIN-14: moved there so
+    // `apps/worker` can share the same selection).
     emailSender: buildEmailSender(
       nodeEnv,
+      'apps/api',
       process.env['MAIL_FILE'],
       smtp,
       logger

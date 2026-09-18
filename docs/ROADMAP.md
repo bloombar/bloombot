@@ -532,4 +532,4 @@ has to warn instructors about. This phase makes deletion a reversible mark with 
 a scheduled sweep that permanently removes what the window releases, puts a Danger zone on every screen about
 a single entity, and lets a person delete their own history in a course.
 
-**In scope:** DATA-7, DATA-8, DATA-9, TEN-10, WEB-72, WEB-73
+**In scope:** DATA-7, DATA-8, DATA-9, TEN-10, WEB-72, WEB-73, WEB-74

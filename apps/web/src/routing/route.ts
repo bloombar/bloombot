@@ -170,6 +170,19 @@ export type AdminRoute =
   // row on `admin-courses` — the same "own address, reached from the list"
   // shape `admin-organization` already has for an organization.
   | { kind: 'admin-course'; courseId: string }
+  // ADMIN-8 — a project's own console screen, reached from a link on
+  // `admin-organization` (or, once a course names its own project,
+  // `admin-course`) — the same "own address, reached from another screen's
+  // link" shape `admin-course` already has.
+  | { kind: 'admin-project'; projectId: string }
+  // ADMIN-10 — the Users list, `/platform-admin/users`: every account on
+  // the platform, the same "no organization of its own" shape
+  // `admin-courses` already has.
+  | { kind: 'admin-accounts' }
+  // ADMIN-11 — one account's own console screen, reached from a row on
+  // `admin-accounts` or a link naming an account anywhere else in the
+  // console.
+  | { kind: 'admin-account'; accountId: string }
 
 /**
  * Every address this whole app can be asked to render, signed in or out.
@@ -283,6 +296,20 @@ export function parseRoute(pathname: string): Route {
     // `/platform-admin/organizations/:organizationId` already follow.
     if (second === 'courses' && rest.length === 1 && rest[0]) {
       return { kind: 'admin-course', courseId: rest[0] }
+    }
+    // ADMIN-8 — `/platform-admin/projects/:projectId`, the same one-segment
+    // shape `admin-course` above already has.
+    if (second === 'projects' && rest.length === 1 && rest[0]) {
+      return { kind: 'admin-project', projectId: rest[0] }
+    }
+    // ADMIN-10/ADMIN-11 — `/platform-admin/users` and
+    // `/platform-admin/users/:accountId`, the same bare-list-then-one-segment
+    // pairing `organizations`/`courses` above already follow.
+    if (second === 'users' && rest.length === 0) {
+      return { kind: 'admin-accounts' }
+    }
+    if (second === 'users' && rest.length === 1 && rest[0]) {
+      return { kind: 'admin-account', accountId: rest[0] }
     }
   }
   if (first === 'discord' && second === 'callback' && segments.length === 2) {
@@ -465,6 +492,12 @@ export function buildPath(route: Route): string {
       return '/platform-admin/courses'
     case 'admin-course':
       return `/platform-admin/courses/${route.courseId}`
+    case 'admin-project':
+      return `/platform-admin/projects/${route.projectId}`
+    case 'admin-accounts':
+      return '/platform-admin/users'
+    case 'admin-account':
+      return `/platform-admin/users/${route.accountId}`
     case 'discord-callback':
       return '/discord/callback'
     case 'sign-in':
@@ -555,6 +588,9 @@ export function isAdminRoute(route: Route): route is AdminRoute {
     case 'admin-deletions':
     case 'admin-courses':
     case 'admin-course':
+    case 'admin-project':
+    case 'admin-accounts':
+    case 'admin-account':
       return true
     default:
       return false

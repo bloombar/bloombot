@@ -16,7 +16,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm'
 
 import type {
   Database,
@@ -38,6 +38,8 @@ import {
 } from '../schema.js'
 import { getAccountById } from './accounts.js'
 import * as personLinkChallenges from './person-link-challenges.js'
+import * as transcriptAccess from './transcript-access.js'
+import * as transcriptExports from './transcript-exports.js'
 
 export type Person = typeof people.$inferSelect
 export type PersonIdentity = typeof personIdentities.$inferSelect
@@ -1585,6 +1587,159 @@ export function restorePerson(
           eq(people.organizationId, organizationId),
           eq(people.deletedAt, deletedAt)
         )
+      )
+      .returning()
+      .get()
+  })
+}
+
+/**
+ * DATA-8 — every person whose `deletedAt` is at or before `cutoff`, across
+ * every organization: the retention sweep's own candidate list for
+ * `permanentlyDeletePerson`, below. Unscoped by `organizationId` — the same
+ * TEN-2/DATA-9 "the sweep" exception
+ * `accounts.ts#listAccountsDeletedBefore`'s own doc comment already is —
+ * the sweep itself resolves which organization each row belongs to from
+ * the row's own `organizationId`, the same way `jobs.ts#claimNextJob`
+ * already does for a claimed job.
+ */
+export function listPeopleDeletedBefore(
+  cutoff: number,
+  db: Database
+): Person[] {
+  return db
+    .select()
+    .from(people)
+    .where(and(isNotNull(people.deletedAt), lte(people.deletedAt, cutoff)))
+    .all()
+}
+
+/**
+ * DATA-8 — permanently remove a soft-deleted person: every row that exists
+ * only because of them, in FK-safe order, then the person row itself.
+ *
+ * `conversations`/`messages` — this person's own conversations, and every
+ * message in them (children before the parent they reference, the same
+ * order `courses.ts#emptyCourse`'s own message/conversation deletes
+ * already hold themselves to). A conversation independently soft-deleted
+ * earlier is removed here exactly as readily as one that inherited this
+ * person's own timestamp through `softDeletePerson`'s own cascade — this
+ * function does not distinguish the two, since by the time the retention
+ * window has passed for the *person*, anything the cascade marked at the
+ * same moment (or earlier, on its own) has too.
+ *
+ * `person_identities`, `enrolments`, `course_self_enrolment_intents`,
+ * `roster_channel_assignments`, `usage_counters` — real, `NOT NULL` foreign
+ * keys to this person; deleted outright, the same "a join or a fact that
+ * only exists because of this row" class `deleteOrganizationData` already
+ * empties one level up. `person_link_challenges` —
+ * `person-link-challenges.ts#deleteChallengesForPerson`'s own doc comment
+ * has why an outstanding one is deleted rather than re-pointed here.
+ * `transcript_access_log.personId`/`transcript_exports.personId` are
+ * cleared, not deleted — `transcript-access.ts#clearPersonFromAccessLog`/
+ * `transcript-exports.ts#clearPersonFromExports`'s own doc comments have
+ * why (the row is DATA-7's own "record of an event", or course content, in
+ * either case not this person's alone to take with them). Any other
+ * `people.mergedIntoPersonId` still pointing at this person (they were once
+ * a merge survivor, `mergePeople` above) is cleared too — the same
+ * "break the self-reference before deleting" discipline
+ * `deleteOrganizationData` already holds itself to, one row rather than a
+ * whole organization's worth.
+ *
+ * Deliberately does **not** touch `cost_ledger_entries.personId` — `NOT
+ * NULL` by design (COST-2's own "a call that cannot be attributed is a
+ * defect", `schema.ts`'s own comment on that column) — so a person who has
+ * ever been billed against throws `SQLITE_CONSTRAINT` on the final `DELETE`
+ * below, the same deliberate, caught-and-retried partial failure
+ * `accounts.ts#permanentlyDeleteAccount`'s own doc comment describes for an
+ * account's own unremovable audit references (see docs/DECISIONS.md).
+ *
+ * `undefined` when `personId` does not exist, or does not belong to
+ * `organizationId` (TEN-2).
+ */
+export function permanentlyDeletePerson(
+  organizationId: string,
+  personId: string,
+  db: Database
+): Person | undefined {
+  return writeTransaction(db, (tx) => {
+    const conversationRows = tx
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          eq(conversations.personId, personId)
+        )
+      )
+      .all()
+    const conversationIds = conversationRows.map((row) => row.id)
+    if (conversationIds.length > 0) {
+      tx.delete(messages)
+        .where(inArray(messages.conversationId, conversationIds))
+        .run()
+      tx.delete(conversations)
+        .where(inArray(conversations.id, conversationIds))
+        .run()
+    }
+
+    tx.delete(personIdentities)
+      .where(
+        and(
+          eq(personIdentities.organizationId, organizationId),
+          eq(personIdentities.personId, personId)
+        )
+      )
+      .run()
+    tx.delete(enrolments)
+      .where(
+        and(
+          eq(enrolments.organizationId, organizationId),
+          eq(enrolments.personId, personId)
+        )
+      )
+      .run()
+    tx.delete(courseSelfEnrolmentIntents)
+      .where(
+        and(
+          eq(courseSelfEnrolmentIntents.organizationId, organizationId),
+          eq(courseSelfEnrolmentIntents.personId, personId)
+        )
+      )
+      .run()
+    tx.delete(rosterChannelAssignments)
+      .where(
+        and(
+          eq(rosterChannelAssignments.organizationId, organizationId),
+          eq(rosterChannelAssignments.personId, personId)
+        )
+      )
+      .run()
+    tx.delete(usageCounters)
+      .where(
+        and(
+          eq(usageCounters.organizationId, organizationId),
+          eq(usageCounters.personId, personId)
+        )
+      )
+      .run()
+    personLinkChallenges.deleteChallengesForPerson(organizationId, personId, tx)
+    transcriptAccess.clearPersonFromAccessLog(organizationId, personId, tx)
+    transcriptExports.clearPersonFromExports(organizationId, personId, tx)
+    tx.update(people)
+      .set({ mergedIntoPersonId: null })
+      .where(
+        and(
+          eq(people.organizationId, organizationId),
+          eq(people.mergedIntoPersonId, personId)
+        )
+      )
+      .run()
+
+    return tx
+      .delete(people)
+      .where(
+        and(eq(people.id, personId), eq(people.organizationId, organizationId))
       )
       .returning()
       .get()

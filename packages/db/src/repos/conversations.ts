@@ -3,12 +3,15 @@
  *
  * A conversation is the continuity of one person's exchange with one
  * course; a message is one turn of it, in either direction. Every function
- * here is scoped by `organizationId`, its first parameter — there is no
- * exception in this file (TEN-2).
+ * here is scoped by `organizationId`, its first parameter, except
+ * `listConversationsDeletedBefore` (DATA-8) — the retention sweep's own
+ * candidate list, the same "the sweep is platform-wide" TEN-2 exception
+ * `people.ts#listPeopleDeletedBefore`/`accounts.ts#listAccountsDeletedBefore`
+ * already are (`tests/tenant-scoping-convention.test.ts`'s own allowlist).
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, lte, sql } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { writeTransaction } from '../client.js'
@@ -650,5 +653,59 @@ export function restoreConversationsForPerson(
       )
       .returning()
       .all()
+  })
+}
+
+/**
+ * DATA-8 — every conversation whose `deletedAt` is at or before `cutoff`,
+ * across every organization: the retention sweep's own candidate list for
+ * `permanentlyDeleteConversation`, below. Unscoped by `organizationId` — the
+ * same TEN-2/DATA-9 "the sweep" exception
+ * `people.ts#listPeopleDeletedBefore`'s own doc comment already is.
+ */
+export function listConversationsDeletedBefore(
+  cutoff: number,
+  db: Database
+): Conversation[] {
+  return db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        isNotNull(conversations.deletedAt),
+        lte(conversations.deletedAt, cutoff)
+      )
+    )
+    .all()
+}
+
+/**
+ * DATA-8 — permanently remove a soft-deleted conversation: every message in
+ * it (the child it owns, this file's own module comment — "a message is one
+ * turn of it"), then the conversation row itself. This is DATA-7's own
+ * "leaf" target (`softDeleteConversationsForPerson`'s own doc comment) —
+ * nothing else in this package references `conversations.id` except
+ * `messages.conversationId`, so there is nothing else to empty first.
+ *
+ * `undefined` when `conversationId` does not exist, or does not belong to
+ * `organizationId` (TEN-2).
+ */
+export function permanentlyDeleteConversation(
+  organizationId: string,
+  conversationId: string,
+  db: Database
+): Conversation | undefined {
+  return writeTransaction(db, (tx) => {
+    tx.delete(messages).where(eq(messages.conversationId, conversationId)).run()
+    return tx
+      .delete(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.organizationId, organizationId)
+        )
+      )
+      .returning()
+      .get()
   })
 }

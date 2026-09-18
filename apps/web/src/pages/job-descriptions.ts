@@ -5,7 +5,7 @@
  * readable title and a plain-language sentence of what the work actually
  * did, for `pages/Jobs.tsx` to render instead of the raw `kind`.
  *
- * The seven entries below are the seven job kinds `apps/worker/src/index.ts`
+ * The eight entries below are the eight job kinds `apps/worker/src/index.ts`
  * registers a handler for (that file's own `handlers.register` calls, one
  * per kind) — this app cannot import that app's source (`apps/web` depends
  * on `@bloombot/actions`, never on `apps/worker`, the same app/package
@@ -80,6 +80,12 @@ export function describeJob(kind: string): JobDescription {
         title: 'Notify support of a pending course',
         detail:
           "Let this deployment's support contact know a course is waiting for approval.",
+      }
+    case 'retention.sweep':
+      return {
+        title: 'Clean up deleted data',
+        detail:
+          'Permanently removed accounts, people, organizations, projects, courses and conversation history that had been deleted for longer than this deployment allows for changing that.',
       }
     default:
       // WEB-70: a kind this table does not (yet) recognise is named by its

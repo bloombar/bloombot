@@ -270,7 +270,10 @@ describe('organizations.deleteOrganizationData (ADMIN-5)', () => {
       testDb.db
     )
 
-    expect(result).toMatchObject({
+    // DATA-8 — `deleteOrganizationData` now returns `{ preview,
+    // byteRemovals }`, not the preview directly; `byteRemovals` is exercised
+    // by its own test below.
+    expect(result?.preview).toMatchObject({
       organizationId,
       courses: 1,
       people: 2,
@@ -338,6 +341,25 @@ describe('organizations.deleteOrganizationData (ADMIN-5)', () => {
     expect(
       courses.getCourse(survivingOrg, survivingCourse.id, testDb.db)
     ).toBeDefined()
+  })
+
+  it('DATA-8: gathers one CourseByteRemoval per course, inside the same transaction, for the retention sweep to enqueue bytes removal with', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedFullTenant(testDb)
+
+    const result = organizations.deleteOrganizationData(
+      organizationId,
+      testDb.db
+    )
+
+    expect(result?.byteRemovals).toHaveLength(1)
+    const removal = result?.byteRemovals[0]
+    expect(removal?.courseId).toBe(course.id)
+    // `seedFullTenant` attaches one pending attachment (no provider file
+    // id yet) and one pending export.
+    expect(removal?.attachments).toHaveLength(1)
+    expect(removal?.attachments[0]?.providerFileId).toBeNull()
+    expect(removal?.exportIds).toHaveLength(1)
   })
 
   it('returns undefined, and deletes nothing, for an organization that does not exist', () => {

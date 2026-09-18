@@ -120,6 +120,15 @@ export const envSchema = z.object({
   // rather than rendering a blank.
   SUPPORT_CONTACT: z.string().default(''),
 
+  // DATA-7/DATA-8 — how long a soft-deleted record stays reversible before
+  // the retention sweep permanently removes it. Non-negative: `0` is a
+  // deliberate, deployment-chosen way to *disable* the sweep (DATA-8's own
+  // text), never a default — `apps/worker`'s own sweep handler reads this
+  // once at startup, the same "packages never import @bloombot/config, the
+  // value arrives as an argument" (D-29) discipline `SUPPORT_CONTACT`/
+  // `PUBLIC_APP_URL` above already follow.
+  DELETED_DATA_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
+
   // JOB-2..3: the background queue's own policy. See docs/DECISIONS.md for
   // why these particular numbers. `@bloombot/jobs` takes every one of these
   // as an explicit argument rather than reading `CONFIG` itself (CORE-4's

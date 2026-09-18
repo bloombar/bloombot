@@ -27,6 +27,32 @@ describe('parseEnv', () => {
     // SURF-10/COST-8 — parsed with a default, so a deployment that has not
     // set a support contact yet still starts.
     expect(env.SUPPORT_CONTACT).toBe('')
+    // DATA-7/DATA-8 — thirty days when unset (docs/SPEC.md §49's own
+    // number).
+    expect(env.DELETED_DATA_RETENTION_DAYS).toBe(30)
+  })
+
+  it('accepts a deployment-chosen retention window, including zero (DATA-8: disables the sweep)', () => {
+    expect(
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '0' })
+        .DELETED_DATA_RETENTION_DAYS
+    ).toBe(0)
+    expect(
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '90' })
+        .DELETED_DATA_RETENTION_DAYS
+    ).toBe(90)
+  })
+
+  it('rejects a non-integer retention window', () => {
+    expect(() =>
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '30.5' })
+    ).toThrow(EnvValidationError)
+  })
+
+  it('rejects a negative retention window', () => {
+    expect(() =>
+      parseEnv({ ...VALID, DELETED_DATA_RETENTION_DAYS: '-1' })
+    ).toThrow(EnvValidationError)
   })
 
   it('defaults every upstream base URL to the real service (QA-2)', () => {

@@ -14013,3 +14013,57 @@ callers and both now call `softDeleteCourse`/`softDeleteProject` instead, but it
 existing, already-typed way to reach the administrative capability the paragraph above keeps. Their doc
 comments are updated (the only edit this slice makes to that file) to say they have no caller in this app any
 more, so the next reader is not left believing the row kebab still calls them.
+
+## D-142 — `packages/db`/`apps/worker`: DATA-8 — a platform-wide job needs an organization it is not about, and an account cannot always be forgotten
+
+DATA-8's own text ("a scheduled sweep permanently removes what the retention window has released") is a single,
+platform-wide job — it does not belong to one organization any more than `organizations.ts#listTenantDeletions`
+or `jobs.ts#claimNextJob` do (both already-documented TEN-2 exceptions, `tests/tenant-scoping-convention.test.ts`).
+`jobs.organizationId`, though, is a real, `NOT NULL` foreign key (`schema.ts`) — every other job this platform
+runs really is scoped to one organization, and widening the column to nullable would ripple `string | null`
+through `@bloombot/jobs`' own `runner.ts` (every call it makes to `completeJob`/`markJobFailed`/
+`rescheduleJobForRetry`/`getJob` passes `job.organizationId` straight through) and every existing handler that
+trusts `context.organizationId` is a real id — a change far outside this slice's own scope, and risky enough
+(five processes share one SQLite file, D-2) that it deserves its own slice if it is ever worth doing.
+
+**Chosen instead: `organizations.ts#pickReferenceOrganizationId`** — the sweep's own job row is attached to
+*some* organization (preferring a live one, oldest first, so the row essentially never rides on an organization
+the sweep is about to remove itself, in the same run, out from under it), purely so `jobs.organizationId`'s own
+constraint is satisfied; the sweep's own handler never reads `context.organizationId` to scope anything — it
+queries every deletable entity across every organization directly (`listOrganizationsDeletedBefore` and its four
+siblings, one per entity, each a new, documented TEN-2/DATA-9 exception the same class as the sweep itself). The
+rare case where the reference organization *is* the one the same run removes is not specially guarded against —
+`@bloombot/jobs`' own `runner.ts` already handles a claimed job's row disappearing out from under it
+(`outcome: 'superseded'`, logged rather than thrown, "rework finding 3" in that file's own doc comment): this is
+exactly that race, already a supported outcome, not a new one this slice had to invent handling for. A fresh
+install with no organization at all skips scheduling entirely (logged, not thrown) — there is nothing to sweep
+either way, and `apps/worker/src/index.ts`'s own next restart tries again.
+
+**An account's own permanent removal is deliberately partial.** DATA-7's own text names four tables an account's
+(or a person's) own deletion must never touch — `tenant_deletions`, `content_deletions`, `transcript_access_log`,
+`roster_import_acknowledgements` — "records of events... [that] cannot themselves be deleted by the person [they
+describe]". Auditing every table with a real, `NOT NULL` foreign key to `accounts.id` (`schema.ts`) found five
+more of the identical shape that DATA-7's own text does not name explicitly: `discord_server_bindings.installedByAccountId`,
+`course_instruction_revisions.savedByAccountId`, `course_approval_events.accountId`,
+`course_join_links.createdByAccountId`, `transcript_exports.requestedByAccountId` — each "who did this" on
+content that is not itself being deleted, not an account's own data. Every one of those nine columns would need
+to become nullable (and nulled at sweep time) to let such an account go — a real, cross-cutting schema change
+whose ripple runs through every reader that joins one of them back to an account for display (the admin console's
+own transcript-access log, the Jobs screen's own job history, and more), squarely out of DATA-8's own scope.
+`accounts.ts#permanentlyDeleteAccount` removes what is unambiguously the account's own operational state
+(memberships, sessions, MCP OAuth tokens, an invitation it created or redeemed) and then attempts the row itself;
+an account still named by one of those nine columns throws `SQLITE_CONSTRAINT` on that last `DELETE`, which the
+sweep's own per-record `try`/`catch` (DATA-8's own "records what it could not do and moves on") turns into a
+logged, retried failure rather than a crash. In practice this means an account that has never installed a
+Discord server, saved a course revision, approved a course, created a join link, requested a transcript export,
+appears in the transcript-access audit trail, deleted a tenant, deleted content, or acknowledged a roster import
+is removed cleanly on schedule; one that has stays marked deleted — reversibly, from the product's own point of
+view (DATA-9 already hides it) — indefinitely, until a later slice decides whether those nine columns should
+become nullable. `people.ts#permanentlyDeletePerson` has the identical shape for one column:
+`cost_ledger_entries.personId` is `NOT NULL` by design (COST-2's own "a call that cannot be attributed is a
+defect") — a person who was ever billed against is retried the same way, for the same reason.
+
+**The sweep's own re-run interval (`RETENTION_SWEEP_INTERVAL_MS`, `handlers/retention-sweep.ts`, one day) is a
+judgment call, not something DATA-8's own text names a config knob for** — only the retention *window*
+(`DELETED_DATA_RETENTION_DAYS`) is. A day is frequent enough that nothing sits releasable for long, and coarse
+enough not to add meaningfully to the queue's own traffic; revisit if a deployment ever needs finer control.

@@ -26,7 +26,7 @@
  * (`{ ok: false, conflict }`) rather than `undefined`.
  */
 
-import { and, eq, inArray, isNull, or } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, lte, or } from 'drizzle-orm'
 
 import { normalizeCategoryName } from '../category-name.js'
 import type { Database, TransactingExecutor } from '../client.js'
@@ -2344,4 +2344,22 @@ export function restoreCourse(
       .returning()
       .get()
   })
+}
+
+/**
+ * DATA-8 — every course whose `deletedAt` is at or before `cutoff`, across
+ * every organization: the retention sweep's own candidate list for
+ * `deletions.deleteCourse`. Unscoped by `organizationId` — the same
+ * "the sweep is platform-wide" TEN-2/DATA-9 exception
+ * `projects.ts#listProjectsDeletedBefore` already is, one level down.
+ */
+export function listCoursesDeletedBefore(
+  cutoff: number,
+  db: Database
+): Course[] {
+  return db
+    .select()
+    .from(courses)
+    .where(and(isNotNull(courses.deletedAt), lte(courses.deletedAt, cutoff)))
+    .all()
 }

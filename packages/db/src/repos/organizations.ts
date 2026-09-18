@@ -8,10 +8,15 @@
  * even here: the id is simply the organization's own.
  */
 
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import { writeTransaction } from '../client.js'
+// DATA-8 — `CourseByteRemoval` is `deletions.ts`'s own shape for "everything
+// a caller needs to remove one course's bytes"; `deleteOrganizationData`
+// below returns one per course it removed, the same reuse
+// `deletions.ts#deleteProject` already makes of `deletions.ts#emptyCourse`.
+import type { CourseByteRemoval } from './deletions.js'
 import {
   contentDeletions,
   conversations,
@@ -309,10 +314,28 @@ export function previewOrganizationDeletion(
  * may still belong to another one — only `memberships`, the join between
  * them, is removed here.
  *
- * Returns the same shape `previewOrganizationDeletion` reports, this time
- * counting what was actually removed — what `recordTenantDeletion`'s own
- * `summary` is built from. `undefined` when `organizationId` does not
- * exist; nothing is deleted.
+ * Returns `preview`, the same shape `previewOrganizationDeletion` reports,
+ * this time counting what was actually removed — what `recordTenantDeletion`'s
+ * own `summary` is built from — alongside `byteRemovals`, one
+ * `deletions.CourseByteRemoval` per course this organization owned,
+ * gathered *inside* this same transaction, immediately before any of it is
+ * deleted (`deletions.ts#CourseByteRemoval`'s own doc comment has the race
+ * this closes). `undefined` when `organizationId` does not exist; nothing
+ * is deleted.
+ *
+ * DATA-8 — `byteRemovals` is what the retention sweep's own handler
+ * (`apps/worker`'s `handlers/retention-sweep.ts`) enqueues
+ * `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND` with, one job per organization
+ * (`@bloombot/actions`' `enqueueRemoveDeletedContentBytes`), the same job
+ * `deletions.ts#deleteCourse`/`deleteProject` already enqueue it with — this
+ * function did not gather it before DATA-8, since ADMIN-5's own route
+ * (`apps/api/src/routes/admin.ts`) reads the same ids itself, separately,
+ * ahead of calling this, and removes them immediately through
+ * `AttachmentStorage` rather than through that job. `byteRemovals` is
+ * additive here — that route's own destructuring of this function's return
+ * value is updated to unwrap `preview` (`git blame` this slice), not to
+ * consume `byteRemovals` itself, so ADMIN-5's own bytes-cleanup path is
+ * unchanged.
  *
  * This function does not touch `AttachmentStorage` — a course attachment's
  * or a transcript export's own bytes on disk are its caller's
@@ -323,16 +346,62 @@ export function previewOrganizationDeletion(
  * database and nothing else" discipline `packages/actions` already holds
  * itself to.
  */
+export interface DeleteOrganizationDataResult {
+  preview: OrganizationDeletionPreview
+  byteRemovals: CourseByteRemoval[]
+}
+
 export function deleteOrganizationData(
   organizationId: string,
   db: Database
-): OrganizationDeletionPreview | undefined {
+): DeleteOrganizationDataResult | undefined {
   return writeTransaction(db, (tx) => {
     // Read inside this same transaction, before anything below deletes a
     // row it counts, so the summary returned is exactly what this call is
     // about to remove.
     const preview = previewOrganizationDeletion(organizationId, tx)
     if (!preview) return undefined
+
+    // DATA-8 — gathered here, before any of it is deleted below, the same
+    // "read inside the transaction that is about to remove it" discipline
+    // `deletions.ts#emptyCourse` already holds itself to for a single
+    // course; this is the identical read, once per course this organization
+    // owns.
+    const courseRows = tx
+      .select({ id: courses.id, vectorStoreId: courses.vectorStoreId })
+      .from(courses)
+      .where(eq(courses.organizationId, organizationId))
+      .all()
+    const attachmentRows = tx
+      .select({
+        id: courseAttachments.id,
+        courseId: courseAttachments.courseId,
+        providerFileId: courseAttachments.providerFileId,
+      })
+      .from(courseAttachments)
+      .where(eq(courseAttachments.organizationId, organizationId))
+      .all()
+    const exportRows = tx
+      .select({
+        id: transcriptExports.id,
+        courseId: transcriptExports.courseId,
+      })
+      .from(transcriptExports)
+      .where(eq(transcriptExports.organizationId, organizationId))
+      .all()
+    const byteRemovals: CourseByteRemoval[] = courseRows.map((course) => ({
+      courseId: course.id,
+      vectorStoreId: course.vectorStoreId,
+      attachments: attachmentRows
+        .filter((attachment) => attachment.courseId === course.id)
+        .map((attachment) => ({
+          attachmentId: attachment.id,
+          providerFileId: attachment.providerFileId,
+        })),
+      exportIds: exportRows
+        .filter((exportRow) => exportRow.courseId === course.id)
+        .map((exportRow) => exportRow.id),
+    }))
 
     // Children first — see this function's own doc comment for the full
     // ordering rationale.
@@ -464,7 +533,7 @@ export function deleteOrganizationData(
       .run()
     tx.delete(organizations).where(eq(organizations.id, organizationId)).run()
 
-    return preview
+    return { preview, byteRemovals }
   })
 }
 
@@ -681,4 +750,61 @@ export function restoreOrganization(
       .returning()
       .get()
   })
+}
+
+/**
+ * DATA-8 — every organization whose `deletedAt` is at or before `cutoff`:
+ * the retention sweep's own candidate list for `deleteOrganizationData`,
+ * above. Unscoped by `organizationId` (there is nothing to scope this list
+ * *by* — it is the list of organizations themselves) — the same "the sweep
+ * is platform-wide" TEN-2/DATA-9 exception
+ * `listAccountsDeletedBefore`/`listPeopleDeletedBefore`/
+ * `listConversationsDeletedBefore` already are, one level up.
+ */
+export function listOrganizationsDeletedBefore(
+  cutoff: number,
+  db: Database
+): Organization[] {
+  return db
+    .select()
+    .from(organizations)
+    .where(
+      and(
+        isNotNull(organizations.deletedAt),
+        lte(organizations.deletedAt, cutoff)
+      )
+    )
+    .all()
+}
+
+/**
+ * DATA-8 — an organization to attach a platform-wide job to: `jobs.organizationId`
+ * is a real, `NOT NULL` foreign key (`schema.ts`), so a job that is not
+ * about any one organization — the retention sweep itself — still has to
+ * name one. Prefers a live organization (`deletedAt IS NULL`), oldest
+ * first, so the sweep's own row essentially never rides on an organization
+ * it is about to remove; falls back to *any* organization (including a
+ * deleted one) rather than refuse outright if every organization on the
+ * platform happens to be soft-deleted. `undefined` when there is no
+ * organization at all — a fresh install with nobody signed up yet, which
+ * also means there is nothing for a sweep to remove.
+ *
+ * If the organization a currently-running sweep is attached to is itself
+ * swept away by that same run, `@bloombot/jobs`' own `runner.ts` already
+ * handles the row disappearing out from under it (`outcome: 'superseded'`,
+ * logged rather than thrown) — this function's own "prefer a live
+ * organization" bias makes that rare, not impossible, and rare is enough:
+ * see docs/DECISIONS.md.
+ */
+export function pickReferenceOrganizationId(db: Database): string | undefined {
+  const row = db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .orderBy(
+      sql`(${organizations.deletedAt} is null) desc`,
+      organizations.createdAt
+    )
+    .limit(1)
+    .get()
+  return row?.id
 }

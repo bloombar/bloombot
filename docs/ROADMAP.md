@@ -484,3 +484,14 @@ reached a screen: a transcript showed "<name> — asked" and "<name> — answere
 no way to filter by one. This phase puts that on the message and adds the filter.
 
 **In scope:** WEB-65, WEB-66
+
+## Phase 40 — The console as a map of the platform
+
+The administrator console could list organizations and courses and little else: an organization's "detail"
+was its own row, a course had no people, an account had no screen at all, and nothing linked to anything. An
+administrator asking "who is in this course, and what has this account cost us" had no way to find out. This
+phase gives organizations, projects, courses and accounts each a full screen, links them to one another,
+adds a Users screen and a search field to every list, and puts a confirmation in front of an approval
+decision.
+
+**In scope:** ADMIN-7, ADMIN-8, ADMIN-9, ADMIN-10, ADMIN-11, ADMIN-12, ADMIN-13

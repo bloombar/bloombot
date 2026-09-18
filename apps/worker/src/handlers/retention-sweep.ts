@@ -28,11 +28,16 @@
  * `deletions.CourseByteRemoval` *inside* the same transaction the row
  * removal runs in (`deleteProject`/`deleteCourse` already do this — see
  * their own doc comments), and this handler enqueues that job with them
- * immediately after, the same "rows in a transaction, bytes in a job" split
+ * immediately after — outside the delete's own transaction, i.e. exactly
+ * the delete-then-enqueue structure that caused the organization-level bug
+ * below — the same "rows in a transaction, bytes in a job" split
  * `@bloombot/actions`'s `enqueueRemoveDeletedContentBytes` already holds
- * itself to for an ordinary delete action — their own organization
- * survives the delete, so the job is attached to it directly, exactly as
- * that action already does.
+ * itself to for an ordinary delete action. Safe *only* because their own
+ * organization survives the delete (so the job is attached to it directly,
+ * a real, still-existing `jobs.organizationId`, exactly as that action
+ * already does) — named explicitly here, after the organization-level fix
+ * below, so this is not the one place left on this file where the same
+ * shape could quietly regress unnoticed (docs/DECISIONS.md).
  *
  * **An organization's own removal cannot follow that same split — DATA-8
  * rework, must-fix 1** — `jobs.organizationId` is a real, `NOT NULL`
@@ -48,9 +53,20 @@
  * organization this same sweep run is about to remove, not only the one
  * currently being processed), while the payload carries the organization
  * the bytes actually belong to explicitly
- * (`content-deletions.ts`'s own `ParsedPayload.organizationId`) — see
- * docs/DECISIONS.md for the one case (the swept organization was the
- * platform's only one) this still cannot close.
+ * (`content-deletions.ts`'s own `ParsedPayload.organizationId`).
+ *
+ * **When no surviving organization exists at all — DATA-8 rework, round 2
+ * must-fix 1** — a second review round found the round-one code still
+ * deleted the organization's rows anyway and only logged the gap,
+ * permanently orphaning its bytes while reporting a clean success on the
+ * Jobs screen (`failures: 0`); reproduced for *any* run where every
+ * candidate organization lacks a survivor, not only "the platform's only
+ * organization" (docs/DECISIONS.md's own D-140 said only the latter, which
+ * was itself wrong). Fixed the same way every other unremovable record in
+ * this handler already is: skipped *before* the delete starts, counted as
+ * a failure, logged, and left exactly as soft-deleted as it was for the
+ * next run to retry — see docs/DECISIONS.md for what "no surviving
+ * organization" can still mean in practice.
  *
  * `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`/`enqueueContentBytesRemoval`
  * below are a deliberate duplicate of that file's own constant and
@@ -288,25 +304,47 @@ export function runRetentionSweep(
       (organization) => organization.id
     )
     for (const organization of organizationCandidates) {
+      // Picked *before* the delete, and used *inside* the same transaction
+      // as the delete below — DATA-8 rework must-fix 1's own fix:
+      // `jobs.organizationId` cannot name the organization this call is
+      // about to remove (`deleteOrganizationData`'s own doc comment), so
+      // the byte-removal job for its courses is durably queued, in the same
+      // commit, against a *surviving* organization instead — never gone
+      // while its bytes are still unqueued.
+      const referenceOrganizationId = organizations.pickReferenceOrganizationId(
+        db,
+        organizationCandidateIds
+      )
+      if (!referenceOrganizationId) {
+        // DATA-8 rework, round 2 must-fix 1 — no surviving organization
+        // exists to attach the byte-removal job to (every organization on
+        // the platform is past its own window in this same run, or this is
+        // the only organization there is). The round-one version of this
+        // function still deleted the organization's own rows here and only
+        // logged the gap — permanently orphaning any attachment/export
+        // bytes it owned, with nothing left anywhere naming them, and
+        // reporting a clean `organizationsRemoved` with `failures: 0` on
+        // the Jobs screen while it happened. Skipped instead, *before* the
+        // delete even starts: the organization stays exactly as
+        // soft-deleted as it was, counted as a failure so it is visibly
+        // retried rather than silently dropped, and a later run — once a
+        // surviving organization exists again — removes it cleanly. Losing
+        // one more retention cycle's worth of "should already be gone" is
+        // recoverable; an orphaned file with no row left to name it is not.
+        report.failures += 1
+        logger.warn(
+          { organizationId: organization.id },
+          'apps/worker: retention sweep skipped an organization past its retention window — no surviving organization to attach its byte-removal job to, left marked for the next run'
+        )
+        continue
+      }
       try {
-        // Picked *before* the delete, and used *inside* the same
-        // transaction as the delete below — DATA-8 rework must-fix 1's own
-        // fix: `jobs.organizationId` cannot name the organization this call
-        // is about to remove (`deleteOrganizationData`'s own doc comment),
-        // so the byte-removal job for its courses is durably queued, in the
-        // same commit, against a *surviving* organization instead — never
-        // gone while its bytes are still unqueued.
-        const referenceOrganizationId =
-          organizations.pickReferenceOrganizationId(
-            db,
-            organizationCandidateIds
-          )
         const result = writeTransaction(db, (tx) => {
           const deleteResult = organizations.deleteOrganizationData(
             organization.id,
             tx
           )
-          if (deleteResult && referenceOrganizationId) {
+          if (deleteResult) {
             enqueueContentBytesRemoval(
               referenceOrganizationId,
               organization.id,
@@ -318,22 +356,6 @@ export function runRetentionSweep(
         })
         if (result) {
           report.organizationsRemoved += 1
-          if (!referenceOrganizationId) {
-            // DATA-8 rework must-fix 1's own named edge case: no surviving
-            // organization exists to attach the byte-removal job to (this
-            // organization was the platform's only one, or every other one
-            // is being removed in this same run too). The rows are
-            // genuinely gone — `organizationsRemoved` is correct — but any
-            // attachment/export bytes this organization owned are left on
-            // disk, unreachable, until a later organization exists; nothing
-            // is left marked to retry against, since there is no row left
-            // to mark. Recorded as a known limitation, not fixed here
-            // (docs/DECISIONS.md).
-            logger.warn(
-              { organizationId: organization.id },
-              'apps/worker: retention sweep removed an organization but could not queue its bytes for removal — no surviving organization to attach the job to'
-            )
-          }
         }
       } catch (error) {
         report.failures += 1

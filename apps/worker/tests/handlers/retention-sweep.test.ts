@@ -35,6 +35,7 @@ import {
   createRetentionSweepHandler,
   ensureRetentionSweepScheduled,
   runRetentionSweep,
+  RETENTION_SWEEP_INTERVAL_MS,
   RETENTION_SWEEP_JOB_KIND,
 } from '../../src/handlers/retention-sweep.js'
 import { createFakeLogger } from '../helpers/fake-logger.js'
@@ -273,6 +274,115 @@ describe('runRetentionSweep', () => {
     expect(payload.courses[0]?.attachments[0]?.providerFileId).toBe(
       'file_org_abc123'
     )
+  })
+
+  // DATA-8 rework, round 2 must-fix 1/cheap-fix 4 — reproduces the review's
+  // own finding: with no surviving organization to attach the byte-removal
+  // job to, the round-one code still deleted this organization's rows
+  // anyway, orphaning its attachment forever while reporting a clean
+  // `{organizationsRemoved: 1, failures: 0}`. Fails without the fix: the
+  // organization row and its course would both be gone, and zero jobs
+  // queued.
+  it('with no surviving organization, skips the organization rather than deleting rows it cannot queue bytes for', () => {
+    testDb = createTestDatabase()
+    const { organizationId, owner } = seedOrganization(testDb.db)
+    const now = Date.now()
+
+    const project = projects.createProject(
+      organizationId,
+      { name: 'Fall 2026' },
+      testDb.db
+    )
+    const courseResult = courses.createCourse(
+      organizationId,
+      {
+        projectId: project.id,
+        title: 'Web Design',
+        enabled: true,
+        adminsRole: 'admins-wd',
+        studentsRole: 'students-wd',
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!courseResult.ok) throw new Error('seed course creation failed')
+    const courseId = courseResult.course.id
+    testDb.db
+      .insert(schema.courseAttachments)
+      .values({
+        id: randomUUID(),
+        organizationId,
+        courseId,
+        filename: 'syllabus.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1,
+        status: 'ready',
+        providerFileId: 'file_orphan_risk',
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run()
+
+    organizations.softDeleteOrganization(organizationId, owner.id, testDb.db)
+    testDb.db
+      .update(schema.organizations)
+      .set({ deletedAt: now - WINDOW_MS - 1_000 })
+      .where(eq(schema.organizations.id, organizationId))
+      .run()
+
+    const logger = createFakeLogger()
+    const report = runRetentionSweep(RETENTION_DAYS, now, testDb.db, logger)
+
+    // Not removed, not silently dropped — counted as a failure, retried.
+    expect(report.organizationsRemoved).toBe(0)
+    expect(report.failures).toBe(1)
+    expect(
+      testDb.db
+        .select()
+        .from(schema.organizations)
+        .where(eq(schema.organizations.id, organizationId))
+        .all()
+    ).toHaveLength(1)
+    expect(
+      testDb.db
+        .select()
+        .from(schema.courses)
+        .where(eq(schema.courses.id, courseId))
+        .all()
+    ).toHaveLength(1)
+    expect(testDb.db.select().from(schema.jobs).all()).toHaveLength(0)
+    expect(logger.warnCalls.length).toBeGreaterThanOrEqual(1)
+  })
+
+  // The round's own second reproduction: this is not limited to "the
+  // platform's only organization" (an earlier version of D-140 said it
+  // was) — two organizations, both past their window, with no *live* one
+  // between them, hits the identical gap for both.
+  it('with two expired organizations and no live one, skips both — not only "the platform’s only organization"', () => {
+    testDb = createTestDatabase()
+    const first = seedOrganization(testDb.db)
+    const second = seedOrganization(testDb.db)
+    const now = Date.now()
+
+    for (const { organizationId, owner } of [first, second]) {
+      organizations.softDeleteOrganization(organizationId, owner.id, testDb.db)
+      testDb.db
+        .update(schema.organizations)
+        .set({ deletedAt: now - WINDOW_MS - 1_000 })
+        .where(eq(schema.organizations.id, organizationId))
+        .run()
+    }
+
+    const report = runRetentionSweep(
+      RETENTION_DAYS,
+      now,
+      testDb.db,
+      createFakeLogger()
+    )
+
+    expect(report.organizationsRemoved).toBe(0)
+    expect(report.failures).toBe(2)
+    expect(testDb.db.select().from(schema.organizations).all()).toHaveLength(2)
   })
 
   it('removes a course past its window and enqueues the content-deletion job with its own byte ids', () => {
@@ -604,6 +714,7 @@ describe('retention.sweep handler, run through the real queue', () => {
       testDb.db
     )
 
+    const before = Date.now()
     const result = await runNextJob({
       db: testDb.db,
       logger,
@@ -625,5 +736,16 @@ describe('retention.sweep handler, run through the real queue', () => {
       .all()
     const live = queued.filter((row) => row.status !== 'succeeded')
     expect(live).toHaveLength(1)
+    // DATA-8 rework, round 2 cheap-fix 3 — pins the *interval*, not merely
+    // "a successor exists": the "schedules the startup sweep to run
+    // promptly" test above already pins the startup path to well under a
+    // day, but nothing here previously distinguished a self-reschedule
+    // that waits the full `RETENTION_SWEEP_INTERVAL_MS` from one that
+    // (wrongly) reused the startup path's `Date.now()` — a bug like that
+    // would leave both tests green while the worker spun the sweep
+    // continuously.
+    expect(live[0]?.nextAttemptAt ?? 0).toBeGreaterThan(
+      before + RETENTION_SWEEP_INTERVAL_MS - 5_000
+    )
   })
 })

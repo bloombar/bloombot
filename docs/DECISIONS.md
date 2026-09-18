@@ -14054,11 +14054,46 @@ enqueue in one outer transaction: the byte-removal job is attached to a *survivi
 one currently being processed — a second, already-soft-deleted organization in the same candidate list is exactly
 as unfit a target), while the payload carries the *actual* organization the bytes belong to explicitly
 (`content-deletions.ts`'s own `ParsedPayload.organizationId`, optional and unused by an ordinary course/project
-delete, whose organization survives and needs no override). The one case this still cannot close: if the swept
-organization was the *only* organization on the platform, no surviving organization exists to attach the job to
-at all, and the bytes are left on disk, unreachable, with nothing marked to retry against (there is no row left to
-mark) — logged, and accepted as a limitation of a job queue that requires a real, live parent row, the same shape
-the sweep's own successor-scheduling gap two paragraphs up already is.
+delete, whose organization survives and needs no override).
+
+**A second review round found the round-one fix above still had the identical failure mode, one level up: with no
+surviving organization at all, the round-one code deleted the organization's rows anyway and only logged the gap —
+still a permanent, unreachable byte leak, now with the Jobs screen showing a clean `{failures: 0}` success while it
+happened.** The round-one text here also understated when this applies — not only "the platform's only
+organization," but any run where every remaining candidate lacks a survivor (two organizations, both past their
+window, with no live one between them, orphans both). Fixed the one way this class of bug is fixed everywhere else
+in this handler: `referenceOrganizationId` is now checked *before* the delete's own transaction opens at all: if it
+is `undefined`, the organization is skipped outright — `continue`, no `deleteOrganizationData` call, no
+`writeTransaction` — counted as a failure and logged, exactly the "left marked for the next run" discipline the
+account/person/course/project passes already hold themselves to. Nothing is destroyed: the rows, the bytes, and the
+soft delete's own reversibility all stay exactly as they were, and the next run (once a surviving organization
+exists again) removes it cleanly. The only cost is one more retention cycle's worth of "should already be gone but
+is not yet," which is recoverable — an orphaned file with no row left to name it is not.
+
+**Record, not fixed: a soft-deleted-but-not-yet-due organization can still be chosen as the reference.**
+`pickReferenceOrganizationId` excludes every organization *this run's own* candidate list names, but not one that
+is soft-deleted and simply has not reached its own retention window yet — that organization is a legitimate
+reference target today, and only becomes an illegitimate one on some *later* run, once its own window passes. If
+that later run sweeps it away before a worker has claimed the byte-removal (or sweep-successor) job still attached
+to it, the identical cascade this file's own module comment already describes (`organizations`' own delete removes
+every `jobs` row for the organization it removes) takes that job down too. Genuinely remote in practice — the gap
+is measured in days (the reference organization's own remaining retention window) against ordinary job-claim
+latency (seconds to minutes, `JOB_POLL_INTERVAL_MS`) — and already the same, already-accepted class of race
+`@bloombot/jobs`' own `runner.ts` reports as `outcome: 'superseded'` rather than a crash. Not closed here: doing so
+would mean excluding every *soft-deleted* organization from ever being a reference, live-only, which fails outright
+on a platform where every organization happens to be soft-deleted (the very case the paragraph above exists to keep
+working at all).
+
+**Record, not fixed: the project and course passes still enqueue their own byte-removal job *outside* their
+delete's own transaction.** `deletions.deleteProject`/`deleteCourse` commit, and only then does
+`handlers/retention-sweep.ts` call `enqueueContentBytesRemoval` — the identical delete-then-enqueue structure that
+caused the organization-level bug two paragraphs up. It is safe today only because a project's or a course's own
+organization survives the delete (`jobs.organizationId` still names a real row), the same reason
+`@bloombot/actions`' `enqueueRemoveDeletedContentBytes` — the action this code duplicates — has always done it this
+way for an ordinary delete. Named explicitly here, in the file's own module comment and here, precisely because
+this is now the one place left on this branch with the shape that already caused one real bug — a future change
+that made a project's or a course's own delete remove the organization too (it does not today) would reintroduce
+it silently otherwise.
 
 **An account's own permanent removal is deliberately partial.** DATA-7's own text names four tables an account's
 (or a person's) own deletion must never touch — `tenant_deletions`, `content_deletions`, `transcript_access_log`,

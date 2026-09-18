@@ -181,8 +181,30 @@ export function AccountDetail({
                   {enrolment.courseTitle}
                 </AppLink>{' '}
                 <span className="text-neutral-500">
-                  · {enrolment.projectName} · {enrolment.organizationName} ·
-                  enrolled {new Date(enrolment.enroledAt).toLocaleDateString()}
+                  ·{' '}
+                  <AppLink
+                    to={{
+                      kind: 'admin-project',
+                      projectId: enrolment.projectId,
+                    }}
+                    navigate={navigate}
+                    className="text-brand-700 underline-offset-2 hover:underline"
+                  >
+                    {enrolment.projectName}
+                  </AppLink>{' '}
+                  ·{' '}
+                  <AppLink
+                    to={{
+                      kind: 'admin-organization',
+                      organizationId: enrolment.organizationId,
+                    }}
+                    navigate={navigate}
+                    className="text-brand-700 underline-offset-2 hover:underline"
+                  >
+                    {enrolment.organizationName}
+                  </AppLink>{' '}
+                  · enrolled{' '}
+                  {new Date(enrolment.enroledAt).toLocaleDateString()}
                 </span>
               </li>
             ))}
@@ -208,9 +230,16 @@ export function AccountDetail({
               >
                 <p className="font-medium text-neutral-900">
                   {person.displayName ?? person.email ?? person.personId} ·{' '}
-                  <span className="font-normal text-neutral-500">
+                  <AppLink
+                    to={{
+                      kind: 'admin-organization',
+                      organizationId: person.organizationId,
+                    }}
+                    navigate={navigate}
+                    className="font-normal text-brand-700 underline-offset-2 hover:underline"
+                  >
                     {person.organizationName}
-                  </span>
+                  </AppLink>
                 </p>
                 <p className="text-xs text-neutral-500">
                   Connected{' '}

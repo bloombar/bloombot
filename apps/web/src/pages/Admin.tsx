@@ -95,12 +95,12 @@ import { AccountsList } from './admin/AccountsList.js'
 import { AdminHealthFooter } from './admin/AdminHealthFooter.js'
 import { AdminNav } from './admin/AdminNav.js'
 import { CourseDetailView } from './admin/CourseDetail.js'
+import { Button } from '../components/Button.js'
 import { CoursesView } from './admin/CoursesView.js'
 import { DeletionsView } from './admin/DeletionsView.js'
 import { OrganizationDetail } from './admin/OrganizationDetail.js'
 import { OrganizationsList } from './admin/OrganizationsList.js'
 import { ProjectDetail } from './admin/ProjectDetail.js'
-import { Button } from '../components/Button.js'
 
 export interface AdminScreenProps {
   /** WEB-33 — which of the console's own screens is current. */

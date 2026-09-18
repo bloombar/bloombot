@@ -1410,8 +1410,13 @@ describe('Admin — ADMIN-11’s account console screen', () => {
     const detail = await screen.findByTestId('admin-account-detail-account-1')
 
     expect(detail).toHaveTextContent('owner@example.edu')
+    // "A Real Tenant" links from three sections now, so each assertion scopes
+    // to the section it is about rather than asking `detail` for one match.
+    const organizations = within(detail).getByRole('region', {
+      name: 'Organizations',
+    })
     expect(
-      within(detail).getByRole('link', { name: 'A Real Tenant' })
+      within(organizations).getByRole('link', { name: 'A Real Tenant' })
     ).toHaveAttribute('href', '/platform-admin/organizations/org-1')
     // "Web Design" links twice — once from the enrolment, once from the
     // usage-by-course breakdown — so this scopes to the enrolments section
@@ -1422,6 +1427,22 @@ describe('Admin — ADMIN-11’s account console screen', () => {
     expect(
       within(enrolments).getByRole('link', { name: 'Web Design' })
     ).toHaveAttribute('href', '/platform-admin/courses/course-1')
+    // ADMIN-11: *every* entity named on this screen is a link, not only the
+    // course — the project and organization an enrolment names are reachable
+    // without going back out through the course screen.
+    expect(
+      within(enrolments).getByRole('link', { name: 'Fall 2026' })
+    ).toHaveAttribute('href', '/platform-admin/projects/proj-1')
+    expect(
+      within(enrolments).getByRole('link', { name: 'A Real Tenant' })
+    ).toHaveAttribute('href', '/platform-admin/organizations/org-1')
+    // The same organization is a link in the people section too, where a
+    // connected-only tenant may appear that the memberships section never
+    // names.
+    const peopleSection = within(detail).getByRole('region', { name: 'People' })
+    expect(
+      within(peopleSection).getByRole('link', { name: 'A Real Tenant' })
+    ).toHaveAttribute('href', '/platform-admin/organizations/org-1')
     expect(detail).toHaveTextContent('$0.50 spent')
   })
 

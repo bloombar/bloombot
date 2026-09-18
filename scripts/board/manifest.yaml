@@ -4897,7 +4897,7 @@
   section: §49 Deleting, Reversibly, Then Permanently
   family: PROJ
   phase: 44
-  status: Backlog
+  status: In progress
   review: false
 - id: TEN-10
   title: A tenant's deletion covers everything that belongs to the tenant
@@ -4927,7 +4927,7 @@
   section: §49 Deleting, Reversibly, Then Permanently
   family: WEB
   phase: 44
-  status: In progress
+  status: Done
   review: false
 - id: WEB-73
   title: A person deletes their own conversation history in a course
@@ -4941,7 +4941,7 @@
   section: §49 Deleting, Reversibly, Then Permanently
   family: WEB
   phase: 44
-  status: In progress
+  status: Done
   review: false
 - id: WEB-74
   title: A course's Discord tab names the server, not only its id

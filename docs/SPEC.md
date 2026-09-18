@@ -3294,3 +3294,25 @@ The course screen has a **Transcripts** tab showing what the organization's Tran
 course, with the project and course already chosen: no project or course selector, since the screen the tab
 sits on names both, but the student and date-range filters and the export are all present and work as they
 do there.
+
+### 44. Reading a Conversation Across Surfaces
+
+#### WEB-65 A message says where it came from and who said it
+
+Wherever the web app shows conversation messages — the Transcripts screen, the course screen's Transcripts
+tab, and chat — each message names the surface it arrived on (Discord, the web panel, or an assistant
+through MCP) and, for a Discord message, the category and channel it was posted in. Each message also
+carries its own timestamp, in the readable form the Transcripts screen already uses. A message whose surface
+was never recorded says nothing rather than guessing.
+
+The labelling changes with it: a student's message is headed by their own name alone, and the bot's reply is
+headed "Bloombot to <name>", replacing the "<name> — asked" and "<name> — answered" pairing. The name shown
+is whatever identifies the person (WEB-52's own rule), not an internal id.
+
+#### WEB-66 A transcript can be filtered by surface
+
+The Transcripts screen and the course screen's Transcripts tab both offer a surface filter, between the
+student filter and the date range, listing the surfaces a message can arrive on. Choosing one narrows the
+transcript to messages from that surface; the filter combines with the student and date filters rather than
+replacing them, is applied by the server rather than by hiding rows in the browser, and an export reflects
+whatever filter is in force, as it already does for the others.

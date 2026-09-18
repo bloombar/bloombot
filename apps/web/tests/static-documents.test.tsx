@@ -188,6 +188,37 @@ describe('/privacy and /terms (published legal documents)', () => {
       expect(flat(privacyDocument.body)).not.toMatch(/de-identified/i)
     })
 
+    // The platform-administrator console gained organization, project, course
+    // and account screens in SPEC §45 (ADMIN-7..ADMIN-14). The policy used to
+    // say that console "does not display any course, student or message",
+    // which those screens made false for two of the three. These pin the
+    // corrected claim from both sides: the disclosure must stay, and the old
+    // sentence must not come back.
+    it('discloses that the administration console shows courses and the people on the platform', () => {
+      const body = flat(privacyDocument.body)
+      expect(body).toMatch(
+        /administration console covering the whole platform/i
+      )
+      expect(body).toMatch(/course's settings, instructions and the material/i)
+      expect(body).toMatch(
+        /names, email addresses, the courses they belong to/i
+      )
+    })
+
+    it('does not claim the administration console hides courses or students', () => {
+      expect(flat(privacyDocument.body)).not.toMatch(
+        /console does not display any course/i
+      )
+    })
+
+    it('still claims the one limit the console does honour: no conversations', () => {
+      const body = flat(privacyDocument.body)
+      expect(body).toMatch(
+        /No question a student asked and no answer the service gave is shown anywhere in that console/i
+      )
+      expect(body).toMatch(/they cannot see what that student asked it/i)
+    })
+
     it('discloses that instructors can read student conversations', () => {
       expect(flat(privacyDocument.body)).toMatch(
         /instructor can read their own students' conversations/i

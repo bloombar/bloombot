@@ -13018,11 +13018,70 @@ screen names is gone, not merely different — `pages/Courses.tsx`'s own `onBack
 treats Delete identically to every other mutation (`refresh()`), since a deleted row disappearing from a
 relist already is "navigating away," for a list.
 
-**WEB-62 — `onOpenChat` on `CourseEditor` is optional, defaulting to a no-op, rather than required.**
-`pages/ProjectsPanel.tsx` always has a real one to thread through (the same `onOpenChat` `Courses`/`Projects`
-already take), but `tests/course-editor.test.tsx` mounts `CourseEditor` directly at roughly thirty call
-sites, almost none of which exercise Chat. Required would have meant a mechanical edit to all of them for a
-button most of that file does not care about — the same trade-off `onNavigateTab` on this same component
-already made, one slice earlier, for the identical reason. The Chat button itself is gated on
-`courseId !== undefined`, the same "existing record only" rule every other course-scoped section on this
-screen already follows — a course that has not been saved yet has no chat to open.
+**WEB-62 — `onOpenChat` on `CourseEditor` is required, not optional (reversed by review round 2).** The first
+pass made it optional, defaulting to a no-op, on the same "most of `tests/course-editor.test.tsx`'s roughly
+thirty call sites do not care" reasoning `onNavigateTab` on this same component already uses. Review round 2's
+own "worth doing" caught the difference: `onNavigateTab`'s own absence degrades gracefully — no tab bar
+renders at all for the one case (`courseId === undefined`) it would matter — while an absent `onOpenChat`
+still renders a visible, clickable Chat button (gated only on `courseId !== undefined`, the same
+"existing record only" rule every other course-scoped section on this screen already follows) that silently
+does nothing when clicked. A control that looks live and is not is worse than the mechanical cost of adding
+`onOpenChat={vi.fn()}` to every call site that does not exercise it — done here, not deferred.
+
+## Review round 2 — WEB-59..62: four fixes
+
+Coordinator review round 2 found three bugs and one misleading comment in the round-1 diff above, plus two
+items marked "worth doing." All five addressed in the same slice, before merge.
+
+**Must-fix — Duplicate stopped refreshing `Projects.tsx`'s own list.** `hooks/useProjectMenu.tsx`'s own
+`handleDuplicate` reasoned "Duplicate leaves *this* project untouched, so `onChanged` is not called" — true,
+but `onChanged` was the only cue either caller had, and `Projects.tsx` (unlike `Courses.tsx`) lists *every*
+project on the page, including the new one Duplicate just created. `tests/projects.test.tsx`'s own existing
+test only asserted the action call and the notice, which is why it stayed green through the regression.
+Fixed with a fourth, distinctly-named callback, `onProjectCreated: (project: Project) => void` — handed
+`result.project` from `duplicateProject`'s own response — that `Projects.tsx` wires to `refresh()` and
+`Courses.tsx` (listing no projects at all) omits. A new test,
+`the duplicated project appears in the list without a reload`, drives a real duplicate through the modal and
+asserts the new row's own button, not merely the action call or the notice — proven to fail against the
+pre-fix commit in a throwaway `git worktree` before the fix landed.
+
+**Must-fix — Import on `Courses.tsx` (the project's own screen) never refreshed that screen's own course
+list.** The dialog's `onImported` only ever set `duplicateNotice`; nothing told `Courses.tsx` to re-run its
+own `courses.list`, so an imported course was missing from the very list it just landed in until the reader
+left the screen and returned. `pages/Projects.tsx`'s own per-project course lists have an identical gap,
+pre-existing on `master` (Import there predates this slice, and always had this limit) — left alone, as
+review scoped the fix to the regression this slice actually introduced (Import becoming reachable from
+`Courses.tsx` at all). Fixed with a fifth callback, `onCourseImported: () => void`, wired to `Courses.tsx`'s
+own `refresh`. A new test drives a real import (file-drop, the same device
+`tests/course-import-dialog.test.tsx` already uses) to completion and asserts the row appears — also proven
+to fail pre-fix.
+
+**Cheap-fix — two independent `error` states on `Projects.tsx` (and, by the same construction, on
+`Courses.tsx`).** `hooks/useProjectMenu.tsx` kept its own `error` state; each caller already had its own,
+for its own list fetch (`handleCreate`'s refusal, `listCourses`' own failure). `setError(undefined)` in
+either caller's own handler cleared only its own state, so a failed kebab action's banner could outlive a
+later, unrelated success, or the two could show at once. Fixed by removing `error` from the hook's own state
+entirely — it now takes `onError: (error: ApiError | undefined) => void` in its handlers and reports every
+refusal there — so both callers hand it their own existing `setError`, making it the one and only error
+state either screen has. A new test in `tests/projects.test.tsx`
+(`a failed kebab action's banner clears once a later, unrelated action succeeds`) pins this, and failed
+against the pre-fix commit for the reason the fix exists: the rename's own banner was still on screen after
+the unrelated "New project" succeeded.
+
+**Cheap-fix — `e2e/navigation-drawer.spec.ts`'s own backdrop-click comment was factually wrong.** It claimed
+`{ x: 700, y: 5 }` landed inside the dialog's "full-viewport box"; the `<dialog>` element is `w-64` (256px)
+— the comment described `::backdrop`, a distinct box the dialog element itself does not have. Corrected to
+say what is actually true: the position is deliberately *outside* the dialog's own box, and the click still
+resolves to it because a native `<dialog>`'s backdrop has no DOM element of its own for a browser to target.
+
+**Worth doing, addressed — a drag starting inside the drawer and releasing on the backdrop closed it.** A
+`click` event's own `target` is computed from where the pointer went *down*, not up, for a multi-element
+drag — so selecting text inside the drawer and releasing the mouse over the backdrop fired a `click` whose
+`target` still resolved to the `<dialog>`, indistinguishable from a genuine backdrop click by
+`event.target === event.currentTarget` alone. Fixed with `backdropMouseDownRef`
+(`components/AppShell.tsx`) — `onMouseDown` records whether the *press* also landed on the dialog itself,
+and `onClick` requires both. `tests/app-shell.test.tsx`'s own new case fires `mousedown` on a real control
+inside the drawer and `click` on the dialog, and pins that the drawer stays open — proven to fail without the
+guard. The two existing backdrop-click tests needed a matching `fireEvent.mouseDown` added alongside their
+own `fireEvent.click`, since `fireEvent.click` alone (unlike a real click) does not synthesize a preceding
+`mousedown`.

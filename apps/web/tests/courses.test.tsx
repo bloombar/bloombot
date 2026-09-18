@@ -29,6 +29,7 @@ const {
   duplicateProject,
   previewDeleteProject,
   deleteProject,
+  importCourse,
 } = vi.hoisted(() => ({
   listCourses: vi.fn(),
   enableCourse: vi.fn(),
@@ -43,6 +44,7 @@ const {
   duplicateProject: vi.fn(),
   previewDeleteProject: vi.fn(),
   deleteProject: vi.fn(),
+  importCourse: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -64,6 +66,7 @@ vi.mock('../src/api/client.js', async () => {
     duplicateProject,
     previewDeleteProject,
     deleteProject,
+    importCourse,
   }
 })
 
@@ -929,6 +932,74 @@ describe('Courses — the project screen carries the same menu its row does (WEB
     expect(
       screen.getByText('Import a course into "Fall 2026"')
     ).toBeInTheDocument()
+  })
+
+  // Round-2 review, must-fix: the test above only proves the dialog opens
+  // — the imported course itself was missing from this screen's own list
+  // until the reader left and came back, since nothing refetched
+  // `courses.list` once the import actually succeeded. This drives a real
+  // import (`components/CourseImportDialog.tsx`'s own file-drop, the same
+  // device `tests/course-import-dialog.test.tsx` uses) to completion and
+  // proves the row appears without a reload.
+  it('a successfully imported course appears in this screen’s own list without a reload', async () => {
+    listCourses.mockResolvedValueOnce([]).mockResolvedValueOnce([COURSE])
+    importCourse.mockResolvedValue({
+      course: COURSE,
+      title: COURSE.title,
+      titleChanged: false,
+      disabled: true,
+      notCarried: {
+        vectorStore: false,
+        storedPrompt: false,
+        attachments: 0,
+        discordServer: false,
+      },
+    })
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+        onProjectChanged={vi.fn()}
+      />
+    )
+    await screen.findByText('No courses in this project yet.')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+    await screen.findByText('Import a course into "Fall 2026"')
+
+    const file = new File(
+      ['bloombotCourseExport: 1\n'],
+      'web-design.course.yml',
+      {
+        type: 'text/yaml',
+      }
+    )
+    const dropZone = screen.getByRole('button', {
+      name: /Course export file — drop a file here/,
+    })
+    fireEvent.drop(dropZone, {
+      dataTransfer: {
+        files: [file],
+        items: [{ kind: 'file', type: file.type }],
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+
+    await waitFor(() => expect(importCourse).toHaveBeenCalled())
+    // The relist this pins — `getByRole` rather than `getByText`, since the
+    // dialog's own success notice also names "Web Design" in prose
+    // (`Imported "Web Design" into…`, above).
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Web Design' })
+      ).toBeInTheDocument()
+    )
+    expect(listCourses).toHaveBeenCalledTimes(2)
   })
 
   it('Delete previews and confirms by typing the project’s own name, the same as the row does, before deleteProject is ever called', async () => {

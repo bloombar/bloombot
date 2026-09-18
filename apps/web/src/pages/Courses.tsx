@@ -29,7 +29,11 @@
  * Restore/Rename instead report the changed `Project` back through
  * `onProjectChanged` (this file's own prop doc comment), since this screen
  * does not own the record it names in its own heading — `pages/
- * ProjectsPanel.tsx` does, and updates it in place.
+ * ProjectsPanel.tsx` does, and updates it in place. Import refreshes this
+ * screen's own `courses` (`onCourseImported`, below) — round-2 review's own
+ * must-fix: the first version of this slice left the imported course
+ * missing from the very list it just landed in, until the reader left this
+ * screen and came back.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -67,17 +71,6 @@ export function Courses({
   const [courses, setCourses] = useState<CourseSummary[] | undefined>(undefined)
   const [error, setError] = useState<ApiError | undefined>(undefined)
 
-  // WEB-61: this project's own kebab — Archive/Restore, Duplicate, Import,
-  // Rename, Delete — the same shared handlers `pages/Projects.tsx` uses.
-  // `onProjectChanged` (this file's own prop doc comment) is what keeps
-  // this screen's own header in step with Archive/Restore/Rename; only
-  // Delete needs a real cue, since the project this screen names is gone —
-  // `onBack` is that cue, the same "go somewhere that still exists"
-  // `← Projects` control above already is.
-  const projectMenu = useProjectMenu(organizationId, onProjectChanged, () =>
-    onBack()
-  )
-
   // Finding 8 (WEB-7 rework): `refresh` is called both from the effect
   // below (on mount, and whenever `project.id` changes) and directly after
   // enabling/disabling a course — two ways for two `listCourses` calls to
@@ -112,6 +105,26 @@ export function Courses({
     setCourses(undefined)
     refresh()
   }, [refresh])
+
+  // WEB-61: this project's own kebab — Archive/Restore, Duplicate, Import,
+  // Rename, Delete — the same shared handlers `pages/Projects.tsx` uses.
+  // `onProjectChanged` (this file's own prop doc comment) is what keeps
+  // this screen's own header in step with Archive/Restore/Rename; only
+  // Delete needs a real cue, since the project this screen names is gone —
+  // `onBack` is that cue, the same "go somewhere that still exists"
+  // `← Projects` control above already is. `onCourseImported` is `refresh`
+  // itself, above — round-2 review's own must-fix: without it, a course
+  // imported from this screen's own kebab was missing from the very list
+  // it just landed in until the reader left and came back. `onError`
+  // shares this screen's own `error`/`setError`, above (round-2 review,
+  // cheap-fix), the identical single-banner discipline `Projects.tsx` now
+  // holds itself to.
+  const projectMenu = useProjectMenu(organizationId, {
+    onChanged: onProjectChanged,
+    onDeleted: () => onBack(),
+    onCourseImported: () => refresh(),
+    onError: setError,
+  })
 
   return (
     <section
@@ -157,7 +170,6 @@ export function Courses({
         </p>
       )}
       {error && <ErrorMessage error={error} />}
-      {projectMenu.error && <ErrorMessage error={projectMenu.error} />}
 
       {courses === undefined ? (
         error ? null : (

@@ -158,6 +158,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -185,6 +186,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -230,6 +232,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -255,6 +258,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -279,6 +283,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -334,6 +339,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -376,6 +382,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -400,6 +407,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -443,6 +451,7 @@ describe('CourseEditor (WEB-8)', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -467,6 +476,7 @@ describe('CourseEditor (WEB-8)', () => {
           courseId="course-1"
           tab="general"
           onSaved={vi.fn()}
+          onOpenChat={vi.fn()}
           onCancel={vi.fn()}
         />
       )
@@ -513,6 +523,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -548,6 +559,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -582,6 +594,7 @@ describe('CourseEditor (WEB-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -630,6 +643,7 @@ describe('CourseEditor self-enrolment settings (ENRL-13/ENRL-14)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -653,6 +667,7 @@ describe('CourseEditor self-enrolment settings (ENRL-13/ENRL-14)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -678,6 +693,7 @@ describe('CourseEditor self-enrolment settings (ENRL-13/ENRL-14)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -723,6 +739,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -741,6 +758,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
           project={PROJECT}
           courseId={undefined}
           onSaved={vi.fn()}
+          onOpenChat={vi.fn()}
           onCancel={vi.fn()}
         />
       )
@@ -763,6 +781,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
         tab="general"
         onNavigateTab={onNavigateTab}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -796,6 +815,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -829,6 +849,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -850,6 +871,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
           courseId="course-1"
           tab="roster"
           onSaved={vi.fn()}
+          onOpenChat={vi.fn()}
           onCancel={vi.fn()}
         />
       )
@@ -887,6 +909,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
         courseId="course-1"
         tab="general"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -944,6 +967,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -962,6 +986,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -989,6 +1014,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1018,6 +1044,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1059,6 +1086,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         courseId="course-1"
         tab="general"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1091,6 +1119,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
         // Review round 1, must-fix 1: deliberately long — this case is
         // only about whether `Saved` appears at all, and a short timer
@@ -1124,6 +1153,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
         // Review round 1, must-fix 1: short, and deliberately not also
         // asserted as having shown "Saved" first (the case above already
@@ -1157,6 +1187,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
         // A long timer — long enough that reaching the assertion below
         // before it would fire is not a race, so this failing would mean
@@ -1199,6 +1230,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1234,6 +1266,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1276,6 +1309,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1316,6 +1350,7 @@ describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1351,6 +1386,7 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
         tab="general"
         onNavigateTab={onNavigateTab}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1595,6 +1631,7 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1662,6 +1699,7 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1718,6 +1756,7 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
         tab="ai"
         onNavigateTab={onNavigateTab}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1769,6 +1808,7 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
         tab="ai"
         onNavigateTab={onNavigateTab}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1805,6 +1845,7 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1866,6 +1907,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1888,6 +1930,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1919,6 +1962,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1957,6 +2001,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -1994,6 +2039,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2037,6 +2083,7 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2071,6 +2118,7 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2103,6 +2151,7 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2127,6 +2176,7 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2162,6 +2212,7 @@ describe('CourseEditor pending-approval banner (COST-8/SURF-10)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2183,6 +2234,7 @@ describe('CourseEditor pending-approval banner (COST-8/SURF-10)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2199,6 +2251,7 @@ describe('CourseEditor pending-approval banner (COST-8/SURF-10)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2226,6 +2279,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2255,6 +2309,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2288,6 +2343,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2315,6 +2371,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2355,6 +2412,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2398,6 +2456,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={onCancel}
       />
     )
@@ -2415,6 +2474,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={onCancel}
       />
     )
@@ -2443,6 +2503,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={onCancel}
       />
     )
@@ -2467,6 +2528,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={onCancel}
       />
     )
@@ -2497,6 +2559,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={onSaved}
+        onOpenChat={vi.fn()}
         onCancel={onCancel}
       />
     )
@@ -2533,6 +2596,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={onCancel}
       />
     )
@@ -2583,6 +2647,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={onCancel}
       />
     )
@@ -2635,6 +2700,7 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
         courseId="course-1"
         tab="discord"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2685,6 +2751,7 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
         courseId="course-1"
         tab="discord"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2734,6 +2801,7 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
         courseId="course-1"
         tab="discord"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2781,6 +2849,7 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2806,6 +2875,7 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2864,6 +2934,7 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
         courseId="course-1"
         tab="discord"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2938,6 +3009,7 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -2998,6 +3070,7 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
         project={PROJECT}
         courseId="course-1"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -3067,6 +3140,7 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
         courseId="course-1"
         tab="discord"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -3116,6 +3190,7 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
         courseId="course-1"
         tab="discord"
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )
@@ -3196,6 +3271,7 @@ describe('CourseEditor — Chat button (WEB-62)', () => {
         project={PROJECT}
         courseId={undefined}
         onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
         onCancel={vi.fn()}
       />
     )

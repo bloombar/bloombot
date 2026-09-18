@@ -17,20 +17,44 @@
  * hooks). `pages/Courses.tsx` calls it the same way, for the one project
  * its own screen names.
  *
- * `onChanged`/`onDeleted` split the same way `pages/Projects.tsx`'s own
- * `refresh()` used to double as both: `onDeleted` fires only once Delete
- * actually succeeds, since the project is gone and a caller whose own
- * screen names it (`pages/Courses.tsx`) has to navigate elsewhere rather
- * than refetch a project that no longer exists — `pages/Projects.tsx`'s own
- * list can treat the two identically (a deleted row is just one more row a
- * relist no longer returns). `onChanged` is handed the best available
- * picture of the project after Archive/Restore/Rename — `projects.archive`
- * returns only `{ archived: boolean }` (`api/client.ts`), so that one case
- * is reconstructed from the project already in hand rather than a field the
- * action never returns; Duplicate and Import both leave *this* project
- * untouched (Duplicate creates a second one, Import adds a course to this
- * one) and so never call it at all — only their own notice, below, says
- * anything happened.
+ * Every callback below is named for *what changed*, not for which action
+ * caused it, so a caller wires in exactly the refresh it needs and nothing
+ * more:
+ *
+ *  - `onChanged` — this project's own record changed (Archive/Restore/
+ *    Rename) — handed the best available picture of it: `projects.archive`
+ *    returns only `{ archived: boolean }` (`api/client.ts`), so that one
+ *    case is reconstructed from the project already in hand rather than a
+ *    field the action never returns; `unarchive`/`rename` hand back the
+ *    real thing.
+ *  - `onDeleted` — this project is gone, not merely different — a caller
+ *    whose own screen names it (`pages/Courses.tsx`) has to navigate
+ *    elsewhere rather than refetch a project that no longer exists;
+ *    `pages/Projects.tsx`'s own list can treat this the same as `onChanged`
+ *    (a deleted row is just one more row a relist no longer returns).
+ *  - `onProjectCreated` (round-2 review, must-fix) — Duplicate creates a
+ *    *second* project, `id`-distinct from the one the menu acted on;
+ *    `pages/Projects.tsx` lists every project on the page and needs to add
+ *    the new one to view without a reload, the exact gap review round 2
+ *    caught (`duplicateNotice` alone said it happened; nothing made it
+ *    actually appear). `pages/Courses.tsx` lists no projects at all — it
+ *    has nothing to add this to — and leaves this out.
+ *  - `onCourseImported` (round-2 review, must-fix) — Import adds a course
+ *    to *this* project; `pages/Courses.tsx` lists this project's own
+ *    courses and needs to refetch them, or the imported course is missing
+ *    from the very list it just landed in until the reader leaves and
+ *    comes back. `pages/Projects.tsx` has the identical gap for its own
+ *    per-project course lists (`components/CourseRows.tsx` beneath each
+ *    project) — pre-existing on `master`, unrelated to this slice's own
+ *    addition of Import to `Courses.tsx`, and left as review scoped it:
+ *    unfixed here.
+ *  - `onError` — every refusal, from any handler below, in one place: this
+ *    hook holds no `error` state of its own (round-2 review, cheap-fix) so
+ *    a caller with its own existing error state (both callers already had
+ *    one, for their own list fetch) has exactly one banner to clear and
+ *    show, rather than two independent ones that can both be showing at
+ *    once, or one outliving a later success because only the other was
+ *    cleared.
  */
 
 import { type ReactNode, useState } from 'react'
@@ -84,12 +108,24 @@ function duplicateDisabledMessage(
   )
 }
 
+export interface UseProjectMenuHandlers {
+  /** This project's own record changed (Archive/Restore/Rename) — this file's own module comment on what it is handed. */
+  onChanged: (project: Project) => void
+  /** This project is gone (Delete succeeded) — this file's own module comment on why this is not merely `onChanged` again. */
+  onDeleted: () => void
+  /** Duplicate succeeded, creating this new, separate project — omit when the caller lists no projects at all (`pages/Courses.tsx`). */
+  onProjectCreated?: (project: Project) => void
+  /** Import succeeded, adding a course to *this* project — omit when the caller lists no courses of its own to refresh (`pages/Projects.tsx`'s own per-project lists are the one exception, this file's own module comment on why that gap is left alone here). */
+  onCourseImported?: () => void
+  /** Every refusal from every handler below, `undefined` once whichever one is showing no longer applies — this file's own module comment on why this hook holds no `error` state of its own. */
+  onError: (error: ApiError | undefined) => void
+}
+
 export interface UseProjectMenuResult {
   /** WEB-26/WEB-61 — this project's own kebab items, in the one order every caller shows them: Archive/Restore, Duplicate, Import, Rename, Delete. */
   itemsFor: (project: Project) => KebabMenuItem[]
   /** The one project a mutation is currently in flight for, if any — the same single-slot `busyProjectId` `pages/Projects.tsx` kept before this extraction (only one row is ever busy at a time). */
   busyProjectId: string | undefined
-  error: ApiError | undefined
   duplicateNotice: string | undefined
   /** `CourseImportDialog`, open for whichever project's own Import item was chosen, or `null` — render this once, anywhere in the caller's own tree (it is a modal; position does not matter). */
   importDialog: ReactNode
@@ -97,10 +133,10 @@ export interface UseProjectMenuResult {
 
 export function useProjectMenu(
   organizationId: string,
-  onChanged: (project: Project) => void,
-  onDeleted: () => void
+  handlers: UseProjectMenuHandlers
 ): UseProjectMenuResult {
-  const [error, setError] = useState<ApiError | undefined>(undefined)
+  const { onChanged, onDeleted, onProjectCreated, onCourseImported, onError } =
+    handlers
   const [duplicateNotice, setDuplicateNotice] = useState<string | undefined>(
     undefined
   )
@@ -130,7 +166,7 @@ export function useProjectMenu(
       })
       if (!confirmed) return
     }
-    setError(undefined)
+    onError(undefined)
     setBusyProjectId(project.id)
     try {
       if (project.archivedAt === null) {
@@ -145,7 +181,7 @@ export function useProjectMenu(
         onChanged(restored)
       }
     } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
+      if (caught instanceof ApiError) onError(caught)
       else throw caught
     } finally {
       setBusyProjectId(undefined)
@@ -154,7 +190,7 @@ export function useProjectMenu(
 
   // PROJ-6/WEB-26: rename, over the `projects.rename` action — a refusal
   // (the name collides with another active project) surfaces the same way
-  // every other refusal here does, through `error`, naming the colliding
+  // every other refusal here does, through `onError`, naming the colliding
   // project.
   const handleRename = async (project: Project) => {
     const name = await prompt({
@@ -165,7 +201,7 @@ export function useProjectMenu(
       validate: requireName,
     })
     if (name === undefined) return
-    setError(undefined)
+    onError(undefined)
     setBusyProjectId(project.id)
     try {
       const renamed = await renameProject(
@@ -175,7 +211,7 @@ export function useProjectMenu(
       )
       onChanged(renamed)
     } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
+      if (caught instanceof ApiError) onError(caught)
       else throw caught
     } finally {
       setBusyProjectId(undefined)
@@ -191,7 +227,7 @@ export function useProjectMenu(
       validate: requireName,
     })
     if (name === undefined) return
-    setError(undefined)
+    onError(undefined)
     setDuplicateNotice(undefined)
     setBusyProjectId(project.id)
     try {
@@ -200,15 +236,15 @@ export function useProjectMenu(
         project.id,
         name.trim()
       )
-      // Duplicate leaves *this* project untouched — a second, new project
-      // is what actually changed, and nothing here names its list to
-      // refresh, so `onChanged` is not called; the notice alone says what
-      // happened.
       setDuplicateNotice(
         duplicateDisabledMessage(result.project.name, result.coursesCopied)
       )
+      // Round-2 review, must-fix — the notice alone used to be the only
+      // cue: `pages/Projects.tsx` lists every project on the page and
+      // otherwise showed no new row for this one until a reload.
+      onProjectCreated?.(result.project)
     } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
+      if (caught instanceof ApiError) onError(caught)
       else throw caught
     } finally {
       setBusyProjectId(undefined)
@@ -224,12 +260,12 @@ export function useProjectMenu(
    * gone, not merely different.
    */
   const handleDelete = async (project: Project) => {
-    setError(undefined)
+    onError(undefined)
     let preview
     try {
       preview = await previewDeleteProject(organizationId, project.id)
     } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
+      if (caught instanceof ApiError) onError(caught)
       else throw caught
       return
     }
@@ -259,7 +295,7 @@ export function useProjectMenu(
       await deleteProject(organizationId, project.id)
       onDeleted()
     } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
+      if (caught instanceof ApiError) onError(caught)
       else throw caught
     } finally {
       setBusyProjectId(undefined)
@@ -317,13 +353,18 @@ export function useProjectMenu(
       // itself show the courses of still deserves a line saying it
       // happened — the same notice slot Duplicate above writes into,
       // rather than a second one grown beside it.
-      onImported={(result: ImportCourseResult) =>
+      onImported={(result: ImportCourseResult) => {
         setDuplicateNotice(
           `Imported "${result.title}" into "${importingInto.name}", disabled — open the project to enable it.`
         )
-      }
+        // Round-2 review, must-fix — without this, a caller that lists
+        // this project's own courses (`pages/Courses.tsx`) never saw the
+        // one just imported until the reader left the screen and came
+        // back.
+        onCourseImported?.()
+      }}
     />
   )
 
-  return { itemsFor, busyProjectId, error, duplicateNotice, importDialog }
+  return { itemsFor, busyProjectId, duplicateNotice, importDialog }
 }

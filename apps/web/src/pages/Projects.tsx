@@ -268,16 +268,23 @@ export function Projects({
 
   // WEB-61: the row menu itself — Archive/Restore, Duplicate, Import,
   // Rename, Delete — is `hooks/useProjectMenu.tsx`, shared with
-  // `pages/Courses.tsx`. Any successful mutation (except Delete) just
-  // re-lists, the same as every other change this screen already
-  // refreshes for; a successful Delete refreshes too — a deleted row is
-  // simply one a relist no longer returns, unlike `Courses.tsx`, which
-  // names one project outright and has to navigate away from it instead.
-  const projectMenu = useProjectMenu(
-    organizationId,
-    () => refresh(),
-    () => refresh()
-  )
+  // `pages/Courses.tsx`. Every one of `onChanged`/`onDeleted`/
+  // `onProjectCreated` just re-lists here — this page's own single
+  // `listProjects` call already reflects every one of those (a changed
+  // row, a deleted row missing from the relist, or Duplicate's new row
+  // finally appearing, round-2 review's own must-fix) — unlike
+  // `Courses.tsx`, which names one project outright and has to update or
+  // navigate away from that one record instead of merely relisting.
+  // `onError` shares this screen's own `error`/`setError` (round-2 review,
+  // cheap-fix) rather than keeping a second banner state that `handleCreate`
+  // above never clears and this file never merges with — one refusal, from
+  // any source, showing at a time.
+  const projectMenu = useProjectMenu(organizationId, {
+    onChanged: () => refresh(),
+    onDeleted: () => refresh(),
+    onProjectCreated: () => refresh(),
+    onError: setError,
+  })
 
   return (
     <section
@@ -325,7 +332,6 @@ export function Projects({
         </p>
       )}
       {error && <ErrorMessage error={error} />}
-      {projectMenu.error && <ErrorMessage error={projectMenu.error} />}
 
       {projects === undefined ? (
         error ? null : (

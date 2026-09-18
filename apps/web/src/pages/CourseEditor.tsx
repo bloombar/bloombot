@@ -189,8 +189,26 @@ export interface CourseEditorProps {
   onNavigateTab?: (tab: CourseEditorTab) => void
   /** WEB-36 — threaded straight through to `components/CoursePeople.tsx`'s own People tab, so a click on a person's name there can push that person's transcript address; see that file's own module comment for the click itself. */
   navigate: (route: Route, options?: { replace?: boolean }) => void
-  /** WEB-62 — the same Chat handoff `components/CourseRows.tsx`'s own row already offers on the project and organization screens (WEB-28), so this screen's own Chat button opens the identical chat rather than a second implementation of "switch the shell to its Chat tab with this course selected." Only ever called with `courseId` itself — the button that calls it is gated on `courseId !== undefined` below (a new, unsaved course has no chat to open). Optional, the same way `onNavigateTab` above is — most of `tests/course-editor.test.tsx` does not care, and the button itself simply does nothing if clicked with none supplied. */
-  onOpenChat?: (courseId: string) => void
+  /**
+   * WEB-62 — the same Chat handoff `components/CourseRows.tsx`'s own row
+   * already offers on the project and organization screens (WEB-28), so
+   * this screen's own Chat button opens the identical chat rather than a
+   * second implementation of "switch the shell to its Chat tab with this
+   * course selected." Only ever called with `courseId` itself — the button
+   * that calls it is gated on `courseId !== undefined` below (a new,
+   * unsaved course has no chat to open).
+   *
+   * Required, unlike `onNavigateTab` above (round-2 review, "worth doing"):
+   * that prop's own absence degrades gracefully — no tab bar renders at all
+   * for the one case (`courseId === undefined`) it would ever matter, so
+   * nothing is left half-working. This one does not degrade at all — the
+   * Chat button always renders once `courseId` is defined, so an absent
+   * handler would leave a visible, clickable control that silently does
+   * nothing, which is worse than the mechanical cost of the roughly thirty
+   * `tests/course-editor.test.tsx` call sites this requires supply
+   * `vi.fn()` for.
+   */
+  onOpenChat: (courseId: string) => void
   onSaved: (course: Course) => void
   onCancel: () => void
   /**
@@ -1839,7 +1857,7 @@ export function CourseEditor({
             variant="secondary"
             icon={<ChatIcon aria-hidden="true" className="size-4" />}
             aria-label={`Chat about "${form.title || 'Course'}"`}
-            onClick={() => onOpenChat?.(courseId)}
+            onClick={() => onOpenChat(courseId)}
           >
             Chat
           </Button>

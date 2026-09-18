@@ -100,11 +100,17 @@ test('a click on the backdrop closes the drawer, the same as Escape (WEB-60)', a
   await drawer.getByText('Menu').click()
   await expect(drawer).toBeVisible()
 
-  // A click on the backdrop itself — outside the drawer's own box, inside
-  // the dialog's top-layer bounds — closes it. `{ position: { x: 5, y: 5 }
-  // }` lands inside the dialog element's own full-viewport box (its own
-  // `inset: 0`, `AppShell.tsx`) but well outside the 16rem-wide drawer panel
-  // itself, which is exactly what a real backdrop click is.
+  // A click on the backdrop itself closes it. The `<dialog>` element's own
+  // box is only the 16rem-wide drawer panel (`w-64`, `AppShell.tsx`) — round-2
+  // review correction: it is *not* full-viewport, `::backdrop` is — so
+  // `{ position: { x: 700, y: 5 } }` is deliberately well outside that box
+  // (256px wide) rather than inside it. Playwright still resolves this
+  // click to the `<dialog>` element itself: a native `<dialog>`'s own
+  // backdrop has no element of its own in the DOM, and Chromium hit-tests a
+  // click there as landing on the dialog (the same `event.target ===
+  // event.currentTarget` case `AppShell.tsx`'s own `onClick` reads), so
+  // Playwright's actionability check resolves it to this locator and the
+  // click proceeds.
   await drawer.click({ position: { x: 700, y: 5 } })
   await expect(drawer).toBeHidden()
 })

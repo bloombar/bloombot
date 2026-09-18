@@ -209,7 +209,12 @@ not a feature. Write to ${OPERATOR.contactEmail} and we will tell you honestly
 what we can and cannot do.
 
 If any of this is unacceptable for your course, the right time to decide that
-is before students start using the service.
+is before students start using the service. Nothing on this page, and nothing in
+the [Terms & conditions](/terms), is a consent given on behalf of a student under
+FERPA — that consent can only be given by the student, in writing, to their own
+institution. Whether this service is appropriate for your students' records is
+your institution's decision to make; the terms say what we do and do not
+represent about it.
 
 ## Security
 

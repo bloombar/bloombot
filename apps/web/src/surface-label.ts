@@ -14,7 +14,7 @@
  * shared.
  */
 
-import type { CostBySurface } from './api/types.js'
+import type { CostBySurface, TranscriptEntry } from './api/types.js'
 
 export function surfaceLabel(surface: CostBySurface['surface']): string {
   switch (surface) {
@@ -28,3 +28,18 @@ export function surfaceLabel(surface: CostBySurface['surface']): string {
       return 'recorded before surfaces were tracked'
   }
 }
+
+/**
+ * WEB-66 — the surfaces a message can actually arrive on, for the
+ * Transcripts screen's own surface filter (`components/TranscriptBrowser.tsx`)
+ * to list — narrower than `CostBySurface['surface']` above, which also
+ * carries `'unknown'` for a cost-ledger row recorded before surfaces were
+ * tracked; a filter offers only the three real surfaces `TranscriptEntry.surface`
+ * can actually hold, plus this screen's own "any" default (rendered
+ * separately, not a fourth entry here).
+ */
+export const TRANSCRIPT_SURFACES: NonNullable<TranscriptEntry['surface']>[] = [
+  'discord',
+  'web',
+  'mcp',
+]

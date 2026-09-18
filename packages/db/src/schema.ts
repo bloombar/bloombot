@@ -1426,6 +1426,13 @@ export const transcriptAccessLog = sqliteTable(
     // says not just *that* a read happened but what it covered.
     startAt: integer('start_at'),
     endAt: integer('end_at'),
+    // WEB-66 — the surface filter actually applied, if any, the same
+    // "what it covered" reasoning `startAt`/`endAt` already give: without
+    // this, a Discord-only read and a whole-course read over the same
+    // dates were indistinguishable on this row, even though ADMIN-2's own
+    // "an institution has to be able to account for" means what an access
+    // covered, not merely that one happened.
+    surface: text('surface', { enum: SURFACES }),
     // A real tiebreaker for `listAccessLogForCourse`'s "newest first" order
     // — the same reason `messages.sequence`/`transcript_exports.sequence`
     // exist (those tables' own comments): `createdAt` is millisecond
@@ -1465,6 +1472,13 @@ export const transcriptAccessLog = sqliteTable(
       'transcript_access_log_kind_check',
       sql`${table.kind} in ('read', 'export')`
     ),
+    // WEB-66 — the same "null or one of `SURFACES`" shape
+    // `messages_surface_check`/`transcript_exports_surface_check` already
+    // give their own `surface` column.
+    check(
+      'transcript_access_log_surface_check',
+      sql`${table.surface} is null or ${table.surface} in ('discord', 'web', 'mcp')`
+    ),
   ]
 )
 
@@ -1502,6 +1516,14 @@ export const transcriptExports = sqliteTable(
     status: text('status', { enum: TRANSCRIPT_EXPORT_STATUSES }).notNull(),
     startAt: integer('start_at'),
     endAt: integer('end_at'),
+    // WEB-66 — the surface filter this export was requested with, if any;
+    // `null` reads every surface, the same "omitted means unfiltered"
+    // convention `startAt`/`endAt` already use on this row. Carried through
+    // to `apps/worker`'s own handler so the file it produces reflects
+    // exactly the same filter the panel read applied, the same "an export
+    // reflects whatever filter is in force" WEB-66 asks of `startAt`/`endAt`
+    // already.
+    surface: text('surface', { enum: SURFACES }),
     // Set once the job produces the file — the bytes themselves live in
     // FILE-5's own `AttachmentStorage`, addressed by this row's own `id`
     // (`apps/worker`'s handler writes them there, never this table).
@@ -1527,6 +1549,12 @@ export const transcriptExports = sqliteTable(
     check(
       'transcript_exports_status_check',
       sql`${table.status} in ('pending', 'ready', 'failed')`
+    ),
+    // WEB-66 — the same "null or one of `SURFACES`" shape
+    // `messages_surface_check` already gives `messages.surface`, above.
+    check(
+      'transcript_exports_surface_check',
+      sql`${table.surface} is null or ${table.surface} in ('discord', 'web', 'mcp')`
     ),
   ]
 )

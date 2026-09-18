@@ -131,12 +131,26 @@ function today(now: Date = new Date()): string {
   return `${year}-${month}-${day}`
 }
 
-/** One message on the transcript, as this router hands it to the browser — `role` rather than `messages.direction`'s own `from_person`/`to_person`, the vocabulary a chat UI actually reads in. */
+/**
+ * One message on the transcript, as this router hands it to the browser —
+ * `role` rather than `messages.direction`'s own `from_person`/`to_person`,
+ * the vocabulary a chat UI actually reads in.
+ *
+ * WEB-65 — `surface`/`channelRef`/`categoryRef` carried straight off the
+ * stored `conversations.Message` (`schema.ts`'s own comment on those
+ * columns): a course whose `conversationScope` merges every surface into
+ * one conversation can show this account a thread mixing a Discord message
+ * with a web one, so `ChatMessage.tsx` needs the same "where did this one
+ * come from" a Transcripts entry already carries.
+ */
 interface ChatMessageView {
   id: string
   role: 'student' | 'assistant'
   text: string
   createdAt: number
+  surface: 'discord' | 'web' | 'mcp' | null
+  channelRef: string | null
+  categoryRef: string | null
 }
 
 function toChatMessageView(message: conversations.Message): ChatMessageView {
@@ -145,7 +159,33 @@ function toChatMessageView(message: conversations.Message): ChatMessageView {
     role: message.direction === 'from_person' ? 'student' : 'assistant',
     text: message.content,
     createdAt: message.createdAt,
+    surface: message.surface,
+    channelRef: message.channelRef,
+    categoryRef: message.categoryRef,
   }
+}
+
+/**
+ * WEB-65/WEB-52 — this account's own identity, for a heading rather than a
+ * labelled row: a full name (first and last, joined by a space, or
+ * whichever exists), else a Discord display name, else an email, else the
+ * bare person id — WEB-52's own order with the last two swapped, the same
+ * deviation `apps/web/src/person-identity.ts`'s own module comment records
+ * in full (`docs/DECISIONS.md` D-125): a heading is a name slot, and an
+ * unlabelled email sitting in it reads as nobody in particular, so a
+ * Discord display name (still a name) outranks it here. Computed here
+ * rather than in the browser — this router already has `person` in hand
+ * for every request below, and PLAT-2's own boundary keeps `apps/web` from
+ * reading `@bloombot/db`'s `people.Person` fields directly.
+ */
+function chatStudentName(person: people.Person): string {
+  const parts = [person.firstName, person.lastName].filter(
+    (part): part is string => part !== null && part !== ''
+  )
+  if (parts.length > 0) return parts.join(' ')
+  if (person.displayName) return person.displayName
+  if (person.email) return person.email
+  return person.id
 }
 
 /**
@@ -318,7 +358,15 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
       const transcript = conversation
         ? conversations.getTranscript(organizationId, conversation.id, deps.db)
         : []
-      res.status(200).json({ messages: transcript.map(toChatMessageView) })
+      res.status(200).json({
+        messages: transcript.map(toChatMessageView),
+        // WEB-65 — this account's own name, WEB-52's rule applied
+        // (`chatStudentName`'s own doc comment), for `ChatMessage.tsx`'s
+        // own heading — one name for the whole thread, not a per-message
+        // field, since every message here is either from this account or
+        // addressed to it.
+        studentName: chatStudentName(person),
+      })
     }
   )
 

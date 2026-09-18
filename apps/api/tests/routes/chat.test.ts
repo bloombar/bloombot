@@ -499,6 +499,146 @@ describe('routes/chat.ts (WEB-10)', () => {
     })
   })
 
+  // WEB-65 — every message on the transcript names the surface it arrived
+  // on, and the response names the caller's own identity (WEB-52's rule)
+  // once, for `ChatMessage.tsx`'s own heading. Fails without
+  // `toChatMessageView`/`chatStudentName` (`routes/chat.ts`) carrying
+  // these through.
+  it('carries the surface on every message, and the caller’s own identity once, for the panel’s own heading (WEB-65)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('Sure thing.')
+
+    const app = await buildTestApp(testDb.db, { model })
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'What is on the syllabus?' })
+
+    const get = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(get.status).toBe(200)
+    const body = get.body as {
+      messages: { role: string; surface: string | null }[]
+      studentName: string
+    }
+    expect(body.messages).toHaveLength(2)
+    // Every message on this thread went through the web chat POST above —
+    // this router's own `answerQuestion` call names `surface: 'web'`.
+    for (const message of body.messages) {
+      expect(message.surface).toBe('web')
+    }
+    // Cheap-fix 4 (review) — `discordPersonId` (`seedEnrolledCourse`'s own
+    // `resolvePersonByIdentity` call) carries no name, Discord display name
+    // or email at all, so this is `chatStudentName`'s own bottom tier: the
+    // bare person id. A bare `.length > 0` here would have passed
+    // identically whether this returned that id or a real name — this
+    // pins the actual value.
+    expect(body.studentName).toBe(discordPersonId)
+  })
+
+  // Cheap-fix 4 (review) — `chatStudentName`'s own four tiers
+  // (`routes/chat.ts`'s own doc comment on the function), each pinned by a
+  // seeded person carrying only what that tier needs: a full name always
+  // wins regardless of what else is known; a Discord display name wins
+  // over an email once WEB-65's own D-125 deviation is in place — this is
+  // the one assertion that fails if that reordering is ever reverted to
+  // WEB-52's own literal order; an email is the last resort before the
+  // bare id, already pinned above.
+  it('resolves the caller’s own identity through WEB-65’s heading order — name, then Discord name, then email (cheap-fix 4)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId } = seedEnrolledCourse(testDb.db, caller)
+    const app = await buildTestApp(testDb.db)
+
+    // Tier 1 — a full name wins even when a Discord display name and an
+    // email are both also known.
+    const namedPerson = people.createPerson(
+      caller.organizationId,
+      {
+        firstName: 'Priya',
+        lastName: 'Shah',
+        displayName: 'PriyaDiscord',
+        email: 'priya@example.edu',
+      },
+      testDb.db
+    )
+    enrolments.enrolViaRoster(
+      caller.organizationId,
+      { courseId, personId: namedPerson.id },
+      testDb.db
+    )
+    connectCallerTo(testDb.db, caller, namedPerson.id)
+    const namedGet = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect((namedGet.body as { studentName: string }).studentName).toBe(
+      'Priya Shah'
+    )
+
+    // Tier 2 — no name, but a Discord display name and an email both known:
+    // the display name wins (WEB-65's own D-125 deviation from WEB-52's
+    // literal order).
+    const secondCaller = seedSecondCallerInOrganization(
+      testDb.db,
+      caller.organizationId
+    )
+    const discordNamedPerson = people.createPerson(
+      caller.organizationId,
+      { displayName: 'PriyaDiscord', email: 'priya@example.edu' },
+      testDb.db
+    )
+    enrolments.enrolViaRoster(
+      caller.organizationId,
+      { courseId, personId: discordNamedPerson.id },
+      testDb.db
+    )
+    connectCallerTo(testDb.db, secondCaller, discordNamedPerson.id)
+    const discordGet = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', secondCaller.cookieHeader)
+    expect((discordGet.body as { studentName: string }).studentName).toBe(
+      'PriyaDiscord'
+    )
+
+    // Tier 3 — no name and no Discord display name, only an email.
+    const thirdCaller = seedSecondCallerInOrganization(
+      testDb.db,
+      caller.organizationId
+    )
+    const emailOnlyPerson = people.createPerson(
+      caller.organizationId,
+      { email: 'priya@example.edu' },
+      testDb.db
+    )
+    enrolments.enrolViaRoster(
+      caller.organizationId,
+      { courseId, personId: emailOnlyPerson.id },
+      testDb.db
+    )
+    connectCallerTo(testDb.db, thirdCaller, emailOnlyPerson.id)
+    const emailGet = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', thirdCaller.cookieHeader)
+    expect((emailGet.body as { studentName: string }).studentName).toBe(
+      'priya@example.edu'
+    )
+  })
+
   // CORE-7/CORE-8 — this route's own `addressPersonForWeb` (`routes/chat.ts`)
   // is the surface's own decision, exercised here through the real router
   // rather than a unit test of a private function this file cannot import:

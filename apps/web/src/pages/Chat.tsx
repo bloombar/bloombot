@@ -140,6 +140,11 @@ export function Chat({
   const [messages, setMessages] = useState<ChatMessageEntry[] | undefined>(
     undefined
   )
+  // WEB-65 — this account's own identity (WEB-52's rule), resolved by
+  // `routes/chat.ts` alongside the transcript itself; `ChatMessage.tsx`'s
+  // own heading needs this before it can render anything, so it starts
+  // empty and is set the moment `loadMessages` below resolves.
+  const [studentName, setStudentName] = useState('')
   const [messagesError, setMessagesError] = useState<ApiError | undefined>(
     undefined
   )
@@ -218,7 +223,10 @@ export function Chat({
     isNearBottomRef.current = true
     setNewMessageWaiting(false)
     getChatMessages(organizationId, selectedCourseId).then(
-      (result) => setMessages(result),
+      (result) => {
+        setMessages(result.messages)
+        setStudentName(result.studentName)
+      },
       (caught: unknown) => {
         if (caught instanceof ApiError) setMessagesError(caught)
         else throw caught
@@ -261,9 +269,18 @@ export function Chat({
     setNewMessageWaiting(false)
   }
 
+  // Must-fix 2 (review) — `messages`/`studentName` both resolve together,
+  // in the same `loadMessages` `.then` (above): while `messages` is still
+  // `undefined`, `studentName` is still its own initial `''`, and sending
+  // before either lands would render a heading with no name at all (a
+  // student's own optimistic bubble headed nothing, or a reply landing
+  // first reading "Bloombot to "). Held here, at the source, rather than
+  // in `ChatMessage.tsx` itself — a message that will only ever land with
+  // a real name should not exist on screen without one even briefly.
+  const canSend = messages !== undefined
   const handleSend = async () => {
     const text = draft.trim()
-    if (!text || !selectedCourseId) return
+    if (!text || !selectedCourseId || !canSend) return
     setNotice(undefined)
     setMessagesError(undefined)
     setSending(true)
@@ -277,11 +294,19 @@ export function Chat({
     // `ErrorMessage`), so the student is not misled about whether their
     // question landed — only this optimistic bubble, which a refresh
     // reloads from `getChatMessages` and drops, is briefly stale.
+    // WEB-65 — this message is being sent from this very surface, so
+    // `surface: 'web'` (and no Discord category/channel) is not a guess
+    // the way it would be for a message read back off `messages` — it is
+    // simply what this bubble is, the moment before the real row (with the
+    // same surface) is ever written.
     const optimistic: ChatMessageEntry = {
       id: `pending-${crypto.randomUUID()}`,
       role: 'student',
       text,
       createdAt: Date.now(),
+      surface: 'web',
+      channelRef: null,
+      categoryRef: null,
     }
     // WEB-24: the thread jumps to the reader's own message unconditionally
     // (`forceScrollRef`'s own comment, above) — sending is exactly the
@@ -308,6 +333,9 @@ export function Chat({
             role: 'assistant',
             text: result.text,
             createdAt: Date.now(),
+            surface: 'web',
+            channelRef: null,
+            categoryRef: null,
           },
         ])
         if (result.kind === 'answered-last-request') {
@@ -321,6 +349,9 @@ export function Chat({
             role: 'assistant',
             text: result.text,
             createdAt: Date.now(),
+            surface: 'web',
+            channelRef: null,
+            categoryRef: null,
           },
         ])
       } else {
@@ -554,6 +585,11 @@ export function Chat({
               key={message.id}
               role={message.role}
               text={message.text}
+              createdAt={message.createdAt}
+              surface={message.surface}
+              channelRef={message.channelRef}
+              categoryRef={message.categoryRef}
+              studentName={studentName}
             />
           ))
         )}
@@ -616,7 +652,7 @@ export function Chat({
           }}
           rows={2}
           placeholder="Ask a question…"
-          disabled={sending}
+          disabled={sending || !canSend}
           className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-base sm:text-sm text-neutral-900 focus:border-brand-500"
         />
         <Button
@@ -624,7 +660,7 @@ export function Chat({
           variant="primary"
           aria-label="Send"
           icon={<SendIcon aria-hidden="true" className="size-4" />}
-          disabled={sending || draft.trim().length === 0}
+          disabled={sending || !canSend || draft.trim().length === 0}
         >
           {sending ? 'Sending…' : 'Send'}
         </Button>

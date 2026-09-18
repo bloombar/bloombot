@@ -11,6 +11,7 @@ import {
   conversations,
   jobs,
   people,
+  transcriptExports,
   type Database,
 } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -23,7 +24,11 @@ import {
   readTranscriptAction,
 } from '../src/actions/transcripts.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionConflictError, ActionRefusedError } from '../src/errors.js'
+import {
+  ActionConflictError,
+  ActionInputError,
+  ActionRefusedError,
+} from '../src/errors.js'
 import { seedOrganizationWithCourse } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -51,23 +56,27 @@ function seedVerifiedStudent(organizationId: string, db: Database) {
   )
 }
 
+// WEB-66's own `surface` parameter defaults to `'web'` — every call site
+// this file had before this slice seeded a `web` message, and stays
+// unaffected by the default.
 function seedMessage(
   organizationId: string,
   courseId: string,
   personId: string,
   content: string,
-  db: Database
+  db: Database,
+  surface: 'discord' | 'web' | 'mcp' = 'web'
 ) {
   const conversation = conversations.getOrCreateConversation(
     organizationId,
-    { courseId, personId, surface: 'web' },
+    { courseId, personId, surface },
     db
   )
   if (!conversation) throw new Error('setup failed: conversation')
   conversations.appendMessage(
     organizationId,
     conversation.id,
-    { direction: 'from_person', content },
+    { direction: 'from_person', content, surface },
     db
   )
 }
@@ -89,6 +98,59 @@ describe('transcripts.read (ADMIN-1)', () => {
 
     expect(result.entries).toHaveLength(1)
     expect(result.entries[0]?.content).toBe('Hi!')
+  })
+
+  // WEB-66 — a surface filter narrows the read, applied by the server
+  // through the same action every other filter already goes through.
+  it('narrows the read to one surface, combined with the student filter', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const student = seedDiscordOnlyStudent(organizationId, testDb.db)
+    seedMessage(
+      organizationId,
+      course.id,
+      student.id,
+      'Asked on the web',
+      testDb.db,
+      'web'
+    )
+    seedMessage(
+      organizationId,
+      course.id,
+      student.id,
+      'Asked on Discord',
+      testDb.db,
+      'discord'
+    )
+
+    const result = await dispatch(
+      readTranscriptAction,
+      { courseId: course.id, personId: student.id, surface: 'discord' },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0]?.content).toBe('Asked on Discord')
+  })
+
+  // WEB-66 — the input schema refuses anything outside the real surfaces
+  // this platform tracks, the same way any other malformed input is
+  // refused before the policy or the read ever runs (ACT-4).
+  it('refuses an unknown surface value (WEB-66)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        readTranscriptAction,
+        { courseId: course.id, surface: 'carrier-pigeon' },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+    ).rejects.toThrow(ActionInputError)
   })
 
   // ADMIN-2 — from the action's own side: a caller with no account id
@@ -220,6 +282,29 @@ describe('transcripts.export (ADMIN-3)', () => {
     ).rejects.toThrow(ActionRefusedError)
   })
 
+  // WEB-66 — an export carries the surface filter, exactly as it already
+  // carries `startAt`/`endAt`: recorded on the pending row, for
+  // `apps/worker`'s own handler to apply the same filter the request named.
+  it('carries the surface filter onto the pending export row (WEB-66)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+
+    const result = await dispatch(
+      exportTranscriptAction,
+      { courseId: course.id, surface: 'discord' },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    const exportRow = transcriptExports.getExport(
+      organizationId,
+      result.exportId,
+      testDb.db
+    )
+    expect(exportRow?.surface).toBe('discord')
+  })
+
   it('allows a student-filtered export once that student has a verified address (PPL-5)', async () => {
     testDb = createTestDatabase()
     const { organizationId, ownerId, course } = seedOrganizationWithCourse(
@@ -292,6 +377,29 @@ describe('transcripts.listExports (ADMIN-3)', () => {
 })
 
 describe('transcripts.listAccessLog (ADMIN-2)', () => {
+  // "Also worth doing" (review) — the surface filter reaches the log row
+  // through the same action every other filter already goes through.
+  it('records the surface filter a read applied, on the audit row (WEB-66)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+
+    await dispatch(
+      readTranscriptAction,
+      { courseId: course.id, surface: 'discord' },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    const result = await dispatch(
+      listTranscriptAccessLogAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    expect(result[0]?.surface).toBe('discord')
+  })
+
   it('an owner reads the log, most recent first, with a display name resolved for the actor and the student — never an email', async () => {
     testDb = createTestDatabase()
     const { organizationId, ownerId, course } = seedOrganizationWithCourse(

@@ -17,7 +17,11 @@ import { and, desc, eq } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { writeTransaction } from '../client.js'
-import { transcriptExports, type TranscriptExportStatus } from '../schema.js'
+import {
+  transcriptExports,
+  type Surface,
+  type TranscriptExportStatus,
+} from '../schema.js'
 
 export type TranscriptExport = typeof transcriptExports.$inferSelect
 
@@ -31,6 +35,8 @@ export interface NewTranscriptExport {
   requestedByAccountId: string
   startAt?: number
   endAt?: number
+  /** WEB-66 — the surface filter this export was requested with, carried onto the row so `apps/worker`'s own handler can apply the same filter the panel read did (`schema.ts`'s own comment on this column). */
+  surface?: Surface
 }
 
 /**
@@ -78,6 +84,7 @@ export function createPendingExport(
         status: 'pending',
         startAt: input.startAt ?? null,
         endAt: input.endAt ?? null,
+        surface: input.surface ?? null,
         filename: null,
         contentType: null,
         sizeBytes: null,

@@ -46,7 +46,7 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 
 import {
   accounts,
@@ -63,6 +63,53 @@ import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
+
+/**
+ * The WCAG 2.x contrast ratio between an element's rendered text colour
+ * and its own rendered background colour, measured in the real browser.
+ *
+ * Only the element's *own* background is read — every element this is used
+ * on paints one, so there is no need to walk ancestors looking for the
+ * first non-transparent one.
+ */
+async function contrastRatio(locator: Locator): Promise<number> {
+  const [color, background] = await locator.evaluate((element) => {
+    // The DOM lib is deliberately not in this suite's tsconfig, so the
+    // browser global is reached through a local structural type — the same
+    // device `e2e/chat-scroll.spec.ts`'s own `BrowserWindow` uses.
+    const win = globalThis as unknown as {
+      getComputedStyle: (el: unknown) => {
+        color: string
+        backgroundColor: string
+      }
+    }
+    const style = win.getComputedStyle(element)
+    return [style.color, style.backgroundColor]
+  })
+
+  // `rgb(r, g, b)` / `rgba(r, g, b, a)` — the only forms getComputedStyle
+  // returns for a resolved colour.
+  const channels = (value: string): [number, number, number] => {
+    const parts = value.match(/[\d.]+/g)
+    if (!parts || parts.length < 3) {
+      throw new Error(`unexpected computed colour: ${value}`)
+    }
+    return [Number(parts[0]), Number(parts[1]), Number(parts[2])]
+  }
+
+  // WCAG relative luminance: sRGB channels linearised, then weighted.
+  const luminance = (value: string): number => {
+    const [r, g, b] = channels(value).map((channel) => {
+      const srgb = channel / 255
+      return srgb <= 0.03928 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4
+    }) as [number, number, number]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+
+  const lighter = Math.max(luminance(color), luminance(background))
+  const darker = Math.min(luminance(color), luminance(background))
+  return (lighter + 0.05) / (darker + 0.05)
+}
 
 test('a signed-in account holds a conversation with an enrolled course, rendered as sanitized Markdown (WEB-10)', async ({
   page,
@@ -172,15 +219,31 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   await navigateTo(page, 'Chat')
   await expect(page.getByText(courseTitle)).toBeVisible()
 
+  // The backticked span is deliberate: inline code inside a *student's*
+  // bubble is the one place the bubble's own `text-white` used to be
+  // inherited onto a near-white code chip. The contrast assertion below is
+  // what actually proves it is readable; a class-name assertion in jsdom
+  // could not, since no stylesheet is applied there.
   await page
     .getByLabel('Ask a question')
-    .fill('When is the midterm, and what should I read first?')
+    .fill('When is the midterm, and should I read `chapter one` first?')
   await page.getByRole('button', { name: 'Send' }).click()
 
   const thread = page.getByTestId('chat-thread')
   await expect(thread).toContainText(
-    'When is the midterm, and what should I read first?'
+    'When is the midterm, and should I read chapter one first?'
   )
+
+  // Inline code, in the real browser with the real stylesheet: its own ink
+  // against its own background must clear WCAG AA for body text (4.5:1).
+  // With the defect present this measured about 1.05:1 — white on
+  // `bg-neutral-100` — which is the reported "invisible" text.
+  const inlineCode = thread
+    .getByTestId('chat-message-student')
+    .locator('code')
+    .first()
+  await expect(inlineCode).toHaveText('chapter one')
+  expect(await contrastRatio(inlineCode)).toBeGreaterThanOrEqual(4.5)
   // `e2e/support/start-api.ts`'s own fixed answer, rendered as real
   // Markdown by `components/ChatMessage.tsx` — a `<h1>` and a `<strong>`,
   // not the literal `#`/`**` characters a plain-text render would show.

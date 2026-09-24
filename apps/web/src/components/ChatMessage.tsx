@@ -72,8 +72,18 @@ const PROSE_CLASSES =
   '[&_li]:mt-0.5 ' +
   '[&_a]:underline [&_a]:underline-offset-2 ' +
   '[&_blockquote]:mt-2 [&_blockquote]:border-l-2 [&_blockquote]:border-neutral-300 [&_blockquote]:pl-3 [&_blockquote]:text-neutral-600 ' +
-  '[&_code]:rounded [&_code]:bg-neutral-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em] ' +
-  '[&_pre]:mt-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-neutral-900 [&_pre]:p-3 [&_pre]:text-neutral-50 [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 ' +
+  // Inline code carries its *own* foreground colour, never the bubble's.
+  // A student's bubble is `bg-brand-600 text-white`, so a code chip that
+  // only set a background inherited white text onto `bg-neutral-100` —
+  // around 1.05:1, unreadable. The chip is now a self-contained
+  // light-surface/dark-ink pair (the ordinary treatment for inline code),
+  // legible on either bubble.
+  '[&_code]:rounded [&_code]:border [&_code]:border-neutral-300 [&_code]:bg-neutral-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em] [&_code]:text-neutral-800 ' +
+  // A fenced block inverts that pair, and its `<code>` child has to be
+  // told so explicitly — `[&_pre_code]:` outranks `[&_code]:` on
+  // specificity (two descendants, not one), which is what keeps the dark
+  // ink above from landing on the dark block.
+  '[&_pre]:mt-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-neutral-900 [&_pre]:p-3 [&_pre]:text-neutral-50 [&_pre_code]:border-0 [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 [&_pre_code]:text-neutral-50 ' +
   '[&_table]:border-collapse [&_th]:border [&_th]:border-neutral-300 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-neutral-300 [&_td]:px-2 [&_td]:py-1'
 
 /**

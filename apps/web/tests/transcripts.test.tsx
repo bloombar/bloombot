@@ -4,7 +4,13 @@
  * and collected once ready.
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
@@ -260,6 +266,65 @@ describe('Transcripts (ADMIN-1)', () => {
     )
   })
 
+  // A transcript renders each entry with `components/ChatMessage.tsx`, the
+  // same component the chat screen uses — so the Markdown a model actually
+  // wrote is formatted here too, rather than shown as the literal `#`,
+  // `**` and backtick characters the former preformatted `<p>` left on
+  // screen.
+  it('renders each entry as a chat message bubble, with Markdown formatted the way the chat screen formats it', async () => {
+    await selectProjectAndCourse()
+    expect(await screen.findByText('What is the deadline?')).toBeInTheDocument()
+    readTranscript.mockClear()
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [
+        {
+          personId: 'person-1',
+          personDisplayName: 'Alice',
+          personFirstName: null,
+          personLastName: null,
+          personEmail: null,
+          direction: 'from_person',
+          content: 'How do I run `npm test`?',
+          createdAt: Date.now(),
+          surface: 'web',
+          channelRef: null,
+          categoryRef: null,
+        },
+        {
+          personId: 'person-1',
+          personDisplayName: 'Alice',
+          personFirstName: null,
+          personLastName: null,
+          personEmail: null,
+          direction: 'to_person',
+          content: 'Run **npm test** from the repository root.',
+          createdAt: Date.now(),
+          surface: 'web',
+          channelRef: null,
+          categoryRef: null,
+        },
+      ],
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    // The student's own row is the chat screen's student bubble, and its
+    // backticked text is a real `<code>` element — not the backticks
+    // themselves, which is what a plain-text render showed.
+    const studentMessage = await screen.findByTestId('chat-message-student')
+    expect(studentMessage.querySelector('code')).toHaveTextContent('npm test')
+    expect(studentMessage).not.toHaveTextContent('`npm test`')
+
+    // The reply is the assistant bubble, with its emphasis rendered rather
+    // than its asterisks shown.
+    const assistantMessage = screen.getByTestId('chat-message-assistant')
+    expect(assistantMessage.querySelector('strong')).toHaveTextContent(
+      'npm test'
+    )
+    expect(assistantMessage).not.toHaveTextContent('**npm test**')
+  })
+
   // WEB-65 — a student's own message is headed by their name alone, and
   // the bot's reply "Bloombot to `<name>`" — replacing the former
   // "asked"/"answered" pairing.
@@ -306,8 +371,14 @@ describe('Transcripts (ADMIN-1)', () => {
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
 
-    expect(await screen.findByText('Alice')).toBeInTheDocument()
-    expect(screen.getByText('Bloombot to Alice')).toBeInTheDocument()
+    // Scoped to the entries list: "Alice" is also an option in the Student
+    // filter, and each entry's heading is now its own element (the chat
+    // bubble's, `components/ChatMessage.tsx`) rather than one span holding
+    // the name and the origin together — so an unscoped exact-text query
+    // matches both places.
+    const entries = await screen.findByTestId('transcript-entries')
+    expect(within(entries).getByText('Alice')).toBeInTheDocument()
+    expect(within(entries).getByText('Bloombot to Alice')).toBeInTheDocument()
     // WEB-65 — Discord names its category and channel; a message with no
     // recorded surface shows nothing for it.
     expect(screen.getByText(/Discord — Help \/ general/)).toBeInTheDocument()

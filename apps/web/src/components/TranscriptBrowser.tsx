@@ -63,6 +63,7 @@ import type {
 import { personIdentity } from '../person-identity.js'
 import { surfaceLabel, TRANSCRIPT_SURFACES } from '../surface-label.js'
 import { Button } from './Button.js'
+import { ChatMessage, type ChatMessageProps } from './ChatMessage.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FormField } from './FormField.js'
 import { textInputClasses } from './fieldStyles.js'
@@ -143,38 +144,34 @@ function accessLogVerb(kind: TranscriptAccessLogEntry['kind']): string {
 }
 
 /**
- * WEB-65 — an entry's own heading: the student's own name alone
- * (`from_person`), or "Bloombot to `<name>`" (`to_person`) — replacing the
- * former "`<name>` — asked"/"`<name>` — answered" pairing. The name is
- * WEB-52's own rule, applied through `person-identity.ts`.
+ * An entry, in the props `components/ChatMessage.tsx` takes. The
+ * transcript renders the *same* component the chat screen does, so a
+ * message reads identically in both places — same bubble, same heading,
+ * same sanitized Markdown (a transcript used to render `entry.content` as
+ * preformatted plain text, which showed a model's Markdown as literal
+ * `#`/`**`/backtick characters).
+ *
+ * Only the vocabulary differs: a transcript entry has a `direction` and
+ * carries its own person on every row (the list can span students),
+ * whereas a chat thread has a `role` and one student for the whole thread.
+ * WEB-52's name resolution (`person-identity.ts`) is what bridges them.
  */
-function entryHeading(entry: TranscriptEntry): string {
-  const name = personIdentity({
-    personId: entry.personId,
-    personFirstName: entry.personFirstName,
-    personLastName: entry.personLastName,
-    personEmail: entry.personEmail,
-    personDiscordName: entry.personDisplayName,
-  })
-  return entry.direction === 'from_person' ? name : `Bloombot to ${name}`
-}
-
-/**
- * WEB-65 — where an entry arrived, and (Discord only) which category and
- * channel — `undefined` when the surface itself was never recorded, so
- * nothing is guessed at (`ChatMessage.tsx`'s own `messageOrigin` mirrors
- * this for the chat surface, across the two components' own duplicated-by-
- * necessity boundary — this file has no reason to import from a component
- * file, and vice versa).
- */
-function entryOrigin(entry: TranscriptEntry): string | undefined {
-  if (!entry.surface) return undefined
-  const label = surfaceLabel(entry.surface)
-  if (entry.surface !== 'discord') return label
-  const place = [entry.categoryRef, entry.channelRef]
-    .filter(Boolean)
-    .join(' / ')
-  return place ? `${label} — ${place}` : label
+function entryMessageProps(entry: TranscriptEntry): ChatMessageProps {
+  return {
+    role: entry.direction === 'from_person' ? 'student' : 'assistant',
+    text: entry.content,
+    createdAt: entry.createdAt,
+    surface: entry.surface,
+    channelRef: entry.channelRef,
+    categoryRef: entry.categoryRef,
+    studentName: personIdentity({
+      personId: entry.personId,
+      personFirstName: entry.personFirstName,
+      personLastName: entry.personLastName,
+      personEmail: entry.personEmail,
+      personDiscordName: entry.personDisplayName,
+    }),
+  }
 }
 
 export function TranscriptBrowser({
@@ -446,27 +443,16 @@ export function TranscriptBrowser({
           No messages match these filters.
         </p>
       ) : (
-        <ul className="flex flex-col gap-2" data-testid="transcript-entries">
+        // The same surface `pages/Chat.tsx` gives its own thread — a
+        // recessed panel the bubbles sit on — so the transcript reads as
+        // the conversation it is rather than as a list of records.
+        <ul
+          className="flex flex-col gap-2 rounded-md border border-neutral-200 bg-neutral-50 p-3"
+          data-testid="transcript-entries"
+        >
           {entries.map((entry, index) => (
-            <li
-              key={index}
-              className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3"
-            >
-              <div className="flex items-center justify-between text-xs text-neutral-500">
-                {/* WEB-65 — a student's own name alone, or "Bloombot to
-                    `<name>`" for the reply; replaces the former
-                    "`<name>` — asked"/"`<name>` — answered" pairing. */}
-                <span>
-                  {entryHeading(entry)}
-                  {entryOrigin(entry) && ` · ${entryOrigin(entry)}`}
-                </span>
-                <time dateTime={new Date(entry.createdAt).toISOString()}>
-                  {new Date(entry.createdAt).toLocaleString()}
-                </time>
-              </div>
-              <p className="whitespace-pre-wrap text-sm text-neutral-900">
-                {entry.content}
-              </p>
+            <li key={index}>
+              <ChatMessage {...entryMessageProps(entry)} />
             </li>
           ))}
         </ul>

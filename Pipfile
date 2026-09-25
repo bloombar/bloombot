@@ -17,6 +17,9 @@ seaborn = "*"
 [dev-packages]
 ipykernel = "*"
 pytest = "*"
+# `analysis/run_all.py` executes the usage-report notebooks headlessly.
+nbformat = "*"
+nbclient = "*"
 
 [requires]
 python_version = "3.12"

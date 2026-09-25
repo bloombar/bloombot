@@ -37,3 +37,8 @@ questionnaires/
 __pycache__/
 .pytest_cache/
 *.ipynb
+
+# Generated: `python analysis/run_all.py --mock --publish-example` writes this
+# example report and its metrics from mock data. It is output, not source, and
+# reformatting it would diverge from what the next run produces.
+analysis/examples/

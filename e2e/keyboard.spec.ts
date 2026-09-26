@@ -62,17 +62,18 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   await page.getByLabel('Title').fill('A course I never saved')
 
   // In-app navigation, started entirely outside the form (WEB-16's own
-  // "the hamburger menu, a nav link, the home icon") — a *different* tab
-  // than the one this form lives inside (WEB-9's own `Discord` tab),
-  // reached the same nav row `course-configuration.spec.ts` already
-  // reaches from the "Projects" side. Deliberately not the "Projects" tab
-  // itself: this form already lives inside it (`ProjectsPanel`'s own
-  // nested view), so clicking that same tab button would not be a
-  // navigation away from anything — `Discord` is unambiguously a real one.
+  // "the hamburger menu, a nav link, the home icon") — a *different*
+  // screen than the one this form lives inside (WEB-69's own Organization
+  // settings screen), reached the same nav row
+  // `course-configuration.spec.ts` already reaches from the "Projects"
+  // side. Deliberately not the "Projects" tab itself: this form already
+  // lives inside it (`ProjectsPanel`'s own nested view), so clicking that
+  // same tab button would not be a navigation away from anything —
+  // Organization settings is unambiguously a real one.
   await page.getByRole('button', { name: 'Open navigation menu' }).click()
   const discordNavLink = page
     .getByRole('dialog', { name: 'Navigation' })
-    .getByRole('button', { name: 'Discord' })
+    .getByRole('button', { name: 'Organization settings' })
   await discordNavLink.click()
 
   const dialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' })
@@ -104,6 +105,9 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: 'Discard changes' }).click()
   await expect(dialog).toBeHidden()
+  // General, not Discord, is the settings screen's own default tab
+  // (`docs/DECISIONS.md`'s own WEB-69 entry) — open Discord explicitly.
+  await page.getByRole('tab', { name: 'Discord' }).click()
   await expect(
     page.getByRole('button', { name: 'Install to Discord' })
   ).toBeVisible()

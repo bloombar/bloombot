@@ -23,7 +23,7 @@
  * already draws for `memberships.grant`.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -35,6 +35,7 @@ import type {
   CreatedMembershipInvitation,
   MembershipInvitation,
 } from '../api/types.js'
+import type { TabDirtyActions } from '../hooks/tabDirtyActions.js'
 import { AddIcon, CopyIcon, DisableIcon, JoinLinkIcon } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
@@ -44,6 +45,10 @@ import { useModal } from './modal/ModalProvider.js'
 
 export interface MembershipInvitationsProps {
   organizationId: string
+  /** WEB-69 — called on every change to whether this form's own pending invite (a non-blank email) exists, so `components/Team.tsx` can fold it into that tab's one dirty flag (`pages/OrganizationSettings.tsx`'s own module comment on why each tab keeps its own record rather than the screen sharing one). Optional, defaulting to a no-op — most of this file's own tests do not care. */
+  onDirtyChange?: (dirty: boolean) => void
+  /** WEB-69 — this form's own save/discard handle, the same `onRegisterActions` shape `pages/Usage.tsx`/`components/CourseInstructions.tsx` already expose; called with `null` on unmount. Optional — most of this file's own tests do not care. */
+  onRegisterActions?: (actions: TabDirtyActions | null) => void
 }
 
 const ROLE_LABELS: Record<MembershipInvitation['role'], string> = {
@@ -101,6 +106,8 @@ function formatStatus(invitation: MembershipInvitation): string {
 
 export function MembershipInvitations({
   organizationId,
+  onDirtyChange = () => {},
+  onRegisterActions,
 }: MembershipInvitationsProps) {
   const [invitations, setInvitations] = useState<
     MembershipInvitation[] | undefined
@@ -127,6 +134,11 @@ export function MembershipInvitations({
     undefined
   )
   const { confirm } = useModal()
+  // WEB-69 — read synchronously by `isSaving`, the same reason
+  // `pages/Usage.tsx`'s own `savingRef` exists: a tab prompt that may fire
+  // in the same tick as this form's own Invite button needs the answer
+  // before any re-render.
+  const invitingRef = useRef(false)
 
   const refresh = useCallback(
     () =>
@@ -147,9 +159,17 @@ export function MembershipInvitations({
     void refresh()
   }, [refresh])
 
-  const handleInvite = async () => {
+  // WEB-69: returns whether the invitation actually sent, so a caller that
+  // saves on the way somewhere else (`components/Team.tsx`, folding this
+  // form into its own `onRegisterActions`) knows whether it is safe to move
+  // on — the same `Promise<boolean>` shape `pages/Usage.tsx#handleSave`
+  // already returns for the identical reason. A `useCallback` for the same
+  // reason that file's own `handleSave` is one: its identity has to track
+  // everything it closes over, since it is handed out through
+  // `onRegisterActions`, below.
+  const handleInvite = useCallback(async (): Promise<boolean> => {
     const trimmedEmail = email.trim()
-    if (!trimmedEmail) return
+    if (!trimmedEmail) return false
 
     setInviteError(undefined)
     setCopied(false)
@@ -162,9 +182,10 @@ export function MembershipInvitations({
         'An instructor or an assistant can read every course transcript and chat history in this organization, and act as staff across it, once they redeem this invitation. The invitation itself grants nothing until then.',
       confirmLabel: 'Send invitation',
     })
-    if (!confirmed) return
+    if (!confirmed) return false
 
     setInviting(true)
+    invitingRef.current = true
     try {
       const durationMs = EXPIRY_OPTIONS.find(
         (option) => option.value === expiryOption
@@ -183,13 +204,55 @@ export function MembershipInvitations({
       setRole('instructor')
       setExpiryOption('none')
       await refresh()
+      return true
     } catch (caught) {
       if (caught instanceof ApiError) setInviteError(caught)
       else throw caught
+      return false
     } finally {
       setInviting(false)
+      invitingRef.current = false
     }
-  }
+  }, [email, role, expiryOption, organizationId, confirm, refresh])
+
+  // WEB-69 — "dirty" for this form: a pending, not-yet-sent invite email,
+  // the same "non-blank input" rule `Team.tsx`'s own grant form uses for
+  // the identical shape (`docs/DECISIONS.md`).
+  const isDirty = email.trim() !== ''
+
+  useEffect(() => {
+    onDirtyChange(isDirty)
+  }, [isDirty, onDirtyChange])
+
+  // Reports not-dirty when this form unmounts outright, which `Team.tsx`'s
+  // own loadError early return does whenever a member-list refresh fails —
+  // that early return swaps this form out of the tree without ever
+  // visiting `isDirty: false` again, which would otherwise leave
+  // `Team.tsx`'s own `invitationsDirty` flag stuck `true` and the
+  // leave-guard asking about an edit this form no longer holds. A ref
+  // tracks the latest `onDirtyChange` across renders so this cleanup —
+  // which fires exactly once, on unmount, not on every re-registration
+  // below — calls whichever one is actually still current.
+  const onDirtyChangeRef = useRef(onDirtyChange)
+  onDirtyChangeRef.current = onDirtyChange
+  useEffect(() => {
+    return () => onDirtyChangeRef.current(false)
+  }, [])
+
+  const discard = useCallback(() => {
+    setEmail('')
+    setInviteError(undefined)
+  }, [])
+
+  useEffect(() => {
+    if (!onRegisterActions) return
+    onRegisterActions({
+      save: handleInvite,
+      isSaving: () => invitingRef.current,
+      discard,
+    })
+    return () => onRegisterActions(null)
+  }, [handleInvite, discard, onRegisterActions])
 
   // `JoinLinks.tsx#handleCopy`'s own comment has the full mechanics —
   // `navigator.clipboard` is `undefined` on a non-secure origin, which

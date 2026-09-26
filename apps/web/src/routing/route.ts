@@ -64,6 +64,31 @@ export const COURSE_EDITOR_TABS = [
 
 export type CourseEditorTab = (typeof COURSE_EDITOR_TABS)[number]
 
+/**
+ * WEB-69 — the five tabs `pages/OrganizationSettings.tsx` renders, one per
+ * address segment, the same "one array the type, the parser's runtime guard
+ * and the tab bar all agree with" shape `COURSE_EDITOR_TABS` above already
+ * gives WEB-35. Discord, Team, Usage and Jobs are the SPEC's own four
+ * (WEB-69's own text); General is a fifth, added by this slice's own
+ * decision (`docs/DECISIONS.md`) — the organization's own name (WEB-57's
+ * existing rename capability) and, at its own bottom, the Danger zone
+ * (WEB-72/DATA-7's delete-organization control, which used to sit at the
+ * bottom of `components/Team.tsx`). First in the array, so it is also the
+ * default tab a bare `/settings` (or a fresh visit to the screen) opens
+ * on — the organization's own name is the most orienting thing to land on,
+ * the same reasoning a course's own General tab is `COURSE_EDITOR_TABS[0]`.
+ */
+export const ORGANIZATION_SETTINGS_TABS = [
+  'general',
+  'discord',
+  'team',
+  'usage',
+  'jobs',
+] as const
+
+export type OrganizationSettingsTab =
+  (typeof ORGANIZATION_SETTINGS_TABS)[number]
+
 /** WEB-32 — an organization-scoped screen inside `pages/ProjectsPanel.tsx`; a deep link only ever carries the ids the address itself names (a `projectId`, a `courseId`), never the whole record — `pages/ProjectsPanel.tsx`'s own module comment has how those ids are resolved into the `Project`/`Course` the screens underneath actually take. */
 export type ProjectsRoute =
   | { kind: 'projects'; organizationId: string }
@@ -103,10 +128,18 @@ export type OrganizationRoute =
   | ProjectsRoute
   | { kind: 'chat'; organizationId: string; courseId?: string }
   | TranscriptsRoute
-  | { kind: 'discord'; organizationId: string }
-  | { kind: 'team'; organizationId: string }
-  | { kind: 'usage'; organizationId: string }
-  | { kind: 'jobs'; organizationId: string }
+  // WEB-69 — Discord, Team, Usage and Jobs were each their own route kind
+  // (and their own drawer entry); they are now one screen, one tab each
+  // (`ORGANIZATION_SETTINGS_TABS`'s own comment on the fifth, General).
+  // `buildPath` no longer has a case for any of the four old kinds —
+  // `parseRoute` still recognises their old addresses, mapping each to this
+  // same kind at the tab it named, so a bookmark or a shared link keeps
+  // working (`legacyOrganizationSettingsRedirect`, below).
+  | {
+      kind: 'organization-settings'
+      organizationId: string
+      tab: OrganizationSettingsTab
+    }
   // WEB-47 — the MCP setup/instructions tab, the same audience as Chat
   // (`pages/Shell.tsx`'s own module comment on LINK-10); no id of its own
   // beyond the organization, since the connector URL and instructions it
@@ -236,6 +269,13 @@ function segmentsOf(pathname: string): string[] {
 /** WEB-35 — a runtime guard for `CourseEditorTab`, since a URL segment is just a string until it is checked against the five names `pages/CourseEditor.tsx` actually renders; anything else (a typo, an old bookmark to a tab this app never had) is not a tab this scheme recognises, so `parseRoute` falls through to `'not-found'` rather than guessing. */
 function isCourseEditorTab(segment: string): segment is CourseEditorTab {
   return (COURSE_EDITOR_TABS as readonly string[]).includes(segment)
+}
+
+/** WEB-69 — the same runtime guard as `isCourseEditorTab`, above, for `OrganizationSettingsTab`. */
+function isOrganizationSettingsTab(
+  segment: string
+): segment is OrganizationSettingsTab {
+  return (ORGANIZATION_SETTINGS_TABS as readonly string[]).includes(segment)
 }
 
 /**
@@ -435,17 +475,46 @@ export function parseRoute(pathname: string): Route {
         personId: rest[2],
       }
     }
+    // WEB-69 — the settings screen's own canonical address, one segment per
+    // tab, the same shape `course-editor` above already has for
+    // `CourseEditorTab`. A bare `/settings` (no tab segment) lands on the
+    // first tab, the same "no tab named" reading `course-editor`'s own bare
+    // form gives — `buildPath` always emits the explicit tab, so this
+    // shorter form is only ever something a caller typed or bookmarked, not
+    // something this app itself constructs.
+    if (
+      rest.length === 2 &&
+      rest[0] === 'settings' &&
+      rest[1] &&
+      isOrganizationSettingsTab(rest[1])
+    ) {
+      return { kind: 'organization-settings', organizationId, tab: rest[1] }
+    }
+    if (rest.length === 1 && rest[0] === 'settings') {
+      return {
+        kind: 'organization-settings',
+        organizationId,
+        tab: ORGANIZATION_SETTINGS_TABS[0],
+      }
+    }
+    // WEB-69 — the four addresses this screen replaces, kept parsing to the
+    // tab each one named: an existing bookmark or link into
+    // `/o/:id/discord|team|usage|jobs` still opens the right tab, even
+    // though `buildPath` no longer builds any of the four itself.
+    // `legacyOrganizationSettingsRedirect`, below, is what corrects the
+    // address bar to the canonical form once one of these is actually
+    // visited, so the address of record does not linger on the retired one.
     if (rest.length === 1 && rest[0] === 'discord') {
-      return { kind: 'discord', organizationId }
+      return { kind: 'organization-settings', organizationId, tab: 'discord' }
     }
     if (rest.length === 1 && rest[0] === 'team') {
-      return { kind: 'team', organizationId }
+      return { kind: 'organization-settings', organizationId, tab: 'team' }
     }
     if (rest.length === 1 && rest[0] === 'usage') {
-      return { kind: 'usage', organizationId }
+      return { kind: 'organization-settings', organizationId, tab: 'usage' }
     }
     if (rest.length === 1 && rest[0] === 'jobs') {
-      return { kind: 'jobs', organizationId }
+      return { kind: 'organization-settings', organizationId, tab: 'jobs' }
     }
     // WEB-47 — the MCP tab's own landing address.
     if (rest.length === 1 && rest[0] === 'mcp') {
@@ -540,14 +609,12 @@ export function buildPath(route: Route): string {
           ? `/o/${route.organizationId}/transcripts/${route.courseId}`
           : `/o/${route.organizationId}/transcripts/${route.courseId}/${route.personId}`
         : `/o/${route.organizationId}/transcripts`
-    case 'discord':
-      return `/o/${route.organizationId}/discord`
-    case 'team':
-      return `/o/${route.organizationId}/team`
-    case 'usage':
-      return `/o/${route.organizationId}/usage`
-    case 'jobs':
-      return `/o/${route.organizationId}/jobs`
+    case 'organization-settings':
+      // WEB-69 — always the explicit tab segment, the same `course-editor`
+      // discipline just above: `route.tab` is never absent, so there is no
+      // "default" case here falling back to the shorter form `parseRoute`
+      // also accepts.
+      return `/o/${route.organizationId}/settings/${route.tab}`
     case 'mcp':
       return `/o/${route.organizationId}/mcp`
     // Never actually navigated to on purpose (this file's own module
@@ -567,10 +634,7 @@ export function isShellRoute(route: Route): route is ShellRoute {
     case 'course-editor':
     case 'chat':
     case 'transcripts':
-    case 'discord':
-    case 'team':
-    case 'usage':
-    case 'jobs':
+    case 'organization-settings':
     case 'mcp':
     case 'account':
       return true
@@ -635,15 +699,58 @@ export function isSameCourseEditorScreen(a: Route, b: Route): boolean {
   )
 }
 
+/**
+ * WEB-69 — the same "only the tab moved, nothing on screen actually
+ * unmounted" recognition `isSameCourseEditorScreen` above already gives the
+ * course editor, for `pages/OrganizationSettings.tsx`'s own tabs: every
+ * visited tab there stays mounted too (that file's own module comment), so
+ * a Back/Forward that only moves between them is not a "leave" a navigation
+ * guard should ask about either.
+ */
+export function isSameOrganizationSettingsScreen(a: Route, b: Route): boolean {
+  return (
+    a.kind === 'organization-settings' &&
+    b.kind === 'organization-settings' &&
+    a.organizationId === b.organizationId
+  )
+}
+
+/**
+ * WEB-69 — `/o/:id/discord|team|usage|jobs` still parse (above), but this
+ * app no longer builds any of the four, and the address bar should not
+ * linger on a retired one once actually visited: `routing/useRoute.ts` calls
+ * this on every mount and `popstate`, and replaces the address with what it
+ * returns whenever it is not `undefined`. Narrow on purpose — a `RegExp`
+ * naming exactly these four legacy segments, rather than "the pathname does
+ * not equal `buildPath(parseRoute(pathname))`" for every route — that
+ * broader check would also rewrite an address `parseRoute` sends to
+ * `'not-found'`, which this app deliberately leaves in the address bar
+ * unchanged (this file's own module comment on why `'not-found'` is never
+ * actually navigated to on purpose).
+ */
+// A trailing slash (`/o/x/team/`) still names the legacy address — `rest`
+// (`parseRoute`'s own path split, above) already ignores a trailing empty
+// segment, so this regex would otherwise miss exactly the address it
+// parses, and never correct the address bar for it.
+const LEGACY_ORGANIZATION_SETTINGS_PATH =
+  /^\/o\/[^/]+\/(discord|team|usage|jobs)\/?$/
+
+export function legacyOrganizationSettingsRedirect(
+  pathname: string
+): string | undefined {
+  if (!LEGACY_ORGANIZATION_SETTINGS_PATH.test(pathname)) return undefined
+  return buildPath(parseRoute(pathname))
+}
+
 /** The drawer tab a `ShellRoute` belongs under (`pages/Shell.tsx`'s own `navGroups`) — every `ProjectsRoute` variant collapses to `'projects'`, matching `pages/ProjectsPanel.tsx`'s own single entry in that drawer. */
 export type Tab =
-  | 'discord'
   | 'projects'
   | 'chat'
   | 'transcripts'
-  | 'usage'
-  | 'team'
-  | 'jobs'
+  // WEB-69 — one tab in place of the four (`OrganizationRoute`'s own module
+  // comment on why); the drawer's own "Organization settings" entry is
+  // current on any of `ORGANIZATION_SETTINGS_TABS`, not only one of them.
+  | 'organization-settings'
   | 'mcp'
   | 'account'
 
@@ -653,15 +760,15 @@ export function tabForRoute(route: ShellRoute): Tab {
 }
 
 /**
- * The inverse of `tabForRoute` for the four tabs that are exactly one
- * address each — every `ProjectsRoute` variant besides plain `'projects'`
- * carries an id nothing outside `pages/ProjectsPanel.tsx` itself has a
- * reason to name, so this only ever builds the tab's own landing address.
- * `pages/Shell.tsx` uses this everywhere a click or an organization switch
- * needs to land on "this tab, this organization" with no further id in
- * mind — a nav item, the home control, switching organizations away from a
- * screen with no counterpart in the new one (`pages/Shell.tsx`'s own module
- * comment on that rule).
+ * The inverse of `tabForRoute` for the tabs that are exactly one address
+ * each — every `ProjectsRoute` variant besides plain `'projects'` carries an
+ * id nothing outside `pages/ProjectsPanel.tsx` itself has a reason to name,
+ * so this only ever builds the tab's own landing address. `pages/Shell.tsx`
+ * uses this everywhere a click or an organization switch needs to land on
+ * "this tab, this organization" with no further id in mind — a nav item,
+ * the home control, switching organizations away from a screen with no
+ * counterpart in the new one (`pages/Shell.tsx`'s own module comment on that
+ * rule).
  */
 export function routeForTab(tab: Tab, organizationId: string): ShellRoute {
   if (tab === 'account') return { kind: 'account' }
@@ -672,5 +779,16 @@ export function routeForTab(tab: Tab, organizationId: string): ShellRoute {
   // type it can be for every `Tab` — this is always the bare landing
   // address, never one naming a course.
   if (tab === 'transcripts') return { kind: 'transcripts', organizationId }
+  // WEB-69 — switching to the settings screen with no tab already in mind
+  // (an organization switch made while sitting on it — `landingForOrganizationSwitch`,
+  // `components/SignedInChrome.tsx`) lands on the first tab, the same
+  // "no tab named" default `parseRoute`'s own bare `/settings` gives.
+  if (tab === 'organization-settings') {
+    return {
+      kind: 'organization-settings',
+      organizationId,
+      tab: ORGANIZATION_SETTINGS_TABS[0],
+    }
+  }
   return { kind: tab, organizationId }
 }

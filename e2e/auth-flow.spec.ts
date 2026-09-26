@@ -12,7 +12,10 @@
 
 import { expect, test } from '@playwright/test'
 
-import { navigateTo, signOut } from './support/navigate.js'
+import {
+  navigateToOrganizationSettingsTab,
+  signOut,
+} from './support/navigate.js'
 import { completeSignIn } from './support/sign-in.js'
 
 test('sign in by emailed link, land in an organization, sign out, and stay signed out', async ({
@@ -48,9 +51,9 @@ test('sign in by emailed link, land in an organization, sign out, and stay signe
   // WEB-7 rework — `pages/Shell.tsx`'s own module comment) — this opens it
   // explicitly, the way an instructor reaching for the install button would.
   // WEB-32: navigating there is a real address change too.
-  await navigateTo(page, 'Discord')
+  await navigateToOrganizationSettingsTab(page, 'Discord')
   await expect(page.getByTestId('install-button')).toBeVisible()
-  await expect(page).toHaveURL(/\/o\/[^/]+\/discord$/)
+  await expect(page).toHaveURL(/\/o\/[^/]+\/settings\/discord$/)
 
   // 4. Sign out, and confirm the session actually ended server-side: a
   //    fresh navigation must land back on the sign-in screen, not merely

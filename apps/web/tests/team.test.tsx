@@ -487,6 +487,61 @@ describe('Team — per-tab dirty tracking (WEB-69)', () => {
     expect(screen.getByLabelText('Email')).toHaveValue('')
   })
 
+  // Rework round 2, must-fix 3: a failed member-list refresh swaps in the
+  // `ErrorMessage` branch (below `loadError`), which unmounts the nested
+  // `MembershipInvitations` outright. Before the fix, that form's own
+  // `onDirtyChange` effect never ran again to say "not dirty" — it only
+  // ever fires on a change to its own `isDirty`, never on unmount — so
+  // `Team.tsx`'s own `invitationsDirty` flag was stuck `true` for the rest
+  // of the session, and a leave-guard kept asking about an edit nobody
+  // could reach or discard any more.
+  it('clears the invitations dirty flag once a failed refresh unmounts that form', async () => {
+    listMemberships
+      .mockResolvedValueOnce([entry()])
+      .mockRejectedValueOnce(new ApiError(500, { error: 'internal_error' }))
+    grantMembership.mockResolvedValue({
+      organizationId: 'org-1',
+      accountId: 'a1',
+      role: 'instructor',
+      grantedByAccountId: 'a0',
+      grantedAt: Date.now(),
+      createdAt: Date.now(),
+    })
+    const onDirtyChange = vi.fn()
+
+    renderWithModal(
+      <Team
+        organizationId="org-1"
+        isOwner={true}
+        viewerAccountId="viewer-1"
+        onDirtyChange={onDirtyChange}
+      />
+    )
+    await screen.findByText(/Owner Ora — Owner/)
+
+    // Dirty the nested invitation form, not the grant form.
+    fireEvent.change(screen.getByLabelText('Invite email'), {
+      target: { value: 'colleague@example.edu' },
+    })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+
+    // A successful grant triggers this file's own `refresh()`, which
+    // rejects this time — the same early return `team.test.tsx`'s own "a
+    // failed load renders the same ErrorMessage" case exercises, reached
+    // here from a refresh rather than the initial mount.
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'ta@example.edu' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Grant role' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Grant ta@example.edu the Instructor role?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Grant role' }))
+
+    await screen.findByRole('alert')
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false))
+  })
+
   it("registered actions' discard resets both the grant form and the nested invitation form", async () => {
     listMemberships.mockResolvedValue([])
     let actions:

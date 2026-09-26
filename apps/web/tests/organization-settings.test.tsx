@@ -226,6 +226,36 @@ describe('OrganizationSettings — General tab (WEB-69 rework)', () => {
       screen.getByRole('button', { name: 'Delete organization' })
     ).toBeInTheDocument()
   })
+
+  // Rework round 2, must-fix 5: the tab-switch prompt's own "Save changes"
+  // calls this form's `handleSave` directly, bypassing the Save button's own
+  // `disabled` state for a blank name — before the fix, that path refused
+  // silently, with nothing telling anyone why the switch never happened.
+  it('an emptied name refused through the tab-switch prompt shows a validation error, not a silent refusal', async () => {
+    renderSettings()
+    fireEvent.change(screen.getByLabelText('Organization name'), {
+      target: { value: '   ' },
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Team' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Save your changes?',
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Save changes' })
+    )
+    await waitFor(() => expect(dialog).not.toBeVisible())
+
+    expect(renameOrganization).not.toHaveBeenCalled()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Enter an organization name.'
+    )
+    // The refusal keeps the switch from happening — still on General.
+    expect(screen.getByRole('tab', { name: /^General/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
 })
 
 describe('OrganizationSettings — per-tab unsaved changes (WEB-38, WEB-69)', () => {
@@ -413,5 +443,151 @@ describe('OrganizationSettings — per-tab unsaved changes (WEB-38, WEB-69)', ()
     expect(dialog).toBeVisible()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(dialog).not.toBeVisible())
+  })
+
+  /** The same `Harness` shape the case above already uses — lifted out since three cases below all need it, each reaching a *different* tab before leaving. */
+  function LeaveHarness({ tab }: { tab: OrganizationSettingsTab }) {
+    const { guardedNavigate } = useNavigationGuard()
+    return (
+      <div>
+        <button onClick={() => guardedNavigate(() => {})}>
+          Leave via drawer
+        </button>
+        <OrganizationSettings
+          organizationId="org-1"
+          tab={tab}
+          onNavigateTab={() => {}}
+          isOwner={true}
+          viewerAccountId="viewer-1"
+          organizationName="Org One"
+          navigate={vi.fn()}
+          refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        />
+      </div>
+    )
+  }
+
+  const USAGE_REPORT = {
+    organizationId: 'org-1',
+    spendingCapMicros: null,
+    totalCostMicros: 0,
+    totalEstimatedCostMicros: 0,
+    courses: [],
+    studentsNearLimit: [],
+    bySurface: [],
+  }
+
+  /**
+   * Rework round 2, must-fix 1: the leave-guard used to act only on
+   * `activeTabRef.current` — a hidden tab left dirty by a Back/Forward move
+   * between settings tabs (which `routing/route.ts#isSameOrganizationSettingsScreen`
+   * lets through without asking) was silently dropped the moment someone
+   * left from a *different*, clean tab. `rerender`ing with a new `tab` prop,
+   * below, is exactly that move: it changes `activeTab` the same way a
+   * `popstate` does, without ever going through this screen's own
+   * click-driven `goToTabGuarded`.
+   */
+  it('Save at leave saves every dirty tab, not just the one on screen, and never re-sends a clean one', async () => {
+    listMemberships.mockResolvedValue([])
+    fetchOrganizationUsage.mockResolvedValue(USAGE_REPORT)
+    renameOrganization.mockResolvedValue({ id: 'org-1', name: 'Changed Name' })
+
+    const { render } = await import('@testing-library/react')
+    const { rerender } = render(withModal(<LeaveHarness tab="general" />))
+
+    fireEvent.change(screen.getByLabelText('Organization name'), {
+      target: { value: 'Changed Name' },
+    })
+
+    rerender(withModal(<LeaveHarness tab="usage" />))
+    await screen.findByRole('heading', { name: 'Usage', level: 1 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave via drawer' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Save your changes?',
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Save changes' })
+    )
+    await waitFor(() => expect(dialog).not.toBeVisible())
+
+    await waitFor(() =>
+      expect(renameOrganization).toHaveBeenCalledWith('org-1', 'Changed Name')
+    )
+    // Usage itself was never dirty — its own Save must never run, which
+    // would otherwise silently re-send the unchanged cap.
+    expect(setSpendingCap).not.toHaveBeenCalled()
+  })
+
+  it('Discard at leave discards every dirty tab, not just the one on screen', async () => {
+    listMemberships.mockResolvedValue([])
+    listMembershipInvitations.mockResolvedValue([])
+    fetchOrganizationUsage.mockResolvedValue(USAGE_REPORT)
+
+    const { render } = await import('@testing-library/react')
+    const { rerender } = render(withModal(<LeaveHarness tab="general" />))
+
+    fireEvent.change(screen.getByLabelText('Organization name'), {
+      target: { value: 'Changed Name' },
+    })
+
+    rerender(withModal(<LeaveHarness tab="team" />))
+    await screen.findByRole('heading', { name: 'Team', level: 1 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave via drawer' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Save your changes?',
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Discard changes' })
+    )
+    await waitFor(() => expect(dialog).not.toBeVisible())
+    expect(renameOrganization).not.toHaveBeenCalled()
+
+    // The same "only a popstate-style move sees it" path proves the
+    // discard actually reached General, not only Team.
+    rerender(withModal(<LeaveHarness tab="general" />))
+    expect(screen.getByLabelText('Organization name')).toHaveValue('Org One')
+  })
+
+  it('Save at leave still succeeds when the tab on screen has no save action of its own (Jobs)', async () => {
+    listMemberships.mockResolvedValue([])
+    listJobs.mockResolvedValue([])
+    renameOrganization.mockResolvedValue({ id: 'org-1', name: 'Changed Name' })
+
+    const { render } = await import('@testing-library/react')
+    const { rerender } = render(withModal(<LeaveHarness tab="general" />))
+
+    fireEvent.change(screen.getByLabelText('Organization name'), {
+      target: { value: 'Changed Name' },
+    })
+
+    rerender(withModal(<LeaveHarness tab="jobs" />))
+    await screen.findByRole('heading', { name: 'Jobs', level: 1 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave via drawer' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Save your changes?',
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Save changes' })
+    )
+    await waitFor(() => expect(dialog).not.toBeVisible())
+    await waitFor(() =>
+      expect(renameOrganization).toHaveBeenCalledWith('org-1', 'Changed Name')
+    )
+  })
+
+  // Rework round 2, must-fix 2: every tab's own `role="tabpanel"` wrapper
+  // now renders — hidden when inactive — regardless of `visitedTabs`, the
+  // same rule `pages/CourseEditor.tsx:2106-2123` already holds itself to,
+  // so a `role="tab"`'s own `aria-controls` always resolves.
+  it("every tab's aria-controls resolves to an element in the DOM on first load", () => {
+    renderSettings()
+    for (const tab of screen.getAllByRole('tab')) {
+      const controlsId = tab.getAttribute('aria-controls')
+      expect(controlsId).toBeTruthy()
+      expect(document.getElementById(controlsId!)).not.toBeNull()
+    }
   })
 })

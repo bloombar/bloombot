@@ -397,6 +397,12 @@ describe('legacyOrganizationSettingsRedirect (WEB-69)', () => {
     }
   )
 
+  it('redirects a legacy address with a trailing slash too', () => {
+    expect(legacyOrganizationSettingsRedirect('/o/org-1/team/')).toBe(
+      '/o/org-1/settings/team'
+    )
+  })
+
   it('is undefined for the canonical address itself', () => {
     expect(
       legacyOrganizationSettingsRedirect('/o/org-1/settings/discord')

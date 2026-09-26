@@ -54,7 +54,7 @@
  * action that does not exist.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError, setSpendingCap } from '../api/client.js'
 import type { OrganizationUsageReport } from '../api/types.js'
@@ -68,12 +68,24 @@ import {
   studentLabel,
 } from '../components/usageFormat.js'
 import { useOrganizationUsageReport } from '../hooks/useOrganizationUsage.js'
+import type { TabDirtyActions } from '../hooks/tabDirtyActions.js'
 import { InfoIcon, WarningIcon } from '../icons.js'
 
 export interface UsageScreenProps {
   organizationId: string
   /** Whether the caller's own membership in this organization is `'owner'` — see this file's own module comment for why the form is withheld rather than merely disabled for anyone else. */
   isOwner: boolean
+  /**
+   * WEB-69 — called on every change to whether this screen's own cap input
+   * currently disagrees with the last-saved cap, so
+   * `pages/OrganizationSettings.tsx` can fold it into that tab's own dirty
+   * flag (the same `onDirtyChange` shape `components/CourseInstructions.tsx`
+   * already exposes `pages/CourseEditor.tsx`, one level up). Optional,
+   * defaulting to a no-op — most of this file's own tests do not care.
+   */
+  onDirtyChange?: (dirty: boolean) => void
+  /** WEB-69 — this tab's own save/discard handle, the same `onRegisterActions` shape `components/CourseInstructions.tsx` already exposes; called with `null` on unmount. Optional — most of this file's own tests do not care. */
+  onRegisterActions?: (actions: TabDirtyActions | null) => void
 }
 
 /**
@@ -102,7 +114,12 @@ function capInputFromReport(report: OrganizationUsageReport): string {
     : (report.spendingCapMicros / 1_000_000).toFixed(2)
 }
 
-export function Usage({ organizationId, isOwner }: UsageScreenProps) {
+export function Usage({
+  organizationId,
+  isOwner,
+  onDirtyChange = () => {},
+  onRegisterActions,
+}: UsageScreenProps) {
   // WEB-63 — the fetch itself is shared with the course tab's own
   // `CourseUsage` (this file's own module comment); `refresh` is re-run
   // below after a cap save/clear, the same as before this extraction.
@@ -114,6 +131,11 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
   const [capInput, setCapInput] = useState('')
   const [capParseError, setCapParseError] = useState(false)
   const [saving, setSaving] = useState(false)
+  // WEB-69 — read synchronously by `isSaving`, below (`TabDirtyActions`'s
+  // own doc comment on why a ref, not the `saving` state, is what a tab
+  // prompt that may fire in the same tick as this section's own Save button
+  // actually needs).
+  const savingRef = useRef(false)
   const [saveError, setSaveError] = useState<ApiError | undefined>(undefined)
   // A live region for the one thing a screen reader cannot otherwise learn
   // from this screen's own re-render: the cap badge above changing state
@@ -133,16 +155,27 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
     if (report) setCapInput(capInputFromReport(report))
   }, [report])
 
-  const handleSave = async () => {
+  // WEB-69: returns whether the cap actually saved, so a caller that saves
+  // on the way somewhere else (`pages/OrganizationSettings.tsx`'s own tab
+  // prompt, via `onRegisterActions`) knows whether it is safe to move on —
+  // the same `Promise<boolean>` shape `pages/CourseEditor.tsx#handleSave`
+  // already returns for the identical reason. A `useCallback`, like
+  // `components/CourseInstructions.tsx#handleSave` — it is handed out
+  // through `onRegisterActions`, below, so its own identity has to change
+  // whenever anything it closes over does, which is what keeps the
+  // registered action fresh rather than a stale closure over an earlier
+  // `capInput`.
+  const handleSave = useCallback(async (): Promise<boolean> => {
     const parsed = parseCapAmount(capInput)
     if (!parsed.ok) {
       setCapParseError(true)
-      return
+      return false
     }
     setCapParseError(false)
     setSaveError(undefined)
     setStatusMessage(undefined)
     setSaving(true)
+    savingRef.current = true
     try {
       await setSpendingCap(organizationId, parsed.value)
       setStatusMessage(
@@ -151,19 +184,23 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
           : `Spending cap set to ${formatMicros(Math.round(parsed.value * 1_000_000))}.`
       )
       await refreshReport()
+      return true
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
       else throw caught
+      return false
     } finally {
       setSaving(false)
+      savingRef.current = false
     }
-  }
+  }, [capInput, organizationId, refreshReport])
 
   const handleClear = async () => {
     setCapParseError(false)
     setSaveError(undefined)
     setStatusMessage(undefined)
     setSaving(true)
+    savingRef.current = true
     try {
       await setSpendingCap(organizationId, null)
       setStatusMessage('Spending cap cleared.')
@@ -173,8 +210,41 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
       else throw caught
     } finally {
       setSaving(false)
+      savingRef.current = false
     }
   }
+
+  // WEB-69 — "dirty" for this tab: the cap input disagrees with the last
+  // report this screen actually saw, the same comparison
+  // `capInputFromReport` already makes to seed the field in the first
+  // place. `undefined` while nothing has loaded yet reads as "not dirty" —
+  // there is no saved cap yet to disagree with.
+  const isDirty =
+    report !== undefined && capInput !== capInputFromReport(report)
+
+  useEffect(() => {
+    onDirtyChange(isDirty)
+  }, [isDirty, onDirtyChange])
+
+  // WEB-69 — handed out through `onRegisterActions`, the same
+  // `useCallback`-per-render discipline `components/CourseInstructions.tsx#handleSave`
+  // already holds itself to: a new identity every render would re-run the
+  // registration effect below on every keystroke.
+  const discard = useCallback(() => {
+    if (report) setCapInput(capInputFromReport(report))
+    setCapParseError(false)
+    setSaveError(undefined)
+  }, [report])
+
+  useEffect(() => {
+    if (!onRegisterActions) return
+    onRegisterActions({
+      save: handleSave,
+      isSaving: () => savingRef.current,
+      discard,
+    })
+    return () => onRegisterActions(null)
+  }, [handleSave, discard, onRegisterActions])
 
   if (loadError) {
     return (

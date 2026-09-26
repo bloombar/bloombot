@@ -2303,7 +2303,13 @@ export function CourseEditor({
                     // this form.
                     onConnectDiscord={async () => {
                       if (await confirmDiscard()) {
-                        navigate({ kind: 'discord', organizationId })
+                        // WEB-69 — the organization's own Discord tab now
+                        // lives on the settings screen, not its own route.
+                        navigate({
+                          kind: 'organization-settings',
+                          organizationId,
+                          tab: 'discord',
+                        })
                       }
                     }}
                   />

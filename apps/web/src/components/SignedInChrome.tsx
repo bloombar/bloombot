@@ -56,7 +56,12 @@ import type { ReactNode } from 'react'
 import { signOut } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
 import { ProfileIcon, SignOutIcon } from '../icons.js'
-import { routeForTab, type Route, type Tab } from '../routing/route.js'
+import {
+  routeForTab,
+  type OrganizationSettingsTab,
+  type Route,
+  type Tab,
+} from '../routing/route.js'
 import { AppShell, type AppShellHandle } from './AppShell.js'
 import { Button } from './Button.js'
 import { OrganizationSwitcher } from './OrganizationSwitcher.js'
@@ -67,8 +72,10 @@ export interface SignedInChromeProps {
   activeOrganizationId: string | undefined
   /** Whether `account` is a member of `activeOrganizationId` — ignored when that is `undefined`. Decides which nav items render, the identical `isMember` split `pages/Shell.tsx`'s own module comment already describes (LINK-10). */
   isMember: boolean
-  /** Which of `pages/Shell.tsx`'s own eight tabs this render corresponds to, if any — highlighted `aria-current` in the drawer. */
+  /** Which of `pages/Shell.tsx`'s own five tabs this render corresponds to, if any — highlighted `aria-current` in the drawer. */
   activeTab?: Tab
+  /** WEB-69 — which of `ORGANIZATION_SETTINGS_TABS` is showing, when `activeTab` is `'organization-settings'`; `undefined` otherwise. Read only by `landingForOrganizationSwitch`, below, so switching organizations while on the settings screen keeps the same tab rather than always landing on the first one. */
+  activeOrganizationSettingsTab?: OrganizationSettingsTab
   navigate: (route: Route, options?: { replace?: boolean }) => void
   /** Wraps every action this chrome starts, the same shape `hooks/navigation-guard.tsx`'s own `guardedNavigate` already has — defaults to running the action immediately, for a standalone page with no dirty form anywhere below to protect. */
   runAction?: (action: () => void) => void
@@ -93,8 +100,20 @@ export interface SignedInChromeProps {
 function landingForOrganizationSwitch(
   activeTab: Tab | undefined,
   organizationId: string,
-  account: AccountSummary
+  account: AccountSummary,
+  // WEB-69 — `SignedInChromeProps`'s own doc comment on why this is needed
+  // at all: `Tab` collapsed the four old organization-settings routes into
+  // one value, so `routeForTab` alone can no longer say *which* tab was
+  // showing — only this parameter can.
+  activeOrganizationSettingsTab?: OrganizationSettingsTab
 ): Route {
+  if (activeTab === 'organization-settings' && activeOrganizationSettingsTab) {
+    return {
+      kind: 'organization-settings',
+      organizationId,
+      tab: activeOrganizationSettingsTab,
+    }
+  }
   if (activeTab !== undefined && activeTab !== 'account') {
     return routeForTab(activeTab, organizationId)
   }
@@ -109,6 +128,7 @@ export function SignedInChrome({
   activeOrganizationId,
   isMember,
   activeTab,
+  activeOrganizationSettingsTab,
   navigate,
   runAction = (action) => action(),
   onSignedOut,
@@ -163,33 +183,20 @@ export function SignedInChrome({
         ]
       : [chatNavItem, mcpNavItem],
   }
+  // WEB-69 — one entry, replacing the four (Discord/Team/Usage/Jobs) this
+  // group used to carry — `navigateToTab('organization-settings')` lands on
+  // the first tab (`routeForTab`'s own module comment); current on *any*
+  // settings tab, not only the first, the same "marked current on any tab"
+  // rule the brief for this slice states directly.
   const organizationGroup = {
     key: 'organization',
     label: 'Organization',
     items: [
       {
-        key: 'discord',
-        label: 'Discord',
-        onClick: () => navigateToTab('discord'),
-        active: activeTab === 'discord',
-      },
-      {
-        key: 'team',
-        label: 'Team',
-        onClick: () => navigateToTab('team'),
-        active: activeTab === 'team',
-      },
-      {
-        key: 'usage',
-        label: 'Usage',
-        onClick: () => navigateToTab('usage'),
-        active: activeTab === 'usage',
-      },
-      {
-        key: 'jobs',
-        label: 'Jobs',
-        onClick: () => navigateToTab('jobs'),
-        active: activeTab === 'jobs',
+        key: 'organization-settings',
+        label: 'Organization settings',
+        onClick: () => navigateToTab('organization-settings'),
+        active: activeTab === 'organization-settings',
       },
     ],
   }
@@ -278,7 +285,8 @@ export function SignedInChrome({
                   landingForOrganizationSwitch(
                     activeTab,
                     organizationId,
-                    account
+                    account,
+                    activeOrganizationSettingsTab
                   )
                 )
               )
@@ -311,7 +319,8 @@ export function SignedInChrome({
                   landingForOrganizationSwitch(
                     activeTab,
                     organizationId,
-                    account
+                    account,
+                    activeOrganizationSettingsTab
                   )
                 )
                 appShellRef.current?.closeDrawer()

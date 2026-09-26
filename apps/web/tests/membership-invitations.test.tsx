@@ -263,3 +263,78 @@ describe('MembershipInvitations (ENRL-10)', () => {
     )
   })
 })
+
+// WEB-69: `components/Team.tsx`'s own per-tab dirty tracking folds this
+// form's `onDirtyChange`/`onRegisterActions` into its one flag — this file
+// proves the pair this component itself exposes, the same shape
+// `pages/Usage.tsx`'s own tests already prove for that screen.
+describe('MembershipInvitations — per-tab dirty tracking (WEB-69)', () => {
+  it('reports dirty once the invite email is non-blank, and clean once it is cleared', async () => {
+    listMembershipInvitations.mockResolvedValue([])
+    const onDirtyChange = vi.fn()
+
+    renderWithModal(
+      <MembershipInvitations
+        organizationId="org-1"
+        onDirtyChange={onDirtyChange}
+      />
+    )
+    await screen.findByText('No invitations issued yet.')
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+
+    fireEvent.change(screen.getByLabelText('Invite email'), {
+      target: { value: 'colleague@example.edu' },
+    })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+
+    fireEvent.change(screen.getByLabelText('Invite email'), {
+      target: { value: '' },
+    })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it('registered actions save the pending invite (its own confirmation included) and discard clears the field', async () => {
+    listMembershipInvitations.mockResolvedValue([])
+    createMembershipInvitation.mockResolvedValue({
+      id: 'invitation-1',
+      secret: 'secret-abc',
+    })
+    let actions:
+      import('../src/hooks/tabDirtyActions.js').TabDirtyActions | null = null
+
+    renderWithModal(
+      <MembershipInvitations
+        organizationId="org-1"
+        onRegisterActions={(registered) => {
+          actions = registered
+        }}
+      />
+    )
+    await screen.findByText('No invitations issued yet.')
+
+    fireEvent.change(screen.getByLabelText('Invite email'), {
+      target: { value: 'colleague@example.edu' },
+    })
+    expect(actions).not.toBeNull()
+
+    const savePromise = actions!.save()
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Send invitation' })
+    )
+    await expect(savePromise).resolves.toBe(true)
+    expect(createMembershipInvitation).toHaveBeenCalledWith(
+      'org-1',
+      'colleague@example.edu',
+      'instructor'
+    )
+
+    fireEvent.change(screen.getByLabelText('Invite email'), {
+      target: { value: 'someone-else@example.edu' },
+    })
+    actions!.discard()
+    await waitFor(() =>
+      expect(screen.getByLabelText('Invite email')).toHaveValue('')
+    )
+  })
+})

@@ -345,3 +345,92 @@ describe('Usage (COST-3/COST-4)', () => {
     expect(screen.queryByText('Usage by course')).not.toBeInTheDocument()
   })
 })
+
+// WEB-69: `pages/OrganizationSettings.tsx`'s own per-tab dirty tracking
+// reads this screen's own `onDirtyChange`/`onRegisterActions` — every case
+// below is what this file's own module comment (`Usage.tsx`) now promises
+// alongside its earlier ones.
+describe('Usage — per-tab dirty tracking (WEB-69)', () => {
+  it('reports dirty once the cap input disagrees with the last-saved cap, and clean once it agrees again', async () => {
+    fetchOrganizationUsage.mockResolvedValue(report())
+    const onDirtyChange = vi.fn()
+
+    renderWithModal(
+      <Usage
+        organizationId="org-1"
+        isOwner={true}
+        onDirtyChange={onDirtyChange}
+      />
+    )
+    await screen.findByText(/No spending cap set/)
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false))
+
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '5' },
+    })
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true))
+
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '' },
+    })
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false))
+  })
+
+  it('registered actions save the pending cap, report whether it landed, and discard resets the field', async () => {
+    fetchOrganizationUsage.mockResolvedValue(report())
+    setSpendingCap.mockResolvedValue({ id: 'org-1' })
+    let actions:
+      import('../src/hooks/tabDirtyActions.js').TabDirtyActions | null = null
+
+    renderWithModal(
+      <Usage
+        organizationId="org-1"
+        isOwner={true}
+        onRegisterActions={(registered) => {
+          actions = registered
+        }}
+      />
+    )
+    await screen.findByText(/No spending cap set/)
+
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '5' },
+    })
+
+    expect(actions).not.toBeNull()
+    expect(actions!.isSaving()).toBe(false)
+    await expect(actions!.save()).resolves.toBe(true)
+    expect(setSpendingCap).toHaveBeenCalledWith('org-1', 5)
+
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '9' },
+    })
+    // Discard puts the field back to the last report this screen actually
+    // saw — the static mock above never changes what it resolves to, so
+    // that is still "no cap," not the `5` just saved.
+    actions!.discard()
+    await waitFor(() =>
+      expect(screen.getByLabelText('Spending cap ($)')).toHaveValue('')
+    )
+  })
+
+  it('unregisters its actions on unmount', async () => {
+    fetchOrganizationUsage.mockResolvedValue(report())
+    const onRegisterActions = vi.fn()
+
+    const { unmount } = renderWithModal(
+      <Usage
+        organizationId="org-1"
+        isOwner={true}
+        onRegisterActions={onRegisterActions}
+      />
+    )
+    await screen.findByText(/No spending cap set/)
+    expect(onRegisterActions).toHaveBeenLastCalledWith(
+      expect.objectContaining({ save: expect.any(Function) })
+    )
+
+    unmount()
+    expect(onRegisterActions).toHaveBeenLastCalledWith(null)
+  })
+})

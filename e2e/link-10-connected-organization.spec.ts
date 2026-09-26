@@ -206,7 +206,9 @@ test('a student connected into an institution the account does not administer re
 
   // LINK-10's own withholding, proven in a real browser: nothing this
   // account's every click against would refuse is offered.
-  await expect(page.getByRole('button', { name: 'Discord' })).not.toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Organization settings' })
+  ).not.toBeVisible()
   await expect(page.getByRole('button', { name: 'Projects' })).not.toBeVisible()
   await expect(
     page.getByRole('button', { name: 'Transcripts' })

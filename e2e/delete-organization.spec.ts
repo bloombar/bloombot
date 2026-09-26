@@ -1,11 +1,16 @@
 /**
  * WEB-72/DATA-7, end to end: an owner deletes their own organization from
- * the Team panel's own Danger zone, confirmed by typing its name — and
- * lands somewhere real afterward, never back on the organization they just
- * deleted (the must-fix review finding this spec exists to catch: a fresh
- * sign-up's own personal organization is this account's only one, so
- * deleting it has to move the caller to `/account`, not loop them into
- * `/o/<deletedOrgId>/projects`, a screen every scoped read now 404s on).
+ * the bottom of the organization settings screen's own General tab
+ * (WEB-69 moved the Danger zone out of the Team panel — rework round 1
+ * gave it its own tab, and the user's own final decision put it at the
+ * bottom of General instead, alongside the organization's own name — this
+ * spec follows that move, unchanged otherwise), confirmed by typing its
+ * name — and lands somewhere real afterward, never back on the
+ * organization they just deleted (the must-fix review finding this spec
+ * exists to catch: a fresh sign-up's own personal organization is this
+ * account's only one, so deleting it has to move the caller to `/account`,
+ * not loop them into `/o/<deletedOrgId>/projects`, a screen every scoped
+ * read now 404s on).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -21,10 +26,10 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { navigateTo } from './support/navigate.js'
+import { navigateToOrganizationSettingsTab } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 
-test('an owner deletes their only organization from the Team panel, confirmed by typing its name, and lands on /account — never back on the deleted organization (WEB-72)', async ({
+test('an owner deletes their only organization from the bottom of the General tab, confirmed by typing its name, and lands on /account — never back on the deleted organization (WEB-72)', async ({
   page,
 }) => {
   const suffix = randomUUID().slice(0, 8)
@@ -58,9 +63,11 @@ test('an owner deletes their only organization from the Team panel, confirmed by
     closeDatabase(db)
   }
 
-  await navigateTo(page, 'Team')
-  await expect(page.getByTestId('team-panel')).toBeVisible()
-  await expect(page).toHaveURL(new RegExp(`/o/${organizationId}/team`))
+  await navigateToOrganizationSettingsTab(page, 'General')
+  await expect(page.getByTestId('danger-zone-panel')).toBeVisible()
+  await expect(page).toHaveURL(
+    new RegExp(`/o/${organizationId}/settings/general`)
+  )
 
   const dangerZone = page.getByRole('region', { name: 'Danger zone' })
   await dangerZone.scrollIntoViewIfNeeded()

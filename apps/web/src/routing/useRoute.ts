@@ -25,6 +25,8 @@ import {
 import {
   buildPath,
   isSameCourseEditorScreen,
+  isSameOrganizationSettingsScreen,
+  legacyOrganizationSettingsRedirect,
   parseRoute,
   type Route,
 } from './route.js'
@@ -35,16 +37,30 @@ export interface UseRouteResult {
 }
 
 export function useRoute(): UseRouteResult {
-  const [route, setRoute] = useState<Route>(() =>
-    parseRoute(window.location.pathname)
-  )
+  const [route, setRoute] = useState<Route>(() => {
+    const pathname = window.location.pathname
+    // WEB-69 — a legacy `/o/:id/discord|team|usage|jobs` address, visited
+    // directly (a bookmark, a typed URL, a fresh load), is corrected to the
+    // canonical `/o/:id/settings/:tab` form right away, with `replaceState`
+    // rather than a push — the same "the address the reader ends up on is
+    // the canonical one" rule WEB-35 already holds `pages/CourseEditor.tsx`
+    // to, applied here at the one place this app reads the very first
+    // address of a session.
+    const canonical = legacyOrganizationSettingsRedirect(pathname)
+    if (canonical !== undefined)
+      window.history.replaceState(null, '', canonical)
+    return parseRoute(pathname)
+  })
 
   // The address this hook believes it is on — read by the `popstate`
   // handler below, which has to be able to put the address *back* before
   // asking a dirty form whether the navigation may proceed. A ref rather
   // than state: nothing renders from it, and the handler must see the
   // current value rather than one closed over at registration time.
-  const currentPathRef = useRef(window.location.pathname)
+  const currentPathRef = useRef(
+    legacyOrganizationSettingsRedirect(window.location.pathname) ??
+      window.location.pathname
+  )
 
   // The browser's own back/forward buttons change `window.location`
   // without this app ever calling `navigate` — `popstate` is the one event
@@ -77,19 +93,35 @@ export function useRoute(): UseRouteResult {
   // a second time and ask again.
   useEffect(() => {
     const onPopState = () => {
-      const nextPath = window.location.pathname
-      const nextRoute = parseRoute(nextPath)
-      // WEB-35/WEB-16 — a pop that only moves a course editor's own tab
-      // never leaves the screen a dirty form's guard is protecting
-      // (`route.ts#isSameCourseEditorScreen`'s own comment on why): nothing
-      // unmounts for that move, so consulting the guard here produced a
-      // modal that lied about what either answer would do. Bypassed
-      // unconditionally for that case, even with a guard registered —
-      // `pages/CourseEditor.tsx` itself owns rendering the tab the new
+      const rawPath = window.location.pathname
+      // WEB-69 — the same correction the initial-mount state above already
+      // makes, for a Back/Forward that lands back on a legacy address.
+      const canonical = legacyOrganizationSettingsRedirect(rawPath)
+      const nextPath = canonical ?? rawPath
+      const nextRoute = parseRoute(rawPath)
+      if (canonical !== undefined) {
+        window.history.replaceState(null, '', canonical)
+      }
+      // WEB-35/WEB-69/WEB-16 — a pop that only moves a course editor's own
+      // tab, or an organization settings screen's own tab, never leaves the
+      // screen a dirty form's guard is protecting
+      // (`route.ts#isSameCourseEditorScreen`/`isSameOrganizationSettingsScreen`'s
+      // own comments on why): nothing unmounts for either move, so
+      // consulting the guard here produced a modal that lied about what
+      // either answer would do. Bypassed unconditionally for both cases,
+      // even with a guard registered — `pages/CourseEditor.tsx`/
+      // `pages/OrganizationSettings.tsx` each own rendering the tab the new
       // route names, same as any other prop change.
       if (
         !hasNavigationGuard() ||
-        isSameCourseEditorScreen(parseRoute(currentPathRef.current), nextRoute)
+        isSameCourseEditorScreen(
+          parseRoute(currentPathRef.current),
+          nextRoute
+        ) ||
+        isSameOrganizationSettingsScreen(
+          parseRoute(currentPathRef.current),
+          nextRoute
+        )
       ) {
         currentPathRef.current = nextPath
         setRoute(nextRoute)

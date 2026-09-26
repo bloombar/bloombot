@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildPath,
   isSameCourseEditorScreen,
+  isSameOrganizationSettingsScreen,
+  legacyOrganizationSettingsRedirect,
   parseRoute,
   type Route,
 } from '../src/routing/route.js'
@@ -99,10 +101,18 @@ const ROUTES: Route[] = [
     courseId: 'course-1',
     personId: 'person-1',
   },
-  { kind: 'discord', organizationId: 'org-1' },
-  { kind: 'team', organizationId: 'org-1' },
-  { kind: 'usage', organizationId: 'org-1' },
-  { kind: 'jobs', organizationId: 'org-1' },
+  // WEB-69 — one example per organization settings tab, the same "every
+  // named variant, not just whichever happened to be written down first"
+  // reasoning `course-editor`'s own five entries above already follow.
+  {
+    kind: 'organization-settings',
+    organizationId: 'org-1',
+    tab: 'general',
+  },
+  { kind: 'organization-settings', organizationId: 'org-1', tab: 'discord' },
+  { kind: 'organization-settings', organizationId: 'org-1', tab: 'team' },
+  { kind: 'organization-settings', organizationId: 'org-1', tab: 'usage' },
+  { kind: 'organization-settings', organizationId: 'org-1', tab: 'jobs' },
   // WEB-47 — the MCP tab's own landing address.
   { kind: 'mcp', organizationId: 'org-1' },
 ]
@@ -126,6 +136,7 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o/org-1/projects/proj-1/courses/new',
     '/o/org-1/chat',
     '/o/org-1/chat/course-1',
+    '/o/org-1/settings/discord',
     '/o/org-1/mcp',
     '/account',
     '/choose-organization',
@@ -178,6 +189,69 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
       })
     }
   )
+
+  // WEB-69 — a bare `/settings` (no tab segment) parses to the first tab,
+  // the same "no tab named" reading `course-editor`'s own bare form gives
+  // above.
+  it('a bare organization settings address with no tab segment parses to the first tab', () => {
+    expect(parseRoute('/o/org-1/settings')).toEqual({
+      kind: 'organization-settings',
+      organizationId: 'org-1',
+      tab: 'general',
+    })
+  })
+
+  it.each([
+    ['general', 'general'],
+    ['discord', 'discord'],
+    ['team', 'team'],
+    ['usage', 'usage'],
+    ['jobs', 'jobs'],
+  ] as const)(
+    'an organization settings address naming the %s tab parses to it',
+    (segment, tab) => {
+      expect(parseRoute(`/o/org-1/settings/${segment}`)).toEqual({
+        kind: 'organization-settings',
+        organizationId: 'org-1',
+        tab,
+      })
+    }
+  )
+
+  // WEB-69 — the four addresses this screen replaces still parse, each to
+  // the tab it named — a bookmark or a shared link keeps working even
+  // though `buildPath` no longer builds any of the four itself.
+  it.each([
+    ['discord', 'discord'],
+    ['team', 'team'],
+    ['usage', 'usage'],
+    ['jobs', 'jobs'],
+  ] as const)(
+    'the legacy /%s address still parses to that tab',
+    (segment, tab) => {
+      expect(parseRoute(`/o/org-1/${segment}`)).toEqual({
+        kind: 'organization-settings',
+        organizationId: 'org-1',
+        tab,
+      })
+    }
+  )
+
+  it('an unrecognised organization settings tab lands on not-found', () => {
+    expect(parseRoute('/o/org-1/settings/nonsense')).toEqual({
+      kind: 'not-found',
+    })
+  })
+
+  // Rework round 1 gave Danger zone its own tab; the user's own final
+  // decision removed it before it ever shipped to master (this branch's
+  // own history, not a real address anyone could have bookmarked) — this
+  // proves it is gone, not merely unlisted.
+  it('danger is not an organization settings tab', () => {
+    expect(parseRoute('/o/org-1/settings/danger')).toEqual({
+      kind: 'not-found',
+    })
+  })
 
   it.each([
     '/nonsense',
@@ -278,5 +352,65 @@ describe('isSameCourseEditorScreen (WEB-35, WEB-16)', () => {
         BASE
       )
     ).toBe(false)
+  })
+})
+
+describe('isSameOrganizationSettingsScreen (WEB-69)', () => {
+  const BASE: Route = {
+    kind: 'organization-settings',
+    organizationId: 'org-1',
+    tab: 'discord',
+  }
+
+  it('is true for the same organization, differing only in tab', () => {
+    expect(
+      isSameOrganizationSettingsScreen(BASE, { ...BASE, tab: 'team' })
+    ).toBe(true)
+  })
+
+  it('is false for a different organization', () => {
+    expect(
+      isSameOrganizationSettingsScreen(BASE, {
+        ...BASE,
+        organizationId: 'org-2',
+      })
+    ).toBe(false)
+  })
+
+  it('is false when either side is not an organization-settings route at all', () => {
+    expect(
+      isSameOrganizationSettingsScreen(BASE, {
+        kind: 'projects',
+        organizationId: 'org-1',
+      })
+    ).toBe(false)
+  })
+})
+
+describe('legacyOrganizationSettingsRedirect (WEB-69)', () => {
+  it.each(['discord', 'team', 'usage', 'jobs'] as const)(
+    'redirects the legacy /%s address to the canonical settings address',
+    (segment) => {
+      expect(legacyOrganizationSettingsRedirect(`/o/org-1/${segment}`)).toBe(
+        `/o/org-1/settings/${segment}`
+      )
+    }
+  )
+
+  it('redirects a legacy address with a trailing slash too', () => {
+    expect(legacyOrganizationSettingsRedirect('/o/org-1/team/')).toBe(
+      '/o/org-1/settings/team'
+    )
+  })
+
+  it('is undefined for the canonical address itself', () => {
+    expect(
+      legacyOrganizationSettingsRedirect('/o/org-1/settings/discord')
+    ).toBeUndefined()
+  })
+
+  it('is undefined for an address it does not recognise, including not-found', () => {
+    expect(legacyOrganizationSettingsRedirect('/o/org-1/nope')).toBeUndefined()
+    expect(legacyOrganizationSettingsRedirect('/nonsense')).toBeUndefined()
   })
 })

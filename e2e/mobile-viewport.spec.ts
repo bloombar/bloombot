@@ -40,7 +40,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
-import { navigateTo } from './support/navigate.js'
+import { navigateToOrganizationSettingsTab } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 import { withRetry } from './support/with-retry.js'
 
@@ -341,7 +341,7 @@ test('the panel is readable on a phone: no screen overflows sideways, and no fie
   // 4. A table-bearing screen: Team, which lists every member of this
   //    organization as a row with a name, a role and (where permitted) a
   //    control.
-  await navigateTo(page, 'Team')
+  await navigateToOrganizationSettingsTab(page, 'Team')
   await expect(page.getByTestId('team-panel')).toBeVisible()
   await assertNoHorizontalOverflow(page, 'the Team panel')
 })

@@ -58,7 +58,10 @@ import {
 
 import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { navigateTo } from './support/navigate.js'
+import {
+  navigateTo,
+  navigateToOrganizationSettingsTab,
+} from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 
 test("an instructor sees their course's spend and a student approaching its daily limit, from the Usage screen (COST-4)", async ({
@@ -119,7 +122,7 @@ test("an instructor sees their course's spend and a student approaching its dail
   //    (step 5, below), the same course title appears a second time in the
   //    near-limit list, and an unscoped locator would be ambiguous between
   //    the two.
-  await navigateTo(page, 'Usage')
+  await navigateToOrganizationSettingsTab(page, 'Usage')
   await expect(
     page.getByRole('heading', { name: 'Usage', exact: true })
   ).toBeVisible()
@@ -218,7 +221,7 @@ test("an instructor sees their course's spend and a student approaching its dail
   //    (this file's own module comment on why: a single fixture-sized
   //    reply prices under a cent, and `formatMicros` rounds to two decimal
   //    places, so `$0.00` here is not the bug this spec exists to catch).
-  await navigateTo(page, 'Usage')
+  await navigateToOrganizationSettingsTab(page, 'Usage')
   await expect(usageByCourse).toContainText(courseTitle)
   await expect(usageByCourse).toContainText('1 call')
   await expect(usageByCourse).not.toContainText('0 calls')

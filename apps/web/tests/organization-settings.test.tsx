@@ -256,6 +256,36 @@ describe('OrganizationSettings — General tab (WEB-69 rework)', () => {
       'true'
     )
   })
+
+  // WEB-69 final polish, must-fix 3: the blank-name error used to linger
+  // once shown, even after the person started fixing it — it was only ever
+  // cleared by a successful save or a discard.
+  it('typing into the name field clears a blank-name validation error', async () => {
+    renderSettings()
+    fireEvent.change(screen.getByLabelText('Organization name'), {
+      target: { value: '   ' },
+    })
+    // The Save button is `disabled` for a blank name (this file's own
+    // module comment) — the tab-switch prompt's own "Save changes" is what
+    // reaches `handleSave` directly, the same path the case above uses to
+    // produce the error in the first place.
+    fireEvent.click(screen.getByRole('tab', { name: 'Team' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Save your changes?',
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Save changes' })
+    )
+    await waitFor(() => expect(dialog).not.toBeVisible())
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Enter an organization name.'
+    )
+
+    fireEvent.change(screen.getByLabelText('Organization name'), {
+      target: { value: 'New Name' },
+    })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
 })
 
 describe('OrganizationSettings — per-tab unsaved changes (WEB-38, WEB-69)', () => {
@@ -445,12 +475,25 @@ describe('OrganizationSettings — per-tab unsaved changes (WEB-38, WEB-69)', ()
     await waitFor(() => expect(dialog).not.toBeVisible())
   })
 
-  /** The same `Harness` shape the case above already uses — lifted out since three cases below all need it, each reaching a *different* tab before leaving. */
-  function LeaveHarness({ tab }: { tab: OrganizationSettingsTab }) {
+  /**
+   * The same `Harness` shape the case above already uses — lifted out since
+   * three cases below all need it, each reaching a *different* tab before
+   * leaving. `onLeaveAction` defaults to a no-op — most cases only care
+   * that the dialog itself behaves correctly, not what `guardedNavigate`
+   * would have gone on to do; the leave-refused case below passes a spy to
+   * prove the navigation itself never ran.
+   */
+  function LeaveHarness({
+    tab,
+    onLeaveAction = () => {},
+  }: {
+    tab: OrganizationSettingsTab
+    onLeaveAction?: () => void
+  }) {
     const { guardedNavigate } = useNavigationGuard()
     return (
       <div>
-        <button onClick={() => guardedNavigate(() => {})}>
+        <button onClick={() => guardedNavigate(onLeaveAction)}>
           Leave via drawer
         </button>
         <OrganizationSettings
@@ -589,5 +632,99 @@ describe('OrganizationSettings — per-tab unsaved changes (WEB-38, WEB-69)', ()
       expect(controlsId).toBeTruthy()
       expect(document.getElementById(controlsId!)).not.toBeNull()
     }
+  })
+
+  // WEB-69 final polish, must-fix 1: `saveAllDirtyTabs` (`pages/OrganizationSettings.tsx`)
+  // switches to the first tab whose own save is refused and stops there,
+  // but nothing previously proved it — this leaves from a *different* tab
+  // (Jobs) than the one whose save fails (General), the same "reach the
+  // refusal from a hidden tab" shape the two cases above already use.
+  it('leaving with a failed tab save (an emptied name) stays on General, shows the validation error, and does not navigate', async () => {
+    listMemberships.mockResolvedValue([])
+    listJobs.mockResolvedValue([])
+
+    const { render } = await import('@testing-library/react')
+    const onLeaveAction = vi.fn()
+    const { rerender } = render(
+      withModal(<LeaveHarness tab="general" onLeaveAction={onLeaveAction} />)
+    )
+
+    fireEvent.change(screen.getByLabelText('Organization name'), {
+      target: { value: '   ' },
+    })
+
+    rerender(
+      withModal(<LeaveHarness tab="jobs" onLeaveAction={onLeaveAction} />)
+    )
+    await screen.findByRole('heading', { name: 'Jobs', level: 1 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave via drawer' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Save your changes?',
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Save changes' })
+    )
+    await waitFor(() => expect(dialog).not.toBeVisible())
+
+    expect(renameOrganization).not.toHaveBeenCalled()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Enter an organization name.'
+    )
+    // The refusal switches the screen back to the tab that named it, not
+    // wherever the leave started from.
+    expect(screen.getByRole('tab', { name: /^General/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    // A refused save must never let the leave itself proceed.
+    expect(onLeaveAction).not.toHaveBeenCalled()
+  })
+
+  // WEB-69 final polish, must-fix 2: the leave-guard used to refuse only
+  // while the *active* tab was saving — a hidden tab's own save already in
+  // flight (Usage's `setSpendingCap`, here) was not checked at all, so
+  // `saveAllDirtyTabs` called that tab's own `save()` a second time on top
+  // of the one already running. This is the test that fails without the
+  // fix: `setSpendingCap` never resolves, so a double call is observed
+  // directly as a second invocation, not merely a second render.
+  it('leaving while a hidden tab is still saving does not save that tab a second time', async () => {
+    listMemberships.mockResolvedValue([])
+    fetchOrganizationUsage.mockResolvedValue(USAGE_REPORT)
+    // Never resolves — the in-flight save `saveAllDirtyTabs` must not
+    // duplicate.
+    setSpendingCap.mockImplementation(() => new Promise(() => {}))
+
+    const { render } = await import('@testing-library/react')
+    const { rerender } = render(withModal(<LeaveHarness tab="usage" />))
+    // Wait for the report itself to have loaded — the field's own effect
+    // seeds `capInput` from it, and a keystroke landed before that resolves
+    // would otherwise be overwritten the moment it does.
+    await screen.findByText(
+      'No spending cap set — the assistant answers without a spending ceiling.'
+    )
+
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '5.00' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save cap' }))
+    await waitFor(() => expect(setSpendingCap).toHaveBeenCalledTimes(1))
+
+    // Pop to General the same way a popstate would — General is clean, so
+    // the leave-guard's own "is the *active* tab saving" check sees nothing
+    // in flight even though Usage, hidden, still is.
+    rerender(withModal(<LeaveHarness tab="general" />))
+    await screen.findByRole('heading', { name: 'General', level: 1 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave via drawer' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Save your changes?',
+    })
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Save changes' })
+    )
+    await waitFor(() => expect(dialog).not.toBeVisible())
+
+    expect(setSpendingCap).toHaveBeenCalledTimes(1)
   })
 })

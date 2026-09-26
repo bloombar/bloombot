@@ -487,8 +487,10 @@ describe('Usage (COST-3/COST-4)', () => {
   // reseeded `capInput` from every fresh report, silently discarding an
   // owner's own unsaved edit (and the WEB-69 dirty flag with it).
   it('applying a filter does not wipe an unsaved cap edit or its WEB-69 dirty flag', async () => {
-    fetchOrganizationUsage.mockResolvedValue(
-      report({ spendingCapMicros: 5_000_000 })
+    // A fresh object per call, as a real fetch returns — a shared one would
+    // let React skip the update and hide the bug this test is about.
+    fetchOrganizationUsage.mockImplementation(() =>
+      Promise.resolve(report({ spendingCapMicros: 5_000_000 }))
     )
     const onDirtyChange = vi.fn()
 
@@ -514,6 +516,8 @@ describe('Usage (COST-3/COST-4)', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
     await waitFor(() => expect(fetchOrganizationUsage).toHaveBeenCalledTimes(2))
+    // Wait for the second response to render, not merely to be requested.
+    await screen.findByText(/Filtered total/)
 
     // The unsaved `9` survives, and the tab is still reported dirty.
     expect(screen.getByLabelText('Spending cap ($)')).toHaveValue('9')
@@ -598,6 +602,33 @@ describe('Usage (COST-3/COST-4)', () => {
     expect(
       screen.queryByRole('button', { name: 'Clear filters' })
     ).not.toBeInTheDocument()
+  })
+
+  // WEB-78 — the total's call count comes from `bySurface`, which covers
+  // every ledger row, so it agrees with `totalCostMicros` even when the
+  // spend belongs to a course that has since been deleted.
+  it("counts calls from every row, not only live courses', in the total", async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        totalCostMicros: 1_000_000,
+        courses: [],
+        bySurface: [
+          {
+            surface: 'web',
+            costMicros: 1_000_000,
+            estimatedCostMicros: 0,
+            callCount: 3,
+          },
+        ],
+      })
+    )
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    expect(
+      await screen.findByText(/Total: \$1\.00 · 3 calls/)
+    ).toBeInTheDocument()
   })
 
   // Round 2, must-fix 5 — `studentLabel`'s own fallback: display name,

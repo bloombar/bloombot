@@ -34,6 +34,9 @@ export function today(): string {
   return `${year}-${month}-${day}`
 }
 
+/** A stable default: a fresh `{}` each render would refetch forever, since a new filters object always refetches. */
+const NO_FILTERS: OrganizationUsageFilters = {}
+
 /**
  * `costLedger.organizationUsage`'s own report, fetched for `organizationId`
  * and today, with a `refresh` a caller can re-run after a change that would
@@ -59,7 +62,7 @@ export function today(): string {
  */
 export function useOrganizationUsageReport(
   organizationId: string,
-  filters: OrganizationUsageFilters = {}
+  filters: OrganizationUsageFilters = NO_FILTERS
 ): {
   report: OrganizationUsageReport | undefined
   loadError: ApiError | undefined

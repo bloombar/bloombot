@@ -91,9 +91,9 @@ function capInputFromReport(report: OrganizationUsageReport): string {
     : (report.spendingCapMicros / 1_000_000).toFixed(2)
 }
 
-/** Every course's own call count, summed — what the filtered-total line (below) reports alongside the spend. */
+/** Every call in the (filtered) report, summed by surface — covers deleted courses too, so it agrees with `totalCostMicros`. */
 function totalCallCount(report: OrganizationUsageReport): number {
-  return report.courses.reduce((sum, course) => sum + course.callCount, 0)
+  return report.bySurface.reduce((sum, entry) => sum + entry.callCount, 0)
 }
 
 export function Usage({

@@ -4965,7 +4965,7 @@
   section: §50 Reading Usage, and Finding Your Way Around It
   family: WEB
   phase: 45
-  status: Backlog
+  status: In progress
   review: false
 - id: WEB-76
   title: The legal pages carry the site's header and footer
@@ -4976,7 +4976,7 @@
   section: §50 Reading Usage, and Finding Your Way Around It
   family: WEB
   phase: 45
-  status: Backlog
+  status: In progress
   review: false
 - id: WEB-77
   title: A course's usage can be narrowed by person, surface and date
@@ -4989,7 +4989,7 @@
   section: §50 Reading Usage, and Finding Your Way Around It
   family: WEB
   phase: 45
-  status: Backlog
+  status: In progress
   review: false
 - id: WEB-78
   title: An organization's usage can be narrowed by person, surface and date
@@ -5004,7 +5004,7 @@
   section: §50 Reading Usage, and Finding Your Way Around It
   family: WEB
   phase: 45
-  status: Backlog
+  status: In progress
   review: false
 - id: WEB-79
   title: A course in the organization's usage opens that course's usage
@@ -5013,5 +5013,5 @@
   section: §50 Reading Usage, and Finding Your Way Around It
   family: WEB
   phase: 45
-  status: Backlog
+  status: In progress
   review: false

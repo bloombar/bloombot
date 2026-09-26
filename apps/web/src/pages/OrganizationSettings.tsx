@@ -234,6 +234,14 @@ export function OrganizationSettings({
   const saveAllDirtyTabs = async (): Promise<boolean> => {
     for (const id of tabs) {
       if (!tabDirtyRef.current[id]) continue
+      // WEB-69 — a hidden tab's own save can already be in flight when a
+      // leave finds it dirty (its own baseline has not moved yet, so it
+      // still reads as dirty): Usage's own Save cap button, say, clicked
+      // just before someone left from a different tab. Calling `save()`
+      // again here would double-submit that same edit rather than letting
+      // the one already running finish on its own, so a tab that reports
+      // itself saving is skipped, not re-saved.
+      if (isTabSaving(id)) continue
       if (!(await saveTab(id))) {
         goToTab(id)
         return false
@@ -339,9 +347,9 @@ export function OrganizationSettings({
     return () => window.removeEventListener('beforeunload', handler)
   }, [isDirty])
 
-  // Rework round 1, must-fix 6 mirror (`pages/CourseEditor.tsx`'s own
-  // keyboard handler) — Left/Right cycle with wraparound, Home/End jump to
-  // the first/last tab, attached to the `tablist` itself.
+  // The same `pages/CourseEditor.tsx`'s own keyboard handler shape —
+  // Left/Right cycle with wraparound, Home/End jump to the first/last tab,
+  // attached to the `tablist` itself.
   const handleTabListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const currentIndex = tabs.indexOf(activeTabRef.current)
     let nextIndex: number

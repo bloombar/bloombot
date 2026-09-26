@@ -110,15 +110,13 @@ export function GeneralSettings({
   const handleSave = useCallback(async (): Promise<boolean> => {
     const trimmed = nameInput.trim()
     if (trimmed === '') {
-      // Round 2: reached through the tab-switch/leave-screen prompt, not
-      // only this section's own Save button — that button is `disabled`
-      // for a blank name (below), but the prompt calls this function
-      // directly, bypassing that disabled state entirely. Refusing
-      // silently left someone stuck: the prompt's "Save changes" answer did
-      // nothing, gave no reason, and never moved on. The server would
-      // refuse this identically (`organizations.ts#renameInputSchema`'s own
-      // `.min(1)`), so this renders the same validation message inline
-      // rather than making a request that could only fail.
+      // Reached through the tab-switch/leave-screen prompt too, not only
+      // this section's own Save button — that button is `disabled` for a
+      // blank name (below), but the prompt calls this function directly,
+      // bypassing that disabled state. The server would refuse this
+      // identically (`organizations.ts#renameInputSchema`'s own `.min(1)`),
+      // so this renders the same validation message inline rather than
+      // making a request that could only fail.
       setSaveError(
         new ApiError(400, {
           error: 'action_input_invalid',
@@ -198,7 +196,15 @@ export function GeneralSettings({
                 <input
                   type="text"
                   value={nameInput}
-                  onChange={(event) => setNameInput(event.target.value)}
+                  onChange={(event) => {
+                    setNameInput(event.target.value)
+                    // WEB-69 — a blank-name refusal (above) is rendered
+                    // inline rather than as a toast, so it has to be
+                    // cleared the moment the person starts fixing it; left
+                    // in place, it kept showing the old error text over a
+                    // name that was no longer blank.
+                    setSaveError(undefined)
+                  }}
                   className={textInputClasses}
                 />
               </FormField>

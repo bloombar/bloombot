@@ -107,12 +107,12 @@ const ROUTES: Route[] = [
   {
     kind: 'organization-settings',
     organizationId: 'org-1',
-    tab: 'discord',
+    tab: 'general',
   },
+  { kind: 'organization-settings', organizationId: 'org-1', tab: 'discord' },
   { kind: 'organization-settings', organizationId: 'org-1', tab: 'team' },
   { kind: 'organization-settings', organizationId: 'org-1', tab: 'usage' },
   { kind: 'organization-settings', organizationId: 'org-1', tab: 'jobs' },
-  { kind: 'organization-settings', organizationId: 'org-1', tab: 'danger' },
   // WEB-47 — the MCP tab's own landing address.
   { kind: 'mcp', organizationId: 'org-1' },
 ]
@@ -197,16 +197,16 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     expect(parseRoute('/o/org-1/settings')).toEqual({
       kind: 'organization-settings',
       organizationId: 'org-1',
-      tab: 'discord',
+      tab: 'general',
     })
   })
 
   it.each([
+    ['general', 'general'],
     ['discord', 'discord'],
     ['team', 'team'],
     ['usage', 'usage'],
     ['jobs', 'jobs'],
-    ['danger', 'danger'],
   ] as const)(
     'an organization settings address naming the %s tab parses to it',
     (segment, tab) => {
@@ -239,6 +239,16 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
 
   it('an unrecognised organization settings tab lands on not-found', () => {
     expect(parseRoute('/o/org-1/settings/nonsense')).toEqual({
+      kind: 'not-found',
+    })
+  })
+
+  // Rework round 1 gave Danger zone its own tab; the user's own final
+  // decision removed it before it ever shipped to master (this branch's
+  // own history, not a real address anyone could have bookmarked) — this
+  // proves it is gone, not merely unlisted.
+  it('danger is not an organization settings tab', () => {
+    expect(parseRoute('/o/org-1/settings/danger')).toEqual({
       kind: 'not-found',
     })
   })

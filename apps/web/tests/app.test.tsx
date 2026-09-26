@@ -200,14 +200,16 @@ describe('App (WEB-1..4)', () => {
     expect(window.location.pathname).toBe('/o/org-2/projects')
     // WEB-29/WEB-69: Discord lives on the Organization settings screen's
     // own Discord tab now, not a header row — opened via the hamburger
-    // before it can be clicked; "Organization settings" lands on the
-    // Discord tab by default (it is first in `ORGANIZATION_SETTINGS_TABS`).
+    // before it can be clicked; General, not Discord, is the settings
+    // screen's own default tab (rework round 1's own decision), so this
+    // opens the Discord tab explicitly, the way an instructor would.
     fireEvent.click(
       screen.getByRole('button', { name: 'Open navigation menu' })
     )
     fireEvent.click(
       screen.getByRole('button', { name: 'Organization settings' })
     )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Discord' }))
     // The install is already showing, not a fresh "Install to Discord"
     // button.
     await screen.findByText(/guild-99/)

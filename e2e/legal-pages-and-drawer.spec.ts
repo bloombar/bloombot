@@ -68,11 +68,13 @@ test('the privacy page, signed out: header names the app, drawer offers to sign 
   await expect(
     drawer.getByRole('button', { name: 'Log in or sign up' })
   ).toBeVisible()
+  // Round 2, must-fix 12 — no redundant "Home" item (same address as "Log
+  // in or sign up").
   await expect(
-    drawer.getByRole('navigation', { name: 'Main' }).getByRole('button', {
-      name: 'Home',
-    })
-  ).toBeVisible()
+    drawer
+      .getByRole('navigation', { name: 'Main' })
+      .getByRole('button', { name: 'Home' })
+  ).not.toBeVisible()
   await expect(
     drawer.getByRole('button', { name: 'Back to Bloombot' })
   ).not.toBeVisible()

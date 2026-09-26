@@ -17,31 +17,13 @@
  * one Markdown surface a different, laxer policy is how the strict one stops
  * being the rule.
  *
- * **WEB-76 rework round 1** — carries the same header-bar-and-drawer chrome
- * every signed-in screen already has (`components/PublicChrome.tsx`, over
- * `components/AppShell.tsx`), not the centred, menu-less hero
- * (`components/SignInHeader.tsx`) this used to reuse — the coordinator's
- * own correction, recorded in `docs/DECISIONS.md`'s WEB-76 entry: a reader
- * needs a real way back into the app, not only a logo.
- *
- * `signedIn`/`navigate` are both optional, defaulting to "nobody is signed
- * in yet" and "do nothing" — the two callers that matter:
- *
- *  - `apps/web/prerender-plugin.ts` renders this component directly, with
- *    no session to check at all (there is no `fetchMe()` call anywhere in
- *    that build-time pass) — the defaults are exactly the signed-out
- *    chrome a crawler should see, with no prop to pass for either.
- *  - `App.tsx`'s own render passes both explicitly, `signedIn` computed
- *    from `session.kind === 'signed-in'`. Its own initial value is always
- *    `false` (`session` starts at `{ kind: 'loading' }`), so the very
- *    first paint — even for an account that turns out to be signed in — is
- *    always this same signed-out chrome; once the session resolves, an
- *    ordinary re-render swaps to "Back to Bloombot" if it turns out to be
- *    signed in. No hydration mismatch to reconcile either way:
- *    `main.tsx` mounts with `createRoot`, not `hydrateRoot`
- *    (`src/prerender/inject.ts`'s own comment on why), so the prerendered
- *    markup this default produces is discarded outright the instant the
- *    client bundle takes over, regardless of what it then renders.
+ * WEB-76 — carries the header bar and drawer `components/PublicChrome.tsx`
+ * renders. `signedIn`/`navigate` default to "signed out"/"do nothing":
+ * `apps/web/prerender-plugin.ts` renders this component with neither (no
+ * session to check at build time), and `App.tsx` passes both, `signedIn`
+ * starting `false` until the real session resolves. No hydration mismatch
+ * either way — `main.tsx` mounts with `createRoot`, not `hydrateRoot`, so
+ * the prerendered markup is discarded on mount regardless.
  */
 
 import ReactMarkdown, { type Components } from 'react-markdown'

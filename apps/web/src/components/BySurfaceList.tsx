@@ -1,12 +1,13 @@
 /**
  * WEB-77/WEB-78 — the per-surface breakdown `pages/Usage.tsx` and
  * `components/CourseUsage.tsx` both render, as a `<ul>` (one `<li>` per
- * surface) rather than the single terse inline line `usageFormat.ts#formatBySurface`
- * used to render there. A list is what lets a screen reader (and a reader
- * scanning quickly) tell three surfaces apart without parsing a run-on
- * sentence joined by ` · ` — the admin console's own pages
- * (`pages/admin/*`) keep the inline line, which is why `formatBySurface`
- * itself still exists rather than being removed outright.
+ * surface) rather than one run-on line joined by ` · ` — a list is what
+ * lets a screen reader (and a reader scanning quickly) tell three surfaces
+ * apart without parsing a sentence. The admin console's own pages
+ * (`pages/admin/*`) render their own, entirely separate inline line
+ * (`pages/admin/shared.tsx#formatBySurface`) — a different function, not
+ * this file's own `formatBySurfaceEntry`, so this component's own rework
+ * never touched them.
  */
 
 import type { CostBySurface } from '../api/types.js'

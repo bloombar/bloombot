@@ -142,6 +142,8 @@ describe('costLedger.organizationUsage', () => {
         courseTitle: 'Test Course',
         personId: person.id,
         personDisplayName: 'Student',
+        personFirstName: null,
+        personLastName: null,
         count: 2,
         maxRequestsPerDay: 2,
       },

@@ -195,6 +195,8 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
             courseTitle: COURSE.title,
             personId: 'person-1',
             personDisplayName: 'Alice',
+            personFirstName: null,
+            personLastName: null,
             count: 8,
             maxRequestsPerDay: 10,
           },
@@ -203,6 +205,8 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
             courseTitle: 'Another Course',
             personId: 'person-2',
             personDisplayName: 'Bob',
+            personFirstName: null,
+            personLastName: null,
             count: 9,
             maxRequestsPerDay: 10,
           },
@@ -236,7 +240,9 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
     expect(screen.queryByText(/Cap set at/)).not.toBeInTheDocument()
   })
 
-  it('a failed load renders the same ErrorMessage every other refusal in this app uses', async () => {
+  // Round 2, must-fix 3 — the error renders beneath the filter row, not in
+  // place of it.
+  it('a failed load renders the same ErrorMessage every other refusal in this app uses, beneath the filter row', async () => {
     fetchOrganizationUsage.mockRejectedValue(
       new ApiError(500, { error: 'internal_error' })
     )
@@ -246,6 +252,9 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Something went wrong. Try again.'
     )
+    expect(
+      screen.getByRole('button', { name: 'Apply filters' })
+    ).toBeInTheDocument()
   })
 
   // --- WEB-77/WEB-78: person/surface/date filters, server-side ------------
@@ -257,11 +266,15 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
           {
             personId: 'person-1',
             personDisplayName: 'Alice',
+            personFirstName: null,
+            personLastName: null,
             courseIds: [COURSE.id],
           },
           {
             personId: 'person-2',
             personDisplayName: 'Bob',
+            personFirstName: null,
+            personLastName: null,
             courseIds: ['course-2'],
           },
         ],
@@ -283,6 +296,8 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
           {
             personId: 'person-1',
             personDisplayName: 'Alice',
+            personFirstName: null,
+            personLastName: null,
             courseIds: [COURSE.id],
           },
         ],
@@ -316,6 +331,104 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
         { personId: 'person-1', surface: 'mcp' }
       )
     )
+  })
+
+  // Round 2, must-fix 3 — the same client-side validation
+  // `pages/Usage.tsx` exercises, through the same shared
+  // `components/UsageFilterRow.tsx`.
+  it('refuses a "From" after "To" client-side, and never fetches a second time', async () => {
+    fetchOrganizationUsage.mockResolvedValue(report())
+
+    renderEditor('usage')
+    await waitFor(() => expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1))
+
+    fireEvent.change(screen.getByLabelText('From date'), {
+      target: { value: '2026-02-01' },
+    })
+    fireEvent.change(screen.getByLabelText('To date'), {
+      target: { value: '2026-01-01' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(await screen.findByText(/must be on or before/i)).toBeInTheDocument()
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+  })
+
+  // Round 2, must-fix 4 — the course tab's own total also names itself
+  // "Filtered" once a filter narrows it, with a "Clear filters" control.
+  it('shows a filtered total distinct from the unfiltered one, and a "Clear filters" control, once a filter is applied', async () => {
+    fetchOrganizationUsage
+      .mockResolvedValueOnce(
+        report({
+          courses: [
+            {
+              courseId: COURSE.id,
+              courseTitle: COURSE.title,
+              projectId: PROJECT.id,
+              costMicros: 9_000_000,
+              estimatedCostMicros: 0,
+              callCount: 9,
+              bySurface: [],
+            },
+          ],
+        })
+      )
+      .mockResolvedValueOnce(
+        report({
+          courses: [
+            {
+              courseId: COURSE.id,
+              courseTitle: COURSE.title,
+              projectId: PROJECT.id,
+              costMicros: 1_000_000,
+              estimatedCostMicros: 0,
+              callCount: 1,
+              bySurface: [],
+            },
+          ],
+        })
+      )
+
+    renderEditor('usage')
+    expect(await screen.findByText(/Total: \$9\.00/)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Surface'), {
+      target: { value: 'mcp' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(
+      await screen.findByText(/Filtered total: \$1\.00/)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Clear filters' })
+    ).toBeInTheDocument()
+  })
+
+  // Round 2, must-fix 5 — the same `studentLabel` fallback
+  // `pages/Usage.tsx` uses.
+  it('falls back to a first/last name for a near-limit student with no display name set', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        studentsNearLimit: [
+          {
+            courseId: COURSE.id,
+            courseTitle: COURSE.title,
+            personId: 'person-42',
+            personDisplayName: null,
+            personFirstName: 'Ada',
+            personLastName: 'Lovelace',
+            count: 8,
+            maxRequestsPerDay: 10,
+          },
+        ],
+      })
+    )
+
+    renderEditor('usage')
+
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.queryByText('person-42')).not.toBeInTheDocument()
   })
 })
 
@@ -442,6 +555,8 @@ describe('CourseEditor — Transcripts tab (WEB-64)', () => {
         actorDisplayName: 'Owner Person',
         personId: null,
         personDisplayName: null,
+        personFirstName: null,
+        personLastName: null,
         kind: 'read',
         startAt: null,
         endAt: null,

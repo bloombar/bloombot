@@ -1117,25 +1117,31 @@ export interface CourseUsageSummary {
 /**
  * COST-4 — one (course, person) pair whose count for a given day has
  * reached a course's own near-limit threshold. Mirrors `@bloombot/db`'s own
- * `usage.UsageNearLimit` by hand. `personDisplayName`, not the student's own
- * email — the same "no genuine need to disambiguate by it" reasoning
- * `api/types.ts#CourseEnrolment`'s own doc comment already gives for the
- * identical case; `components/CoursePeople.tsx`'s own `label` fallback
- * (`displayName ?? personId`) is what `pages/Usage.tsx` uses for this too.
+ * `usage.UsageNearLimit` by hand. `personDisplayName`/`personFirstName`/
+ * `personLastName`, never the student's own email — the same "no genuine
+ * need to disambiguate by it" reasoning `api/types.ts#CourseEnrolment`'s
+ * own doc comment already gives for the identical case;
+ * `components/usageFormat.ts#studentLabel` is the shared fallback
+ * (`pages/Usage.tsx`/`components/CourseUsage.tsx` both use it) that needs
+ * all three fields, not `personDisplayName` alone (round 2, must-fix 5).
  */
 export interface UsageNearLimit {
   courseId: string
   courseTitle: string
   personId: string
   personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
   count: number
   maxRequestsPerDay: number
 }
 
-/** WEB-77 — one person with usage in the organization, unfiltered, and the courses they have usage in. Mirrors `@bloombot/db`'s own `costLedger.OrganizationUsagePerson` by hand — same no-email rule as `UsageNearLimit` above. */
+/** WEB-77 — one person with usage in the organization, and the courses they have usage in. Mirrors `@bloombot/db`'s own `costLedger.OrganizationUsagePerson` by hand — same no-email rule as `UsageNearLimit` above. */
 export interface OrganizationUsagePerson {
   personId: string
   personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
   courseIds: string[]
 }
 

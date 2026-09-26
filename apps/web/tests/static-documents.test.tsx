@@ -101,20 +101,20 @@ describe('/privacy and /terms (published legal documents)', () => {
       ).not.toBeInTheDocument()
     })
 
-    it('signed out: offers to sign in, Home, and no organization/project/course/chat link', async () => {
+    it('signed out: offers to sign in, no redundant Home item, and no organization/project/course/chat link', async () => {
       renderAt('/privacy')
       await screen.findByTestId('privacy-page')
       openDrawer()
 
-      // Scoped to the drawer's own nav — the header's logo button also
-      // carries `aria-label="Home"` (`components/AppShell.tsx`'s own home
-      // control), so an unscoped query for "Home" is ambiguous between the
-      // two.
       const nav = within(screen.getByRole('navigation', { name: 'Main' }))
       expect(
         nav.getByRole('button', { name: 'Log in or sign up' })
       ).toBeInTheDocument()
-      expect(nav.getByRole('button', { name: 'Home' })).toBeInTheDocument()
+      // Round 2, must-fix 12 — "Home" went to the identical address as
+      // "Log in or sign up" and was dropped as redundant.
+      expect(
+        nav.queryByRole('button', { name: 'Home' })
+      ).not.toBeInTheDocument()
       expect(
         nav.queryByRole('button', { name: 'Back to Bloombot' })
       ).not.toBeInTheDocument()

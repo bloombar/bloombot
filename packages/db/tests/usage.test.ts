@@ -526,6 +526,8 @@ describe('listUsageNearLimit (COST-4)', () => {
         courseTitle: 'Web Design',
         personId: personA.id,
         personDisplayName: 'A',
+        personFirstName: null,
+        personLastName: null,
         count: 3,
         maxRequestsPerDay: 3,
       },

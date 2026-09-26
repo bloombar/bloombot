@@ -7,7 +7,8 @@
  * could drift apart one edit at a time.
  */
 
-import type { CostBySurface, UsageNearLimit } from '../api/types.js'
+import { fullName } from '../person-identity.js'
+import type { CostBySurface } from '../api/types.js'
 import { surfaceLabel } from '../surface-label.js'
 
 /** Integer micros (COST-1) to a plain dollar figure. */
@@ -17,10 +18,8 @@ export function formatMicros(micros: number): string {
 
 /**
  * COST-7 — one surface's own entry: label, cost, call count and an
- * "(includes an estimate)" note when any part of it is an estimate. Shared
- * by `formatBySurface` (below, for a screen still rendering one inline
- * line) and `BySurfaceList` (WEB-77/WEB-78's own `<ul>`, one `<li>` per
- * entry) — the wording lives in exactly one place either way.
+ * "(includes an estimate)" note when any part of it is an estimate. What
+ * `components/BySurfaceList.tsx` renders one `<li>` per entry with.
  */
 export function formatBySurfaceEntry(entry: CostBySurface): string {
   const calls = entry.callCount === 1 ? 'call' : 'calls'
@@ -30,18 +29,29 @@ export function formatBySurfaceEntry(entry: CostBySurface): string {
 }
 
 /**
- * COST-7 — a terse, inline "By surface: ..." line, one entry per surface
- * `bySurface` carries (at most `discord`/`web`/`mcp`/`unknown`), joined with
- * ` · ` so this reads as a short list rather than a wall of text. Still used
- * where a `<ul>` (`BySurfaceList`, `components/BySurfaceList.tsx`) has not
- * replaced it (the admin console's own pages) — `pages/Usage.tsx` and
- * `components/CourseUsage.tsx` render `BySurfaceList` instead (WEB-77/78).
+ * A person a Usage screen names, in place of a name — the shared fallback
+ * `pages/Usage.tsx`'s `studentsNearLimit` rows and its own Student filter
+ * (`components/UsageFilterRow.tsx`) both need: a display name, then a full
+ * name built from first/last, then the bare id — never an email (this
+ * screen's own long-standing rule; see `docs/DECISIONS.md`'s WEB-78 entry).
+ * A plain object, not `UsageNearLimit`/`OrganizationUsagePerson` by name,
+ * since both `api/types.ts` interfaces already carry every field this
+ * needs and nothing this ignores.
  */
-export function formatBySurface(bySurface: CostBySurface[]): string {
-  return bySurface.map(formatBySurfaceEntry).join(' · ')
+export interface StudentLabelFields {
+  personId: string
+  personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
 }
 
-/** What a near-limit row shows in place of a name — `personDisplayName` when the person has one, `personId` otherwise (never an email — `pages/Usage.tsx`'s own module comment on why). */
-export function studentLabel(entry: UsageNearLimit): string {
-  return entry.personDisplayName ?? entry.personId
+export function studentLabel(entry: StudentLabelFields): string {
+  return (
+    entry.personDisplayName ??
+    fullName({
+      personFirstName: entry.personFirstName,
+      personLastName: entry.personLastName,
+    }) ??
+    entry.personId
+  )
 }

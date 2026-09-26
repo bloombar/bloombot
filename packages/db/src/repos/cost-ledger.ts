@@ -276,9 +276,18 @@ export interface CourseUsageSummary {
  * filtering still appears in `courses`, at zero — this function's own
  * long-standing behaviour (see its doc comment below), unchanged by
  * filtering. The cap's own "spent"/"reached" judgement is deliberately
- * unaffected by any of these — `unfilteredTotalCostMicros`, below, always
- * reads the whole organization regardless (WEB-78: a filtered view must
- * never make a caller believe the cap has more or less room than it does).
+ * unaffected by any of these — a caller reads `getOrganizationSpentMicros`
+ * separately for that (WEB-78: a filtered view must never make a caller
+ * believe the cap has more or less room than it does).
+ *
+ * `personId` matches a merged-away person's own surviving ledger rows too
+ * (round 2, must-fix 6) — `mergePeople` deliberately leaves
+ * `cost_ledger_entries` keyed to whichever id was current when a call was
+ * actually made (this file's own module comment on `getOrganizationSpentMicros`
+ * has the reasoning `docs/DECISIONS.md` D-35 gives in full), so filtering
+ * by a survivor without also matching everyone merged into them would
+ * silently drop spend that is, in every sense that matters to an
+ * instructor, still theirs.
  */
 export interface OrganizationUsageFilters {
   personId?: string
@@ -288,25 +297,128 @@ export interface OrganizationUsageFilters {
 }
 
 /**
+ * Round 2, must-fix 6 — every person id `mergePeople` has ever merged into
+ * `survivorPersonId` directly. Chains never need a second hop: `mergePeople`
+ * itself refuses a survivor that is already merged into someone else
+ * (`people.ts`'s own doc comment), so a loser's `mergedIntoPersonId` always
+ * names a person who is not, themselves, a tombstone — one level is all
+ * there ever is to resolve.
+ */
+function listMergedLoserIds(
+  organizationId: string,
+  survivorPersonId: string,
+  db: Database
+): string[] {
+  const rows = db
+    .select({ id: people.id })
+    .from(people)
+    .where(
+      and(
+        eq(people.organizationId, organizationId),
+        eq(people.mergedIntoPersonId, survivorPersonId),
+        // DATA-9 — a soft-deleted loser is excluded the same as every other
+        // read of `people` in this file; their own ledger rows are still
+        // counted in the organization's own unfiltered total
+        // (`getOrganizationSpentMicros` never joins `people` at all), only
+        // not folded into a survivor's own *filtered* figures.
+        isNull(people.deletedAt)
+      )
+    )
+    .all()
+  return rows.map((row) => row.id)
+}
+
+/**
  * WEB-77 — every person with at least one ledger row in the organization,
- * *unfiltered* by `OrganizationUsageFilters` — so the organization's own
- * Usage screen can offer every person its own "Student" filter could
- * narrow down to, not merely who is left once a filter has already
- * applied. `personDisplayName`, never an email — the same rule
- * `pages/Usage.tsx`'s own module comment already gives for
- * `studentsNearLimit`, mirrored here for the identical reason
- * (`repos/transcript-access.ts#listPeopleWithTranscript`'s own
- * `people.displayName` read is the same source). `courseIds` is what lets
- * the course tab (`components/CourseUsage.tsx`) narrow this same list down
- * to one course's own people, the same way `courses` already narrows to
- * one course's own totals — a `null` `courseId` (PROJ-8: a deleted course's
- * own ledger rows survive it) contributes to the organization-wide list but
- * to no course's own.
+ * so the organization's own Usage screen can offer every person its own
+ * "Student" filter could narrow down to, not merely who is left once a
+ * filter has already applied. `personDisplayName`/`personFirstName`/
+ * `personLastName` — never an email (round 2, must-fix 5): a caller renders
+ * a label with the same fallback `components/usageFormat.ts#studentLabel`
+ * already gives `studentsNearLimit` (display name, then first/last name,
+ * then the bare id), which needs all three fields, not `displayName` alone.
+ * `courseIds` is what lets the course tab (`components/CourseUsage.tsx`)
+ * narrow this same list down to one course's own people, the same way
+ * `courses` already narrows to one course's own totals — a `null`
+ * `courseId` (PROJ-8: a deleted course's own ledger rows survive it)
+ * contributes to the organization-wide list but to no course's own.
+ *
+ * **Never a merged-away tombstone** (round 2, must-fix 6) — a person
+ * `mergePeople` has since merged into someone else offers nothing useful to
+ * pick from this filter: selecting them would filter by an id `people.ts`'s
+ * own merge reasoning treats as retired, rather than by the survivor who
+ * now represents them. `getOrganizationUsageSummary`'s own `personId`
+ * filter already matches a survivor's own losers' ledger rows too (this
+ * file's own `listMergedLoserIds`) — a caller only ever needs to offer the
+ * survivor here for that same spend to be reachable.
  */
 export interface OrganizationUsagePerson {
   personId: string
   personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
   courseIds: string[]
+}
+
+/**
+ * Round 2, must-fix 8 (performance) — `getOrganizationUsageSummary`'s own
+ * caller list includes two (`apps/api/src/routes/admin.ts`,
+ * `apps/worker/src/handlers/transcripts.ts`) that read only `courses`/
+ * `bySurface`/the totals, and would otherwise pay for a query neither ever
+ * looks at. Kept as its own function (rather than an option flag on the
+ * summary) precisely so those callers cannot pay for it even by omission —
+ * only `packages/actions/src/actions/cost-ledger.ts#organizationUsageAction`
+ * (the one caller the panel's own Student filter actually needs this for)
+ * calls it at all.
+ */
+export function listOrganizationUsagePeople(
+  organizationId: string,
+  db: Database
+): OrganizationUsagePerson[] {
+  const peopleRows = db
+    .selectDistinct({
+      personId: costLedgerEntries.personId,
+      personDisplayName: people.displayName,
+      personFirstName: people.firstName,
+      personLastName: people.lastName,
+      courseId: costLedgerEntries.courseId,
+    })
+    .from(costLedgerEntries)
+    .innerJoin(
+      people,
+      and(
+        eq(people.id, costLedgerEntries.personId),
+        eq(people.organizationId, organizationId),
+        // DATA-9 — a soft-deleted person does not appear in the Student
+        // filter's own list either, the same exclusion
+        // `listPeopleWithTranscript`'s own `isNull(people.deletedAt)`
+        // already gives its identical join.
+        isNull(people.deletedAt),
+        // Round 2, must-fix 6 — nor does a merged-away tombstone; this
+        // function's own doc comment has why.
+        isNull(people.mergedIntoPersonId)
+      )
+    )
+    .where(eq(costLedgerEntries.organizationId, organizationId))
+    .orderBy(asc(people.displayName), asc(costLedgerEntries.personId))
+    .all()
+
+  const peopleByPersonId = new Map<string, OrganizationUsagePerson>()
+  for (const row of peopleRows) {
+    const person = peopleByPersonId.get(row.personId) ?? {
+      personId: row.personId,
+      personDisplayName: row.personDisplayName,
+      personFirstName: row.personFirstName,
+      personLastName: row.personLastName,
+      courseIds: [],
+    }
+    // PROJ-8 — a `null` `courseId` (a deleted course's own surviving ledger
+    // row) belongs on the organization-wide list but names no course to add
+    // here.
+    if (row.courseId !== null) person.courseIds.push(row.courseId)
+    peopleByPersonId.set(row.personId, person)
+  }
+  return [...peopleByPersonId.values()]
 }
 
 /** COST-4's instructor read: usage across every course in the caller's own organization, plus what its cap looks like. */
@@ -316,20 +428,9 @@ export interface OrganizationUsageSummary {
   totalCostMicros: number
   /** The sum of every course's own `estimatedCostMicros` — see `CourseUsageSummary`'s own comment for why this exists at all. */
   totalEstimatedCostMicros: number
-  /**
-   * WEB-78 — the organization's own whole-organization spend, always
-   * unfiltered even when `filters` narrowed `totalCostMicros`/`courses`/
-   * `bySurface` above — the same total `getOrganizationSpentMicros` already
-   * computes, carried here so a caller does not need a second request just
-   * to keep the cap's own "spent"/"reached" judgement honest while a filter
-   * is applied.
-   */
-  unfilteredTotalCostMicros: number
   courses: CourseUsageSummary[]
   /** COST-7 — the organization's own totals above, broken down by surface across every course rather than per course. */
   bySurface: CostBySurface[]
-  /** WEB-77 — every person with usage in the organization, unfiltered — see `OrganizationUsagePerson`'s own doc comment. */
-  people: OrganizationUsagePerson[]
 }
 
 /**
@@ -375,7 +476,16 @@ export function getOrganizationUsageSummary(
   // carries.
   const totalsFilters = [eq(costLedgerEntries.organizationId, organizationId)]
   if (filters.personId !== undefined) {
-    totalsFilters.push(eq(costLedgerEntries.personId, filters.personId))
+    // Round 2, must-fix 6 — matches `filters.personId`'s own ledger rows
+    // *and* every person merged into them (`listMergedLoserIds`, above):
+    // `mergePeople` leaves a loser's own rows keyed to their old id, so a
+    // plain `eq` here would silently drop spend that is, in every sense
+    // that matters to an instructor, the survivor's own.
+    const personIds = [
+      filters.personId,
+      ...listMergedLoserIds(organizationId, filters.personId, db),
+    ]
+    totalsFilters.push(inArray(costLedgerEntries.personId, personIds))
   }
   if (filters.surface !== undefined) {
     totalsFilters.push(eq(costLedgerEntries.surface, filters.surface))
@@ -486,58 +596,13 @@ export function getOrganizationUsageSummary(
     }
   })
 
-  // WEB-77 — every person with a ledger row in this organization, entirely
-  // unfiltered by `filters`, plus every course they have a row in: the same
-  // `people.displayName` (never an email) source
-  // `repos/transcript-access.ts#listPeopleWithTranscript` already reads,
-  // grouped here rather than joined through it directly since this needs
-  // `courseId` alongside the display name, not a course-scoped list.
-  const peopleRows = db
-    .selectDistinct({
-      personId: costLedgerEntries.personId,
-      personDisplayName: people.displayName,
-      courseId: costLedgerEntries.courseId,
-    })
-    .from(costLedgerEntries)
-    .innerJoin(
-      people,
-      and(
-        eq(people.id, costLedgerEntries.personId),
-        eq(people.organizationId, organizationId),
-        // DATA-9 — a soft-deleted person does not appear in the Student
-        // filter's own list either, the same exclusion
-        // `listPeopleWithTranscript`'s own `isNull(people.deletedAt)`
-        // already gives its identical join.
-        isNull(people.deletedAt)
-      )
-    )
-    .where(eq(costLedgerEntries.organizationId, organizationId))
-    .orderBy(asc(people.displayName), asc(costLedgerEntries.personId))
-    .all()
-  const peopleByPersonId = new Map<string, OrganizationUsagePerson>()
-  for (const row of peopleRows) {
-    const person = peopleByPersonId.get(row.personId) ?? {
-      personId: row.personId,
-      personDisplayName: row.personDisplayName,
-      courseIds: [],
-    }
-    // PROJ-8 — a `null` `courseId` (a deleted course's own surviving ledger
-    // row) belongs on the organization-wide list but names no course to add
-    // here.
-    if (row.courseId !== null) person.courseIds.push(row.courseId)
-    peopleByPersonId.set(row.personId, person)
-  }
-
   return {
     organizationId,
     spendingCapMicros: organization?.spendingCapMicros ?? null,
     totalCostMicros,
     totalEstimatedCostMicros,
-    // WEB-78 — always the whole organization, never narrowed by `filters`.
-    unfilteredTotalCostMicros: getOrganizationSpentMicros(organizationId, db),
     courses: coursesSummary,
     bySurface: sortBySurface([...organizationBySurface.values()]),
-    people: [...peopleByPersonId.values()],
   }
 }
 

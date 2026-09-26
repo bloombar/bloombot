@@ -14364,3 +14364,69 @@ course"'s course titles are now `components/AppLink.tsx`, opened at that course'
 through `pages/OrganizationSettings.tsx` exactly the way `components/GeneralSettings.tsx` already receives it,
 already wrapped in `guardedNavigate` at that same hand-off, so `Usage.tsx` calls it directly rather than reaching
 for `useNavigationGuard()` a second time.
+
+## D-145 — `packages/db`/`packages/actions`/`apps/web`: WEB-77/WEB-78 rework round 2 — dirty-state, stale
+## responses, invalid dates, filtered totals, merged people, and a shared filter row
+
+Two reviewer rounds against `6cf10fc` found seven must-fix defects and five cheap fixes in the WEB-77/WEB-78
+filter work; this entry records the fixes that changed a boundary or a shape, not the mechanical ones (a missing
+field, a stale comment).
+
+**The cap-seeding effect used to key off `report` itself, not `report.spendingCapMicros`.** Applying a filter
+fetches a genuinely new `report` object every time (round 2, must-fix 11, below) — with the old `[report]`
+dependency, `pages/Usage.tsx`'s own cap-input-seeding effect ran on every filter apply, silently overwriting
+whatever an owner had mid-typed into the cap field (and clearing the WEB-69 dirty flag with it) even though the
+*cap itself* had not changed. Keyed off `report?.spendingCapMicros` instead — the one value that actually means
+"the seed should update."
+
+**`useOrganizationUsageReport` gained a request epoch, and dropped its own `JSON.stringify` memoization.** Two
+things, not one: (1) a stale-response guard (an older fetch resolving after a newer one must never overwrite it
+— a monotonic `requestEpochRef` int, bumped per call, checked before either `setReport`/`setLoadError` commits);
+(2) `refresh`'s own `useCallback` now depends on `filters` *by reference*, not by its serialized content. The
+`JSON.stringify` comparison it replaced was reasoned about as "an unchanged filter set is stable across a
+re-render" — true, but it also meant a caller who clicked "Apply filters" twice with the same values (or a
+`refresh()` called explicitly, e.g. after a cap save) sometimes silently skipped the fetch, which is backwards
+for a control whose whole point is "get me current data." Correctness turned out to line up with simplicity
+here: since a caller's own `appliedFilters` lives in `useState` (a stable reference across unrelated re-renders,
+changing only when that caller's own "Apply"/"Clear" handler calls `setAppliedFilters` with a fresh object), a
+plain reference-equality dependency refetches on every genuine "Apply"/"Clear" click — even one whose values
+are unchanged — while staying inert across a re-render the filters had nothing to do with.
+
+**A pre-1970 or backwards date range is now refused client-side, not server-side.** `costLedger.organizationUsage`'s
+own zod schema already refused a negative `from`/`to` (a date before 1 January 1970) — refusing it there instead
+of never sending it meant the *whole screen* re-rendered as `<ErrorMessage>`, taking the filter row that caused
+it off the page with nothing left to fix it from. `day-boundary.ts#dateRangeError` (a new, shared function) runs
+first now, inside `components/UsageFilterRow.tsx`'s own "Apply filters" handler: an inline message next to the
+field, and the request is never sent. Both screens' own load error (a genuine server-side failure, still
+possible) now renders *beneath* the filter row rather than replacing the screen either, for the same reason —
+a reader should never lose the control that could fix what went wrong.
+
+**A filtered total is now a visible line, not only an implicit change in the numbers below it.** `pages/Usage.tsx`
+and `components/CourseUsage.tsx` each render "Total: $X · N calls" — "Filtered total" once any filter is
+applied — and `components/UsageFilterRow.tsx` offers "Clear filters" (resetting every field and re-fetching
+unfiltered) plus a "Showing filtered results" note, both only while a filter is actually applied.
+
+**A merged pair's own spend is now reachable through either name.** `mergePeople` (`docs/DECISIONS.md` D-35)
+deliberately leaves `cost_ledger_entries` keyed to whichever person id was current when a call was actually
+made — filtering by the survivor alone silently dropped the loser's own, still-real spend.
+`getOrganizationUsageSummary`'s own `personId` filter now expands to `[personId, ...listMergedLoserIds(...)]`
+(one hop only: `mergePeople` refuses a survivor who is themselves already a tombstone, so a loser's own
+`mergedIntoPersonId` can never chain through a second merge). The Student filter's own list
+(`listOrganizationUsagePeople`) excludes a merged-away tombstone outright — nothing useful is filtered *by*
+selecting them, since their own spend is already reachable through the survivor.
+
+**`getOrganizationUsageSummary` no longer computes `people`/`unfilteredTotalCostMicros` at all.** Both moved to
+their own functions (`listOrganizationUsagePeople`, and the pre-existing `getOrganizationSpentMicros`), called
+only from `costLedger.organizationUsage`'s own `execute` — not from the summary itself. Two of the summary's
+other callers (`apps/api/src/routes/admin.ts`, `apps/worker/src/handlers/transcripts.ts`) read only `courses`/
+`bySurface`/the totals and had no use for either; leaving them inside the summary meant paying for two queries
+on every call from either, for a result immediately discarded.
+
+**One filter row, not two.** `components/UsageFilterRow.tsx` is what `pages/Usage.tsx` and
+`components/CourseUsage.tsx` both render now — the Student/Surface/date fields, the date validation, "Apply
+filters," "Clear filters" and the filtered note, previously duplicated by hand across both screens.
+`components/usageFormat.ts#studentLabel` gained the same first/last-name fallback `person-identity.ts#fullName`
+(newly exported, for exactly this reuse) already gives a chat heading — a display name, then first/last name,
+then the bare person id, never an email — needed because a roster-imported person can carry a first/last name
+with no `displayName` set at all, and the old `displayName ?? personId` fallback skipped straight past a name
+the platform already had.

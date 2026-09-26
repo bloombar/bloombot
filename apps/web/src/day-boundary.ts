@@ -21,3 +21,32 @@ export function dayEnd(value: string): number | undefined {
   const parsed = Date.parse(`${value}T23:59:59.999`)
   return Number.isNaN(parsed) ? undefined : parsed
 }
+
+/**
+ * Round 2, must-fix 3 — the same nonnegative check
+ * `costLedger.organizationUsage`'s own input schema
+ * (`packages/actions/src/actions/cost-ledger.ts`) already makes of `from`/
+ * `to`, run here first so a date before 1 January 1970 (a negative epoch)
+ * or a "From" after "To" never reaches the server at all. A request the
+ * server refused used to fail zod's `nonnegative()` check and replace the
+ * whole screen with `<ErrorMessage>`, the filter row that caused it gone
+ * along with everything else — checked here instead, named right next to
+ * the fields that caused it.
+ */
+export function dateRangeError(
+  startDate: string,
+  endDate: string
+): string | undefined {
+  const startAt = dayStart(startDate)
+  const endAt = dayEnd(endDate)
+  if (
+    (startAt !== undefined && startAt < 0) ||
+    (endAt !== undefined && endAt < 0)
+  ) {
+    return 'Dates must be on or after 1 January 1970.'
+  }
+  if (startAt !== undefined && endAt !== undefined && startAt > endAt) {
+    return '"From" must be on or before "To".'
+  }
+  return undefined
+}

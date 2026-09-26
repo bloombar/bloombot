@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  accounts,
   costLedger,
   courses,
   organizations,
@@ -407,9 +408,55 @@ describe('cost-ledger repo', () => {
 
     expect(summary.totalCostMicros).toBe(400)
     expect(summary.courses[0]?.costMicros).toBe(400)
-    // WEB-78 — the whole-organization total stays unfiltered even while the
-    // totals above are narrowed to one person's own usage.
-    expect(summary.unfilteredTotalCostMicros).toBe(1_000)
+    // WEB-78 — the whole-organization total, read separately
+    // (`getOrganizationSpentMicros`, round 2 must-fix 8 — no longer part of
+    // the summary itself), stays unfiltered even while the totals above are
+    // narrowed to one person's own usage.
+    expect(costLedger.getOrganizationSpentMicros(orgA, testDb.db)).toBe(1_000)
+  })
+
+  // Round 2, must-fix 6 — a merged pair: the loser's own ledger rows stay
+  // keyed to their old id (`mergePeople` never rewrites `cost_ledger_entries`,
+  // `docs/DECISIONS.md` D-35), so filtering by the survivor has to reach
+  // them too, or a merge would silently make part of an instructor's own
+  // spend invisible to every filter that could otherwise find it.
+  it('filtering by a survivor also matches ledger rows recorded under a person merged into them', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA } = seedTwoOrganizations(testDb)
+    const survivor = people.createPerson(
+      orgA,
+      { displayName: 'Survivor' },
+      testDb.db
+    )
+    const loser = people.createPerson(orgA, { displayName: 'Loser' }, testDb.db)
+    const other = people.createPerson(orgA, { displayName: 'Other' }, testDb.db)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, survivor.id, { costMicros: 100 }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, loser.id, { costMicros: 200 }),
+      testDb.db
+    )
+    // Someone else's own spend — must not count once filtered to the
+    // survivor.
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, other.id, { costMicros: 900 }),
+      testDb.db
+    )
+    const merged = people.mergePeople(orgA, survivor.id, loser.id, testDb.db)
+    if (!merged) throw new Error('seed merge failed')
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
+      personId: survivor.id,
+    })
+
+    // Both the survivor's own row (100) and the loser's own, still-keyed-to
+    // -the-loser row (200) — 300 total, not 100.
+    expect(summary.totalCostMicros).toBe(300)
   })
 
   it('narrows totals by surface', () => {
@@ -437,7 +484,7 @@ describe('cost-ledger repo', () => {
     expect(summary.bySurface).toEqual([
       { surface: 'mcp', costMicros: 200, estimatedCostMicros: 0, callCount: 1 },
     ])
-    expect(summary.unfilteredTotalCostMicros).toBe(300)
+    expect(costLedger.getOrganizationSpentMicros(orgA, testDb.db)).toBe(300)
   })
 
   it('narrows totals by a from/to window over `createdAt`, both boundaries inclusive', () => {
@@ -523,7 +570,7 @@ describe('cost-ledger repo', () => {
     })
 
     expect(summary.totalCostMicros).toBe(100)
-    expect(summary.unfilteredTotalCostMicros).toBe(1_900)
+    expect(costLedger.getOrganizationSpentMicros(orgA, testDb.db)).toBe(1_900)
   })
 
   it('still lists a course with no usage left after filtering, at zero', () => {
@@ -557,13 +604,24 @@ describe('cost-ledger repo', () => {
     ])
   })
 
-  // --- WEB-77: the unfiltered `people` list --------------------------------
+  // --- WEB-77/round 2: `listOrganizationUsagePeople` -----------------------
+  // must-fix 8 — a standalone function now, not part of
+  // `getOrganizationUsageSummary`'s own return, so a caller that reads only
+  // the summary never pays for this query.
 
-  it('lists every person with usage in the organization, unfiltered, with the courses each has usage in', () => {
+  it('lists every person with usage in the organization, with the courses each has usage in and first/last name for the label fallback', () => {
     testDb = createTestDatabase()
     const { orgA, courseA } = seedTwoOrganizations(testDb)
-    const personA = people.createPerson(orgA, { displayName: 'Ada' }, testDb.db)
-    const personC = people.createPerson(orgA, { displayName: 'Cy' }, testDb.db)
+    const personA = people.createPerson(
+      orgA,
+      { displayName: 'Ada', firstName: 'Ada', lastName: 'Lovelace' },
+      testDb.db
+    )
+    const personC = people.createPerson(
+      orgA,
+      { firstName: 'Cy', lastName: 'Coder' },
+      testDb.db
+    )
     costLedger.recordCostLedgerEntry(
       orgA,
       ledgerEntry(courseA.id, personA.id),
@@ -575,26 +633,81 @@ describe('cost-ledger repo', () => {
       testDb.db
     )
 
-    // The `personId` filter narrows `totals`/`courses` but must not narrow
-    // `people` — the whole point of WEB-77's own list is that it offers
-    // every person the filter *could* be set to, including one the current
-    // filter has already excluded from the figures above.
-    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
-      personId: personA.id,
-    })
+    const list = costLedger.listOrganizationUsagePeople(orgA, testDb.db)
 
-    const byPersonId = new Map(summary.people.map((p) => [p.personId, p]))
+    const byPersonId = new Map(list.map((p) => [p.personId, p]))
     expect(byPersonId.get(personA.id)).toEqual({
       personId: personA.id,
       personDisplayName: 'Ada',
+      personFirstName: 'Ada',
+      personLastName: 'Lovelace',
       courseIds: [courseA.id],
     })
+    // No `displayName` set — round 2, must-fix 5: first/last name still
+    // reach the list, for `studentLabel`'s own fallback.
     expect(byPersonId.get(personC.id)).toEqual({
       personId: personC.id,
-      personDisplayName: 'Cy',
+      personDisplayName: null,
+      personFirstName: 'Cy',
+      personLastName: 'Coder',
       courseIds: [courseA.id],
     })
-    expect(summary.people).toHaveLength(2)
+    expect(list).toHaveLength(2)
+  })
+
+  it('excludes a merged-away tombstone from the list, even though its own ledger rows still exist', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA } = seedTwoOrganizations(testDb)
+    const survivor = people.createPerson(
+      orgA,
+      { displayName: 'Survivor' },
+      testDb.db
+    )
+    const loser = people.createPerson(orgA, { displayName: 'Loser' }, testDb.db)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, loser.id, { costMicros: 500 }),
+      testDb.db
+    )
+    const merged = people.mergePeople(orgA, survivor.id, loser.id, testDb.db)
+    if (!merged) throw new Error('seed merge failed')
+
+    const list = costLedger.listOrganizationUsagePeople(orgA, testDb.db)
+
+    expect(list.map((p) => p.personId)).not.toContain(loser.id)
+  })
+
+  // Round 2, must-fix 10 — the DATA-9 exclusion this file already relies on
+  // (`listOrganizationUsagePeople`'s own `isNull(people.deletedAt)` join
+  // condition), pinned directly: a soft-deleted person's own ledger row
+  // must not surface them in the Student filter's own list.
+  it('excludes a soft-deleted person from the list, even though its own ledger rows still exist', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA } = seedTwoOrganizations(testDb)
+    const deleter = accounts.createAccount(
+      orgA,
+      {
+        email: `deleter-${randomUUID()}@example.edu`,
+        displayName: 'Deleter',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const person = people.createPerson(
+      orgA,
+      { displayName: 'Departed' },
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, person.id, { costMicros: 500 }),
+      testDb.db
+    )
+    people.softDeletePerson(orgA, person.id, deleter.id, testDb.db)
+
+    const list = costLedger.listOrganizationUsagePeople(orgA, testDb.db)
+
+    expect(list.map((p) => p.personId)).not.toContain(person.id)
   })
 
   it('reports totals per organization, and nothing about a conversation', () => {

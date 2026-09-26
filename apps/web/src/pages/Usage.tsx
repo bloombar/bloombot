@@ -4,68 +4,31 @@
  * and the organization's own spending cap, settable (or clearable) right
  * here.
  *
- * An audit (`docs/ROADMAP.md`'s "Audit — surfaces that were never built")
- * found both halves of this screen missing entirely: `costLedger.organizationUsage`
- * (`@bloombot/actions`) has existed since the COST-1..6 slice, but its only
- * caller was `apps/mcp`'s own tool surface — nothing in this panel ever
- * called it, so an instructor had no way to see their own courses' spend
- * without reading a log or running a query, exactly what COST-4's own text
- * says must not be true. `organizations.setSpendingCap` (`@bloombot/db`)
- * had zero non-test callers anywhere in the monorepo — COST-3's enforcement
- * (`@bloombot/core#answer.ts`) was real, but the cap it enforces could
- * never be set outside a test. `api/client.ts#fetchOrganizationUsage`/
- * `setSpendingCap` and `costLedger.setSpendingCap` (`@bloombot/actions`,
- * this same slice's own addition) are what close both gaps; this component
- * is what a caller actually sees.
- *
  * **Three visually distinct states for the cap**, not a shared "here is a
  * number" treatment — COST-3's own enforcement stops the assistant
  * answering the moment a cap is reached, so an instructor reading this
  * screen needs "no cap at all," "a cap that has room left," and "a cap that
- * has stopped the assistant" to look nothing alike, not merely differ by a
- * word. "Cap reached" is derived here from the same comparison
- * `@bloombot/db`'s own `hasReachedSpendingCap` makes (`spent >= cap`) —
- * this screen's own read (`getOrganizationUsageSummary`) already carries
- * both numbers, so there is no second request to make just to ask the
- * question this file already has the two halves of.
+ * has stopped the assistant" to look nothing alike. "Cap reached" compares
+ * the same two numbers `@bloombot/db`'s own `hasReachedSpendingCap` does
+ * (`spent >= cap`), always against `unfilteredTotalCostMicros` (WEB-78) —
+ * never `totalCostMicros`, which a filter below can narrow — so a filter
+ * can never make the cap look like it has more or less room than it does.
  *
- * **Setting a cap is owner-only, and this screen does not wait to find
- * that out by trying.** `isOwner` (a prop, computed once in
- * `pages/Shell.tsx` from the caller's own membership) decides whether the
- * cap form renders at all — the same `isMember`/tab shape `Shell.tsx`
- * already uses for Discord/Projects/Transcripts: the *server's* own check
- * (`costLedger.setSpendingCap`'s `execute`, restricted to an owner) is what
- * actually enforces this; withholding the control here only avoids
- * offering a caller a click every attempt through which would refuse.
+ * **Setting a cap is owner-only.** `isOwner` decides whether the cap form
+ * renders at all — the server's own check
+ * (`costLedger.setSpendingCap`) is what actually enforces this; this only
+ * avoids offering a click that would refuse.
  *
- * **No email, ever.** `studentsNearLimit` shows `personDisplayName ??
- * personId` — the same fallback `components/CoursePeople.tsx#label`
- * already uses, for the same reason its own module comment gives: a
- * `null` display name is already told apart from another by a distinct id,
- * and these are real students' addresses, shown only where a screen
- * genuinely cannot tell two people apart without one, which is not the
- * case here.
+ * **No email, ever.** Every student name here goes through
+ * `components/usageFormat.ts#studentLabel` — display name, then first/last
+ * name, then the bare id.
  *
- * WEB-63 — the fetch (`useOrganizationUsageReport`) and the small format
- * helpers below it (`formatMicros`/`formatBySurface`/`studentLabel`) are
- * shared with the course editor's own Usage tab
- * (`components/CourseUsage.tsx`), which filters this same organization-wide
- * report down to one course rather than reading a second, course-scoped
- * action that does not exist.
- *
- * **WEB-77/WEB-78 — person, surface and date-range filters, applied
- * server-side.** The same three-plus-dates shape
- * `components/TranscriptBrowser.tsx`'s own filter row already uses (a
- * Student select, a Surface select with "Any surface", two `type="date"`
- * inputs, and an explicit "Apply filters" button rather than a fetch on
- * every keystroke) — `filters` (below) is only ever updated by that button,
- * and `useOrganizationUsageReport` re-fetches whenever it changes. The
- * Student select lists `report.people` — every person with usage in the
- * organization, entirely unfiltered by the current selection — never the
- * `studentsNearLimit` list, which is a different, narrower set. The cap
- * banner reads `report.unfilteredTotalCostMicros`, not `totalCostMicros`,
- * so an applied filter can never make the cap look like it has more or
- * less room than it actually does (`docs/DECISIONS.md`'s WEB-78 entry).
+ * **WEB-77/WEB-78 — person, surface and date filters, applied
+ * server-side**, via the shared `components/UsageFilterRow.tsx`.
+ * `appliedFilters` is only ever updated by that row's own "Apply
+ * filters"/"Clear filters", each a fresh fetch (`useOrganizationUsageReport`'s
+ * own doc comment). `report.totalCostMicros`/`courses`/`bySurface` reflect
+ * whatever is applied; `report.unfilteredTotalCostMicros` never does.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -76,33 +39,31 @@ import type { OrganizationUsageReport } from '../api/types.js'
 import { AppLink } from '../components/AppLink.js'
 import { BySurfaceList } from '../components/BySurfaceList.js'
 import { Button } from '../components/Button.js'
-import { dayEnd, dayStart } from '../day-boundary.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
+import { UsageFilterRow } from '../components/UsageFilterRow.js'
 import { formatMicros, studentLabel } from '../components/usageFormat.js'
 import { useOrganizationUsageReport } from '../hooks/useOrganizationUsage.js'
 import type { TabDirtyActions } from '../hooks/tabDirtyActions.js'
 import { InfoIcon, WarningIcon } from '../icons.js'
 import type { Route } from '../routing/route.js'
-import { surfaceLabel, TRANSCRIPT_SURFACES } from '../surface-label.js'
 
 export interface UsageScreenProps {
   organizationId: string
   /** Whether the caller's own membership in this organization is `'owner'` — see this file's own module comment for why the form is withheld rather than merely disabled for anyone else. */
   isOwner: boolean
-  /** WEB-79 — a course title in "Usage by course" links to that course's own settings, opened at its Usage tab (`components/AppLink.tsx`, `routing/route.ts#CourseEditorTab`). `pages/Shell.tsx`'s own `navigate`, threaded through `pages/OrganizationSettings.tsx` exactly the same way it already reaches `components/GeneralSettings.tsx` — already wrapped in `guardedNavigate` there, so this file calls it directly rather than reaching for `useNavigationGuard()` a second time. */
+  /** WEB-79 — a course title in "Usage by course" links to that course's own settings, opened at its Usage tab. `pages/Shell.tsx`'s own `navigate`, threaded through `pages/OrganizationSettings.tsx` the same way `components/GeneralSettings.tsx` already receives it — already wrapped in `guardedNavigate` there, so this file calls it directly. */
   navigate: (route: Route, options?: { replace?: boolean }) => void
   /**
    * WEB-69 — called on every change to whether this screen's own cap input
    * currently disagrees with the last-saved cap, so
    * `pages/OrganizationSettings.tsx` can fold it into that tab's own dirty
-   * flag (the same `onDirtyChange` shape `components/CourseInstructions.tsx`
-   * already exposes `pages/CourseEditor.tsx`, one level up). Optional,
-   * defaulting to a no-op — most of this file's own tests do not care.
+   * flag. Optional, defaulting to a no-op — most of this file's own tests
+   * do not care.
    */
   onDirtyChange?: (dirty: boolean) => void
-  /** WEB-69 — this tab's own save/discard handle, the same `onRegisterActions` shape `components/CourseInstructions.tsx` already exposes; called with `null` on unmount. Optional — most of this file's own tests do not care. */
+  /** WEB-69 — this tab's own save/discard handle; called with `null` on unmount. Optional — most of this file's own tests do not care. */
   onRegisterActions?: (actions: TabDirtyActions | null) => void
 }
 
@@ -110,9 +71,7 @@ export interface UsageScreenProps {
  * A cap amount, typed as a currency amount ($12.50), never micros. Blank
  * means "clear the cap" (`null`); anything else must parse as a nonnegative
  * amount with at most two decimal places (cents) — never `NaN`, which would
- * silently be sent as `null` and clear the stored cap instead of refusing,
- * the same failure `pages/CourseEditor.tsx#parseMaxRequestsPerDay`'s own
- * doc comment names for the identical shape.
+ * silently be sent as `null` and clear the stored cap instead of refusing.
  */
 function parseCapAmount(
   raw: string
@@ -125,11 +84,16 @@ function parseCapAmount(
   return { ok: true, value }
 }
 
-/** `capInput`'s own starting value for a freshly loaded (or refreshed) report — the stored cap, formatted the same way `formatMicros` renders it but without the `$`, since this feeds an editable field rather than read-only text. */
+/** `capInput`'s own starting value for a freshly loaded (or refreshed) report — the stored cap, formatted the same way `formatMicros` renders it but without the `$`. */
 function capInputFromReport(report: OrganizationUsageReport): string {
   return report.spendingCapMicros === null
     ? ''
     : (report.spendingCapMicros / 1_000_000).toFixed(2)
+}
+
+/** Every course's own call count, summed — what the filtered-total line (below) reports alongside the spend. */
+function totalCallCount(report: OrganizationUsageReport): number {
+  return report.courses.reduce((sum, course) => sum + course.callCount, 0)
 }
 
 export function Usage({
@@ -139,43 +103,16 @@ export function Usage({
   onDirtyChange = () => {},
   onRegisterActions,
 }: UsageScreenProps) {
-  // WEB-77/WEB-78 — the filter row's own draft values, matching
-  // `components/TranscriptBrowser.tsx`'s own uncontrolled Student/Surface/
-  // date fields: nothing here reaches the server until "Apply filters" is
-  // clicked (`handleApplyFilters`, below), which copies them into
-  // `appliedFilters` — the object actually passed to the fetch.
-  const [filterPersonId, setFilterPersonId] = useState('')
-  const [filterSurface, setFilterSurface] = useState<
-    '' | 'discord' | 'web' | 'mcp'
-  >('')
-  const [filterStartDate, setFilterStartDate] = useState('')
-  const [filterEndDate, setFilterEndDate] = useState('')
   const [appliedFilters, setAppliedFilters] =
     useState<OrganizationUsageFilters>({})
+  const isFiltered = Object.keys(appliedFilters).length > 0
 
-  // WEB-63 — the fetch itself is shared with the course tab's own
-  // `CourseUsage` (this file's own module comment); `refresh` is re-run
-  // below after a cap save/clear, the same as before this extraction.
   const {
     report,
     loadError,
     refresh: refreshReport,
   } = useOrganizationUsageReport(organizationId, appliedFilters)
 
-  // WEB-77/WEB-78 — reads the draft fields above into the filters object
-  // the hook actually fetches with; the `useOrganizationUsageReport` effect
-  // re-runs once `appliedFilters` changes identity (a fresh object every
-  // click, the same as `TranscriptBrowser.tsx#currentFilters`).
-  const handleApplyFilters = () => {
-    const startAt = dayStart(filterStartDate)
-    const endAt = dayEnd(filterEndDate)
-    setAppliedFilters({
-      ...(filterPersonId ? { personId: filterPersonId } : {}),
-      ...(filterSurface ? { surface: filterSurface } : {}),
-      ...(startAt !== undefined ? { from: startAt } : {}),
-      ...(endAt !== undefined ? { to: endAt } : {}),
-    })
-  }
   const [capInput, setCapInput] = useState('')
   const [capParseError, setCapParseError] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -187,32 +124,25 @@ export function Usage({
   const [saveError, setSaveError] = useState<ApiError | undefined>(undefined)
   // A live region for the one thing a screen reader cannot otherwise learn
   // from this screen's own re-render: the cap badge above changing state
-  // after a save or a clear succeeds. Cleared on every new attempt so a
-  // stale announcement never lingers alongside a fresh error — the same
-  // `statusMessage` shape `components/CoursePeople.tsx` already uses for
-  // ENRL-6/ENRL-9's identical async-status need.
+  // after a save or a clear succeeds.
   const [statusMessage, setStatusMessage] = useState<string | undefined>(
     undefined
   )
 
-  // `capInput`'s own starting value tracks the loaded (or refreshed) report
-  // — the same "seeded from a fresh report" timing the old, page-local
-  // fetch used to do inline; kept as its own effect now that the fetch
-  // itself lives in `useOrganizationUsageReport`; below.
+  // `capInput`'s own starting value tracks the loaded (or refreshed)
+  // report's own *cap*, not the report object itself (round 2, must-fix 1):
+  // applying a filter fetches a fresh `report` with the identical cap, and
+  // the old `[report]` dependency reseeded `capInput` from it every time,
+  // silently discarding an owner's own unsaved edit (and the WEB-69 dirty
+  // flag with it) the moment a filter was applied. `spendingCapMicros`
+  // itself only ever changes on a real save/clear.
   useEffect(() => {
     if (report) setCapInput(capInputFromReport(report))
-  }, [report])
+  }, [report?.spendingCapMicros])
 
   // WEB-69: returns whether the cap actually saved, so a caller that saves
   // on the way somewhere else (`pages/OrganizationSettings.tsx`'s own tab
-  // prompt, via `onRegisterActions`) knows whether it is safe to move on —
-  // the same `Promise<boolean>` shape `pages/CourseEditor.tsx#handleSave`
-  // already returns for the identical reason. A `useCallback`, like
-  // `components/CourseInstructions.tsx#handleSave` — it is handed out
-  // through `onRegisterActions`, below, so its own identity has to change
-  // whenever anything it closes over does, which is what keeps the
-  // registered action fresh rather than a stale closure over an earlier
-  // `capInput`.
+  // prompt) knows whether it is safe to move on.
   const handleSave = useCallback(async (): Promise<boolean> => {
     const parsed = parseCapAmount(capInput)
     if (!parsed.ok) {
@@ -263,10 +193,8 @@ export function Usage({
   }
 
   // WEB-69 — "dirty" for this tab: the cap input disagrees with the last
-  // report this screen actually saw, the same comparison
-  // `capInputFromReport` already makes to seed the field in the first
-  // place. `undefined` while nothing has loaded yet reads as "not dirty" —
-  // there is no saved cap yet to disagree with.
+  // report this screen actually saw. `undefined` while nothing has loaded
+  // yet reads as "not dirty."
   const isDirty =
     report !== undefined && capInput !== capInputFromReport(report)
 
@@ -274,10 +202,6 @@ export function Usage({
     onDirtyChange(isDirty)
   }, [isDirty, onDirtyChange])
 
-  // WEB-69 — handed out through `onRegisterActions`, the same
-  // `useCallback`-per-render discipline `components/CourseInstructions.tsx#handleSave`
-  // already holds itself to: a new identity every render would re-run the
-  // registration effect below on every keystroke.
   const discard = useCallback(() => {
     if (report) setCapInput(capInputFromReport(report))
     setCapParseError(false)
@@ -294,23 +218,9 @@ export function Usage({
     return () => onRegisterActions(null)
   }, [handleSave, discard, onRegisterActions])
 
-  if (loadError) {
-    return (
-      <div className="flex flex-col gap-4">
-        <h1 className="text-page-title font-semibold text-neutral-900">
-          Usage
-        </h1>
-        <ErrorMessage error={loadError} />
-      </div>
-    )
-  }
-
   // COST-3: the same comparison `@bloombot/db`'s own `hasReachedSpendingCap`
-  // makes (`spent >= cap`) — this file's own module comment has why it is
-  // safe to derive here rather than a second request. WEB-78 —
-  // `unfilteredTotalCostMicros`, not `totalCostMicros`: this judgement must
-  // stay true to the whole organization's own spend even while a filter has
-  // narrowed the figures rendered below it.
+  // makes (`spent >= cap`). `unfilteredTotalCostMicros`, not
+  // `totalCostMicros` — this file's own module comment on why.
   const capReached =
     report !== undefined &&
     report.spendingCapMicros !== null &&
@@ -324,65 +234,28 @@ export function Usage({
         {statusMessage}
       </p>
 
-      {/* WEB-77/WEB-78 — the same Student/Surface/date-range filter row
-          `components/TranscriptBrowser.tsx` already uses, with the same
-          explicit "Apply filters" button rather than a fetch per keystroke.
-          `report.people` — unfiltered — is what the Student select lists. */}
-      <div className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-end">
-        <FormField label="Student">
-          <select
-            aria-label="Student"
-            value={filterPersonId}
-            onChange={(event) => setFilterPersonId(event.target.value)}
-            className={textInputClasses}
-          >
-            <option value="">Every student</option>
-            {(report?.people ?? []).map((person) => (
-              <option key={person.personId} value={person.personId}>
-                {person.personDisplayName ?? person.personId}
-              </option>
-            ))}
-          </select>
-        </FormField>
-        <FormField label="Surface">
-          <select
-            aria-label="Surface"
-            value={filterSurface}
-            onChange={(event) =>
-              setFilterSurface(event.target.value as typeof filterSurface)
-            }
-            className={textInputClasses}
-          >
-            <option value="">Any surface</option>
-            {TRANSCRIPT_SURFACES.map((candidate) => (
-              <option key={candidate} value={candidate}>
-                {surfaceLabel(candidate)}
-              </option>
-            ))}
-          </select>
-        </FormField>
-        <FormField label="From">
-          <input
-            aria-label="From date"
-            type="date"
-            value={filterStartDate}
-            onChange={(event) => setFilterStartDate(event.target.value)}
-            className={textInputClasses}
-          />
-        </FormField>
-        <FormField label="To">
-          <input
-            aria-label="To date"
-            type="date"
-            value={filterEndDate}
-            onChange={(event) => setFilterEndDate(event.target.value)}
-            className={textInputClasses}
-          />
-        </FormField>
-        <Button variant="primary" onClick={handleApplyFilters}>
-          Apply filters
-        </Button>
-      </div>
+      <UsageFilterRow
+        people={report?.people ?? []}
+        isFiltered={isFiltered}
+        onApply={setAppliedFilters}
+        onClear={() => setAppliedFilters({})}
+      />
+
+      {/* Round 2, must-fix 3 — beneath the filter row, not replacing the
+          whole screen: a load error must never take the filter row (and any
+          way to fix what caused it) off the page. */}
+      {loadError && <ErrorMessage error={loadError} />}
+
+      {report && (
+        // Round 2, must-fix 4 (SPEC WEB-78) — the totals below the filter
+        // row can be narrowed; this line says so plainly rather than
+        // leaving a reader to notice the numbers changed.
+        <p className="text-sm font-medium text-neutral-700">
+          {isFiltered ? 'Filtered total' : 'Total'}:{' '}
+          {formatMicros(report.totalCostMicros)} · {totalCallCount(report)}{' '}
+          {totalCallCount(report) === 1 ? 'call' : 'calls'}
+        </p>
+      )}
 
       <section aria-label="Spending cap" className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Spending cap</h2>
@@ -395,13 +268,8 @@ export function Usage({
         )}
         {report && report.spendingCapMicros !== null && !capReached && (
           // A flat text node alongside the icon, not a wrapping `<span>` —
-          // the same shape `pages/Admin.tsx#ProcessBadge` already uses.
-          // Two elements (this `<div>` and a nested `<span>`) with
-          // byte-identical `textContent` is exactly the shape a text-based
-          // locator (`e2e/spending-cap.spec.ts#readCapMicros`'s own
-          // `page.getByText`) cannot tell apart without an explicit
-          // `exact`/scope — one element per distinct message avoids the
-          // ambiguity outright rather than working around it in the test.
+          // `e2e/spending-cap.spec.ts#readCapMicros`'s own `page.getByText`
+          // needs each message as its own element to avoid ambiguity.
           <div className="flex items-center gap-2 rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800">
             <InfoIcon aria-hidden="true" className="size-4 shrink-0" />
             Cap set at {formatMicros(report.spendingCapMicros)} —{' '}
@@ -421,9 +289,6 @@ export function Usage({
           </div>
         )}
         {report && report.bySurface.length > 0 && (
-          // COST-7/WEB-77 — the organization's own (possibly filtered)
-          // total above, broken down by surface, as a `<ul>` rather than
-          // one inline line.
           <div className="text-sm text-neutral-500">
             <p>By surface:</p>
             <BySurfaceList
@@ -493,8 +358,7 @@ export function Usage({
               >
                 <div className="flex items-center justify-between gap-3">
                   {/* WEB-79 — links to this course's own settings, opened
-                      directly at its Usage tab (`routing/route.ts#CourseEditorTab`),
-                      rather than a plain, unclickable title. */}
+                      directly at its Usage tab. */}
                   <AppLink
                     to={{
                       kind: 'course-editor',
@@ -512,16 +376,12 @@ export function Usage({
                     {formatMicros(course.costMicros)} · {course.callCount}{' '}
                     {course.callCount === 1 ? 'call' : 'calls'}
                     {/* COST-6: an estimate is never presented as a
-                        measurement — said plainly whenever any part of this
-                        course's own total came from one. */}
+                        measurement. */}
                     {course.estimatedCostMicros > 0 &&
                       ' · includes an estimate'}
                   </p>
                 </div>
                 {course.bySurface.length > 0 && (
-                  // COST-7/WEB-77 — this course's own total above, broken
-                  // down by surface, as a `<ul>` rather than one inline
-                  // line.
                   <div className="text-xs text-neutral-400">
                     <p>By surface:</p>
                     <BySurfaceList

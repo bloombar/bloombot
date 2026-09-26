@@ -219,6 +219,8 @@ describe('Usage (COST-3/COST-4)', () => {
             courseTitle: 'Web Design',
             personId: 'person-42',
             personDisplayName: null,
+            personFirstName: null,
+            personLastName: null,
             count: 8,
             maxRequestsPerDay: 10,
           },
@@ -373,7 +375,11 @@ describe('Usage (COST-3/COST-4)', () => {
     )
   })
 
-  it('a failed load renders the same ErrorMessage, not the usage sections', async () => {
+  // Round 2, must-fix 3 — a load error used to replace the whole screen,
+  // taking the filter row (and any way to fix what caused the error) off
+  // the page with it. It now renders beneath the filter row instead — the
+  // row (and its "Apply filters" button) stays reachable.
+  it('a failed load renders the same ErrorMessage beneath the filter row, not in place of the whole screen', async () => {
     fetchOrganizationUsage.mockRejectedValue(
       new ApiError(500, { error: 'internal_error' })
     )
@@ -385,7 +391,11 @@ describe('Usage (COST-3/COST-4)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Something went wrong. Try again.'
     )
-    expect(screen.queryByText('Usage by course')).not.toBeInTheDocument()
+    // The filter row survives the error — still reachable to fix and
+    // retry.
+    expect(
+      screen.getByRole('button', { name: 'Apply filters' })
+    ).toBeInTheDocument()
   })
 
   // --- WEB-77/WEB-78: the filter row ---------------------------------------
@@ -394,8 +404,20 @@ describe('Usage (COST-3/COST-4)', () => {
     fetchOrganizationUsage.mockResolvedValue(
       report({
         people: [
-          { personId: 'person-1', personDisplayName: 'Alice', courseIds: [] },
-          { personId: 'person-2', personDisplayName: 'Bob', courseIds: [] },
+          {
+            personId: 'person-1',
+            personDisplayName: 'Alice',
+            personFirstName: null,
+            personLastName: null,
+            courseIds: [],
+          },
+          {
+            personId: 'person-2',
+            personDisplayName: 'Bob',
+            personFirstName: null,
+            personLastName: null,
+            courseIds: [],
+          },
         ],
       })
     )
@@ -414,7 +436,13 @@ describe('Usage (COST-3/COST-4)', () => {
     fetchOrganizationUsage.mockResolvedValue(
       report({
         people: [
-          { personId: 'person-1', personDisplayName: 'Alice', courseIds: [] },
+          {
+            personId: 'person-1',
+            personDisplayName: 'Alice',
+            personFirstName: null,
+            personLastName: null,
+            courseIds: [],
+          },
         ],
       })
     )
@@ -452,6 +480,153 @@ describe('Usage (COST-3/COST-4)', () => {
     )
     const [, , appliedFilters] = fetchOrganizationUsage.mock.calls.at(-1)!
     expect(appliedFilters.from).toBeLessThan(appliedFilters.to)
+  })
+
+  // Round 2, must-fix 1 — applying a filter fetches a fresh `report` with
+  // the identical, unchanged cap; the old `[report]` effect dependency
+  // reseeded `capInput` from every fresh report, silently discarding an
+  // owner's own unsaved edit (and the WEB-69 dirty flag with it).
+  it('applying a filter does not wipe an unsaved cap edit or its WEB-69 dirty flag', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({ spendingCapMicros: 5_000_000 })
+    )
+    const onDirtyChange = vi.fn()
+
+    renderWithModal(
+      <Usage
+        organizationId="org-1"
+        isOwner={true}
+        navigate={noopNavigate}
+        onDirtyChange={onDirtyChange}
+      />
+    )
+    await screen.findByText(/Cap set at \$5\.00/)
+
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '9' },
+    })
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true))
+
+    // Applying a filter fetches a *new* report (round 2, must-fix 11) —
+    // same cap, different object.
+    fireEvent.change(screen.getByLabelText('Surface'), {
+      target: { value: 'mcp' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+    await waitFor(() => expect(fetchOrganizationUsage).toHaveBeenCalledTimes(2))
+
+    // The unsaved `9` survives, and the tab is still reported dirty.
+    expect(screen.getByLabelText('Spending cap ($)')).toHaveValue('9')
+    expect(onDirtyChange).not.toHaveBeenLastCalledWith(false)
+  })
+
+  // Round 2, must-fix 3 — a date before 1970 (a negative epoch) or a
+  // "From" after "To" used to reach the server, fail zod's `nonnegative()`
+  // check there, and replace the whole screen with an error. Caught here
+  // instead: an inline message next to the field, and no fetch at all.
+  it('refuses a "From" after "To" client-side, with an inline error, and never fetches', async () => {
+    fetchOrganizationUsage.mockResolvedValue(report())
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    await screen.findByText(/No spending cap set/)
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(screen.getByLabelText('From date'), {
+      target: { value: '2026-02-01' },
+    })
+    fireEvent.change(screen.getByLabelText('To date'), {
+      target: { value: '2026-01-01' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(await screen.findByText(/must be on or before/i)).toBeInTheDocument()
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a date before 1 January 1970 client-side, and never fetches', async () => {
+    fetchOrganizationUsage.mockResolvedValue(report())
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    await screen.findByText(/No spending cap set/)
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(screen.getByLabelText('From date'), {
+      target: { value: '1900-01-01' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(
+      await screen.findByText(/on or after 1 January 1970/i)
+    ).toBeInTheDocument()
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+  })
+
+  // Round 2, must-fix 4 (SPEC WEB-78) — the totals below the filter row can
+  // be narrowed by a filter; this line, and "Clear filters," are what make
+  // that visible rather than leaving a reader to notice the numbers moved.
+  it('shows a filtered total distinct from the unfiltered one, and a "Clear filters" control, once a filter is applied', async () => {
+    fetchOrganizationUsage
+      .mockResolvedValueOnce(report({ totalCostMicros: 9_000_000 }))
+      .mockResolvedValueOnce(report({ totalCostMicros: 1_000_000 }))
+      .mockResolvedValueOnce(report({ totalCostMicros: 9_000_000 }))
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    expect(await screen.findByText(/Total: \$9\.00/)).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Clear filters' })
+    ).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Surface'), {
+      target: { value: 'mcp' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(
+      await screen.findByText(/Filtered total: \$1\.00/)
+    ).toBeInTheDocument()
+    const clearButton = screen.getByRole('button', { name: 'Clear filters' })
+    expect(clearButton).toBeInTheDocument()
+
+    fireEvent.click(clearButton)
+    await waitFor(() => expect(fetchOrganizationUsage).toHaveBeenCalledTimes(3))
+    expect(
+      screen.queryByRole('button', { name: 'Clear filters' })
+    ).not.toBeInTheDocument()
+  })
+
+  // Round 2, must-fix 5 — `studentLabel`'s own fallback: display name,
+  // then first/last name, then the bare id — never an email, and never
+  // just the id when a real name is known through first/last alone.
+  it('falls back to a first/last name for a student with no display name set', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        studentsNearLimit: [
+          {
+            courseId: 'course-1',
+            courseTitle: 'Web Design',
+            personId: 'person-42',
+            personDisplayName: null,
+            personFirstName: 'Ada',
+            personLastName: 'Lovelace',
+            count: 8,
+            maxRequestsPerDay: 10,
+          },
+        ],
+      })
+    )
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.queryByText('person-42')).not.toBeInTheDocument()
   })
 
   // WEB-78 — the cap banner's own "spent so far" must read the whole

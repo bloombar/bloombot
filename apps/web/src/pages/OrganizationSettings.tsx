@@ -12,33 +12,36 @@
  * fetch or a pending edit the way conditionally rendering the active tab
  * alone used to).
  *
- * **The Discord tab is the one deliberate exception to "loads when first
- * opened."** `pages/Shell.tsx` already fetches `discordServers.list` on
- * mount/organization switch (TEN-8's own eager read, so the install button
- * never flashes "Install" while a real binding is still loading) — this
- * screen takes that result as a prop (`discord`, below) rather than
- * fetching it again itself. Minimal change, not a rewrite: `Shell.tsx`'s
- * own `discordBindingState`/`justInstalled` fallback is exactly the shape
- * `tests/shell.test.tsx` already covers for "shows Install while already
- * installed" (TEN-8's own audit finding), and duplicating that fetch here
- * would either race it or need it deleted from `Shell.tsx` and rebuilt
- * here for no behavioural gain — `docs/DECISIONS.md` records this choice.
+ * **General is a fifth tab, added by this slice, first in the bar and the
+ * default.** WEB-69's own SPEC text names four; this slice's own decision
+ * (`docs/DECISIONS.md`) adds General for the organization's own name
+ * (`components/GeneralSettings.tsx`, reusing WEB-57's existing rename) and,
+ * at its own bottom, the Danger zone (`components/DangerZone.tsx`,
+ * WEB-72/DATA-7's delete-organization control, moved out of
+ * `components/Team.tsx` where it used to live). Rework round 1 tried a
+ * *sixth* tab, Danger zone on its own, reached only by an owner; the user's
+ * own final decision folds it into General instead — see
+ * `components/GeneralSettings.tsx`'s own module comment and
+ * `docs/DECISIONS.md` for why. Every tab here — General included — renders
+ * for every caller regardless of role; a tab's own contents decide what an
+ * owner sees that a non-owner does not, the same split Team/Usage already
+ * draw for their own owner-only sections.
  *
- * **Danger zone is a fifth tab, added by this slice.** WEB-69's own SPEC
- * text names four; this slice's own decision (`docs/DECISIONS.md`) moves
- * WEB-72/DATA-7's delete-organization control out of `components/Team.tsx`
- * (where it used to live, at the bottom of the screen) into its own tab,
- * last in the bar, owner-only — `pages/Shell.tsx` corrects the address away
- * from it for a non-owner (that file's own module comment), so this screen
- * never has to render the tab button at all for one, and the tab bar below
- * simply omits it from `TABS` for that caller.
+ * **The Discord tab now fetches on its own first visit, like every other
+ * tab.** Rework round 1 kept `discordServers.list` eager, in `Shell.tsx`,
+ * as a deliberate one-tab exception. The user's own final decision removes
+ * that exception: `components/DiscordSettings.tsx` fetches from its own
+ * mount effect, and this screen's `visitedTabs` is what decides when that
+ * mount happens — see that file's own module comment for the fetch itself,
+ * carried over verbatim from `Shell.tsx`'s former implementation, and
+ * `docs/DECISIONS.md` for why switching organization needs no extra logic
+ * here beyond this screen's own existing `key={activeOrganizationId}`
+ * remount (`pages/Shell.tsx`).
  *
- * **Per-tab unsaved changes, not one shared flag.** Usage's spending-cap
- * input and Team's grant/invitation forms are the two tabs with anything to
- * lose; Discord, Jobs and Danger zone never hold a pending edit at all (the
- * Danger zone's own typed-name gate lives inside `useModal().prompt`'s own
- * dialog, not a field on this screen — `components/DangerZone.tsx`'s own
- * module comment). Each dirty-able tab reports its own flag through
+ * **Per-tab unsaved changes, not one shared flag.** General's own name
+ * field, Usage's spending-cap input and Team's grant/invitation forms are
+ * the three tabs with anything to lose; Discord and Jobs never hold a
+ * pending edit at all. Each dirty-able tab reports its own flag through
  * `onDirtyChange` and exposes a save/discard handle through
  * `onRegisterActions` (`hooks/tabDirtyActions.ts`), the same shape
  * `components/CourseInstructions.tsx` already exposes `pages/CourseEditor.tsx`
@@ -58,6 +61,10 @@
  * `beforeunload` half of that hook is still what this screen wants for a
  * browser-level unload, so it is reproduced verbatim below rather than
  * invented twice.
+ *
+ * A tab's own label carries a small "•" once it holds an unsaved edit —
+ * kept from this slice's first round; `docs/DECISIONS.md` records that it
+ * is optional but harmless, not a requirement this rework needed to add.
  */
 
 import {
@@ -68,13 +75,10 @@ import {
   type KeyboardEvent,
 } from 'react'
 
-import type { ApiError } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
-import { DangerZone } from '../components/DangerZone.js'
-import { ErrorMessage } from '../components/ErrorMessage.js'
-import { DiscordServerRow, InstallButton } from '../components/InstallButton.js'
+import { DiscordSettings } from '../components/DiscordSettings.js'
+import { GeneralSettings } from '../components/GeneralSettings.js'
 import { useModal } from '../components/modal/ModalProvider.js'
-import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import { Team } from '../components/Team.js'
 import { useNavigationGuard } from '../hooks/navigation-guard.js'
 import type { TabDirtyActions } from '../hooks/tabDirtyActions.js'
@@ -88,11 +92,11 @@ import { Usage } from './Usage.js'
 
 /** WEB-69 — a label for each of `ORGANIZATION_SETTINGS_TABS`'s own ids — the tab bar's own concern, not the routing module's, the same split `pages/CourseEditor.tsx#TAB_LABELS` already holds itself to. */
 const TAB_LABELS: Record<OrganizationSettingsTab, string> = {
+  general: 'General',
   discord: 'Discord',
   team: 'Team',
   usage: 'Usage',
   jobs: 'Jobs',
-  danger: 'Danger zone',
 }
 
 export interface OrganizationSettingsProps {
@@ -101,25 +105,18 @@ export interface OrganizationSettingsProps {
   tab: OrganizationSettingsTab
   /** WEB-69 — called when a tab control is clicked (or the arrow keys move selection), so `pages/Shell.tsx` can push the new address; this component's own `activeTab` state updates immediately regardless, the same "the click renders before the parent's prop comes back" reasoning `pages/CourseEditor.tsx`'s own `onNavigateTab` doc comment gives. */
   onNavigateTab: (tab: OrganizationSettingsTab) => void
-  /** Whether the caller's own membership in this organization is `'owner'` — decides whether the Danger zone tab exists at all, and whether Team's own grant form renders (`components/Team.tsx`'s own module comment). */
+  /** Whether the caller's own membership in this organization is `'owner'` — decides whether General's own name field and Danger zone render editable/at all, and whether Team's own grant form renders (`components/Team.tsx`'s own module comment). */
   isOwner: boolean
   /** The caller's own account id (ENRL-11) — threaded straight to `components/Team.tsx`. */
   viewerAccountId: string
-  /** WEB-72/DATA-7 — this organization's own name, threaded straight to `components/DangerZone.tsx`'s own typed-name gate. */
+  /** This organization's own name, threaded straight to `components/GeneralSettings.tsx` (its own field, and its own `DangerZone`'s typed-name gate). */
   organizationName: string
-  /** WEB-72/DATA-7 — `pages/Shell.tsx`'s own `navigate`, threaded straight to `components/DangerZone.tsx`. */
+  /** `pages/Shell.tsx`'s own `navigate`, threaded straight to `components/GeneralSettings.tsx`. */
   navigate: (route: Route, options?: { replace?: boolean }) => void
-  /** WEB-72/DATA-7 — `App.tsx`'s own `refreshAccount` adapter, threaded straight to `components/DangerZone.tsx`. */
+  /** `App.tsx`'s own `refreshAccount` adapter, threaded straight to `components/GeneralSettings.tsx` — called after a rename, and after a delete. */
   refreshAccount: () => Promise<AccountSummary | undefined>
-  /** TEN-8/WEB-4 — the Discord tab's own data, fetched by `pages/Shell.tsx` and threaded through unchanged (this file's own module comment on why). */
-  discord: {
-    loading: boolean
-    error?: ApiError
-    installedServers: { serverId: string; serverName: string | null }[]
-    removingServerId?: string
-    onRemove: (serverId: string) => void
-    removeError?: ApiError
-  }
+  /** TEN-8/WEB-4 — threaded straight to `components/DiscordSettings.tsx`, which is the one place that actually reads it (this file's own module comment on why the Discord tab no longer needs anything else from this screen). */
+  justInstalled?: { organizationId: string; serverId: string }
 }
 
 export function OrganizationSettings({
@@ -131,19 +128,14 @@ export function OrganizationSettings({
   organizationName,
   navigate,
   refreshAccount,
-  discord,
+  justInstalled,
 }: OrganizationSettingsProps) {
-  // WEB-69 — the tabs this caller actually sees: the Danger zone is
-  // owner-only, withheld outright rather than shown disabled — the same
-  // "withheld outright, not merely disabled" reasoning `pages/Shell.tsx`'s
-  // own module comment already gives LINK-10's tab restriction, one level
-  // up. `pages/Shell.tsx` corrects the address away from `'danger'` for a
-  // non-owner before this component ever mounts on it (that file's own
-  // module comment), so `tab` here is never `'danger'` for one — this is
-  // only what the tab *bar* offers.
-  const tabs: readonly OrganizationSettingsTab[] = isOwner
-    ? ORGANIZATION_SETTINGS_TABS
-    : ORGANIZATION_SETTINGS_TABS.filter((id) => id !== 'danger')
+  // WEB-69 — every tab renders for every caller now; a role decides what a
+  // tab's own contents show (General's own field/Danger zone, Team's own
+  // grant form), not whether the tab exists at all (this file's own module
+  // comment on why rework round 1's owner-only Danger zone tab did not
+  // survive to this round).
+  const tabs = ORGANIZATION_SETTINGS_TABS
 
   // The same `activeTab`/`activeTabRef`/`visitedTabs` shape
   // `pages/CourseEditor.tsx` already holds itself to — see that file's own
@@ -184,9 +176,9 @@ export function OrganizationSettings({
   // handle, keyed by tab id — the same `instructionsDirty`/
   // `instructionsActionsRef` shape `pages/CourseEditor.tsx` holds for its
   // one nested section, generalised here to however many of this screen's
-  // own tabs actually register one (today: Team and Usage; Discord, Jobs
-  // and Danger zone never call `onRegisterActions`/`onDirtyChange` at all,
-  // so they simply never appear in either map).
+  // own tabs actually register one (today: General, Team and Usage;
+  // Discord and Jobs never call `onRegisterActions`/`onDirtyChange` at
+  // all, so they simply never appear in either map).
   const [tabDirty, setTabDirty] = useState<
     Partial<Record<OrganizationSettingsTab, boolean>>
   >({})
@@ -350,8 +342,7 @@ export function OrganizationSettings({
         role="tablist"
         aria-label="Organization settings"
         // WEB-48/WEB-71 mirror — `pages/CourseEditor.tsx`'s own tablist
-        // uses the identical `overflow-x-auto`: five tabs (including
-        // "Danger zone," this slice's own longest label) do not all fit a
+        // uses the identical `overflow-x-auto`: five tabs do not all fit a
         // phone-width screen, and a tablist that cannot scroll sideways
         // instead pushed the whole page wider than the viewport
         // (`e2e/mobile-viewport.spec.ts`'s own WEB-48 case).
@@ -384,61 +375,36 @@ export function OrganizationSettings({
         ))}
       </div>
 
+      {visitedTabs.has('general') && (
+        <div
+          role="tabpanel"
+          id="organization-settings-tabpanel-general"
+          aria-labelledby="organization-settings-tab-general"
+          hidden={activeTab !== 'general'}
+        >
+          <GeneralSettings
+            organizationId={organizationId}
+            organizationName={organizationName}
+            isOwner={isOwner}
+            navigate={navigate}
+            refreshAccount={refreshAccount}
+            onDirtyChange={registerTabDirty('general')}
+            onRegisterActions={registerTabActions('general')}
+          />
+        </div>
+      )}
+
       {visitedTabs.has('discord') && (
         <div
           role="tabpanel"
           id="organization-settings-tabpanel-discord"
           aria-labelledby="organization-settings-tab-discord"
           hidden={activeTab !== 'discord'}
-          className="flex flex-col gap-4"
         >
-          <h1 className="text-page-title font-semibold text-neutral-900">
-            Discord
-          </h1>
-          {discord.loading ? (
-            // TEN-8: the lookup is in flight and `justInstalled` did not
-            // already answer for this organization — rendering
-            // `InstallButton` here would default to "Install," the exact
-            // bug being fixed, only momentary. WEB-45: shaped like the row
-            // this becomes once resolved (`DiscordServerRow`, below).
-            <div className="flex flex-col gap-2">
-              <SkeletonRow />
-              <LoadingStatus />
-            </div>
-          ) : discord.error ? (
-            // TEN-8: say the lookup failed rather than silently falling
-            // back to "not installed," which would offer Install for a
-            // server that may well still be bound.
-            <ErrorMessage error={discord.error} />
-          ) : (
-            // TEN-9 — every active binding gets its own row (with its own
-            // Remove), and installing another is always offered underneath
-            // — an organization is no longer limited to a single
-            // Install/Remove pair.
-            <div className="flex flex-col gap-4">
-              {discord.installedServers.length > 0 && (
-                <ul className="flex flex-col gap-2">
-                  {discord.installedServers.map(({ serverId, serverName }) => (
-                    <li key={serverId}>
-                      <DiscordServerRow
-                        serverId={serverId}
-                        serverName={serverName}
-                        onRemove={() => discord.onRemove(serverId)}
-                        removing={discord.removingServerId === serverId}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/* WEB-68 — labels itself "Install to another Discord server"
-                  once there is already at least one to add to. */}
-              <InstallButton
-                organizationId={organizationId}
-                hasExistingServer={discord.installedServers.length > 0}
-              />
-            </div>
-          )}
-          {discord.removeError && <ErrorMessage error={discord.removeError} />}
+          <DiscordSettings
+            organizationId={organizationId}
+            {...(justInstalled ? { justInstalled } : {})}
+          />
         </div>
       )}
 
@@ -483,22 +449,6 @@ export function OrganizationSettings({
           hidden={activeTab !== 'jobs'}
         >
           <Jobs organizationId={organizationId} />
-        </div>
-      )}
-
-      {isOwner && visitedTabs.has('danger') && (
-        <div
-          role="tabpanel"
-          id="organization-settings-tabpanel-danger"
-          aria-labelledby="organization-settings-tab-danger"
-          hidden={activeTab !== 'danger'}
-        >
-          <DangerZone
-            organizationId={organizationId}
-            organizationName={organizationName}
-            navigate={navigate}
-            refreshAccount={refreshAccount}
-          />
         </div>
       )}
     </div>

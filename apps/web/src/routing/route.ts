@@ -69,18 +69,21 @@ export type CourseEditorTab = (typeof COURSE_EDITOR_TABS)[number]
  * address segment, the same "one array the type, the parser's runtime guard
  * and the tab bar all agree with" shape `COURSE_EDITOR_TABS` above already
  * gives WEB-35. Discord, Team, Usage and Jobs are the SPEC's own four
- * (WEB-69's own text); Danger zone is a fifth, added by this slice's own
- * decision (`docs/DECISIONS.md`) to give WEB-72/DATA-7's delete-organization
- * control its own owner-only tab rather than leaving it at the bottom of
- * `components/Team.tsx`. Last in the array, so it renders last in the tab
- * bar — a destructive control belongs at the end, not among the others.
+ * (WEB-69's own text); General is a fifth, added by this slice's own
+ * decision (`docs/DECISIONS.md`) — the organization's own name (WEB-57's
+ * existing rename capability) and, at its own bottom, the Danger zone
+ * (WEB-72/DATA-7's delete-organization control, which used to sit at the
+ * bottom of `components/Team.tsx`). First in the array, so it is also the
+ * default tab a bare `/settings` (or a fresh visit to the screen) opens
+ * on — the organization's own name is the most orienting thing to land on,
+ * the same reasoning a course's own General tab is `COURSE_EDITOR_TABS[0]`.
  */
 export const ORGANIZATION_SETTINGS_TABS = [
+  'general',
   'discord',
   'team',
   'usage',
   'jobs',
-  'danger',
 ] as const
 
 export type OrganizationSettingsTab =

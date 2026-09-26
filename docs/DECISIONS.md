@@ -14266,23 +14266,58 @@ first — the tab can still read as dirty with no field visible to explain why, 
 page's own `<h1>MCP</h1>` heading are unchanged; only the nav item's own label moved. The brief named the drawer
 label alone, and nothing else in the screen (the heading, the page's own copy) claimed to be in scope.
 
-**WEB-76.** `/privacy` and `/terms` (`pages/StaticDocument.tsx`) now render `components/SignInHeader.tsx` above
-the document and `components/SiteFooter.tsx` below it — the same two components `pages/Home.tsx` already
-composes around its own `SignIn` panel. The brief asked for "whatever the signed-in or public header offers" for
-a signed-in visitor with no sign-in prompt, and left the choice to whichever was simplest and correct:
-`SignInHeader` turned out to already be exactly that. It is pure branding (a `Logo`, the "Bloombot" title, and a
-one-line description) with no sign-in control of its own at all — `Home.tsx`'s own layout puts the actual
-`<SignIn>` panel in a separate section below it, never inside `SignInHeader` itself. That means the same header
-is already correct for both audiences without any conditional: a signed-out visitor gets the branding a public
-document needs, and a signed-in one reading these pages from `SiteFooter`'s own link never sees a sign-in
-prompt, because `SignInHeader` was never capable of rendering one to begin with. The alternative the brief also
-offered — the signed-in `SignedInChrome` — was rejected: it needs the drawer, the organization switcher and a
-live session, none of which either document's own route resolves before rendering (`App.tsx` matches
-`/privacy`/`/terms` above every session-dependent branch, deliberately, per `StaticDocument.tsx`'s own module
-comment), and pulling that machinery in for two static pages would be the second, heavier place this decision
-did not need to reach for. `apps/web/prerender-plugin.ts` needed no changes at all — it already renders
-`StaticDocument` directly (never through `<App>`), so the new header/footer inside that same component are
-exactly what the build-time prerender now bakes into `dist/privacy/index.html`/`dist/terms/index.html` too.
+**WEB-76 (round 1, superseded below).** `/privacy` and `/terms` first reused `components/SignInHeader.tsx` (a
+centred, menu-less hero) above the document and `components/SiteFooter.tsx` below it, reasoning that
+`SignInHeader` was already correct for both a signed-out and a signed-in reader since it carries no sign-in
+control of its own to withhold. The coordinator's own review round corrected this: a hero with no menu is not
+the same thing as "carries the site's header and footer" (SPEC's own words) — a reader landing here has no way
+back into the app at all beyond the browser's own Back button. Superseded by the entry immediately below;
+recorded here only so the reasoning that turned out wrong is not silently lost.
+
+**WEB-76 (round 2 — the actual fix).** `/privacy` and `/terms` (`pages/StaticDocument.tsx`) now render inside
+`components/PublicChrome.tsx`, a new, small caller of `components/AppShell.tsx` — the same conventional header
+bar and drawer every signed-in screen already gets (`components/SignedInChrome.tsx`), reused rather than
+hand-rolled a second time. Two things make this a *public* caller of `AppShell` rather than a second
+`SignedInChrome`:
+
+- **The header names the app, never an organization.** `AppShell`'s own `headerStart` slot — `OrganizationSwitcher`
+  for every signed-in screen — carries a plain `<span>Bloombot — AI course assistant</span>` here instead.
+  `AppShell` needed no change at all to make this possible: `headerStart`/`navGroups`/`onHome` were already
+  plain, generic slots (`AppShellProps`'s own doc comments), not organization-specific ones — a second caller
+  building an organization-less menu from them is exactly what those slots already existed to admit, contrary
+  to this entry's own first guess that `AppShell` "may need a way to take a custom header title" at all.
+- **The drawer offers exactly one item — signed out, "Log in or sign up"; signed in, "Back to Bloombot" — both
+  the identical address, `{ kind: 'home' }`.** `App.tsx`'s own `resolveHomeRoute` effect already resolves that
+  one route to whichever landing screen a caller's own session earns it the instant it renders (the sign-in
+  screen, signed out; the account's own default organization, signed in), so there is no second address to
+  invent for "where does 'Home' go" distinct from "where does signing in happen" — they are the same place
+  today. No org/project/course/chat link is offered either way, since `PublicChrome` builds its own `navGroups`
+  from scratch rather than reusing any of `SignedInChrome`'s own organization-scoped ones.
+
+**`AppShell`'s own built-in footer is kept, unmodified** — not overridden with a separately-rendered
+`SiteFooter`, though the brief's own first framing ("Footer (SiteFooter) stays") read as asking for exactly
+that. Investigated and rejected: `AppShell`'s footer is a *fixed*, `h-footer`-sized bar, and the surrounding
+`<main>`'s own bottom padding is sized specifically to leave room for it (`AppShell.tsx`'s own `pb-[calc(...)]`)
+— substituting a plain, non-fixed `SiteFooter` in that slot would either leave a visible gap (nothing filling
+the space `<main>` still reserves) or require reworking `AppShell` itself to stop reserving it, for no material
+difference in what a reader actually gets: both link to the same two documents, and `AppShell`'s own copy adds a
+support address and the year. "The footer requirement is unaffected" is the reading this entry settled on,
+not "must be textually `SiteFooter` regardless of what already satisfies it" — flagged explicitly here in case
+the coordinator's own intent was the more literal one.
+
+**Signed-in state is decided by an ordinary prop, not a special case.** `pages/StaticDocument.tsx` takes
+`signedIn`/`navigate`, both optional. `apps/web/prerender-plugin.ts` still renders `StaticDocument` directly with
+neither — the defaults (`signedIn = false`, `navigate = () => {}`) are exactly the signed-out chrome a crawler
+with no session at all should see, so that build-time call needed no change. `App.tsx`'s own render (still
+matched *before* `session.kind === 'loading'`'s own skeleton, the same "a published document renders
+immediately" discipline this file's module comment already held) passes `signedIn={session.kind ===
+'signed-in'}` — always `false` on the very first paint, since `session` starts at `{ kind: 'loading' }`, so an
+account that turns out to be signed in briefly sees the signed-out drawer item before an ordinary re-render
+swaps it once `GET /auth/me` resolves. No hydration mismatch to reconcile either way: `main.tsx` mounts with
+`createRoot`, not `hydrateRoot` (`src/prerender/inject.ts`'s own comment), so the prerendered markup this
+default produces is discarded outright the instant the client bundle takes over, regardless of what it then
+renders — "pick the safe option" resolved to "there is no unsafe option here to avoid," once that was checked
+directly rather than assumed.
 
 **WEB-77/WEB-78 — filters are server-side, and the cap reads a second, unfiltered total.** `getOrganizationUsageSummary`
 (`@bloombot/db`) gained an optional `filters: { personId?, surface?, from?, to? }`, applied to the same grouped

@@ -1,8 +1,10 @@
 /**
  * WEB-75/WEB-76, end to end: the drawer's own MCP entry names what it does
  * rather than the protocol acronym, and the published legal documents carry
- * the same header/footer chrome the rest of the signed-out panel does —
- * whether or not anyone is signed in.
+ * a real header bar and drawer (`components/PublicChrome.tsx`, WEB-76
+ * rework round 1) — the app's own name and description in the header, never
+ * an organization, and a drawer offering to sign in (or a way back into the
+ * app, already signed in).
  *
  * Real throughout: the browser, `apps/web`'s own build, a real `apps/api`
  * and a real throwaway SQLite database (the same harness every other spec
@@ -46,25 +48,60 @@ test('the drawer offers "Connect to other AI tools", not the bare acronym (WEB-7
   ).toBeVisible()
 })
 
-test('the privacy page carries the site header and footer, signed out (WEB-76)', async ({
+test('the privacy page, signed out: header names the app, drawer offers to sign in, Home, Privacy, Terms — no organization link', async ({
   page,
 }) => {
   await page.goto('/privacy')
 
   await expect(page.getByTestId('privacy-page')).toBeVisible()
-  // `SignInHeader` — the same branding `pages/Home.tsx` shows above its own
-  // `SignIn` panel.
-  await expect(
-    page.getByRole('heading', { name: 'Bloombot', level: 1 })
-  ).toBeVisible()
-  // `SiteFooter` — the legal-links row, reachable from here too.
-  await expect(page.getByTestId('site-footer')).toBeVisible()
   await expect(
     page.getByRole('heading', { name: 'Privacy policy', level: 1 })
   ).toBeVisible()
+  // The header names the app itself, never an organization — no
+  // `OrganizationSwitcher` anywhere on this page.
+  await expect(page.getByRole('banner')).toContainText('Bloombot')
+  await expect(page.getByRole('banner')).toContainText('AI course assistant')
+  await expect(page.getByTestId('organization-switcher')).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'Open navigation menu' }).click()
+  const drawer = page.getByRole('dialog', { name: 'Navigation' })
+  await expect(
+    drawer.getByRole('button', { name: 'Log in or sign up' })
+  ).toBeVisible()
+  await expect(
+    drawer.getByRole('navigation', { name: 'Main' }).getByRole('button', {
+      name: 'Home',
+    })
+  ).toBeVisible()
+  await expect(
+    drawer.getByRole('button', { name: 'Back to Bloombot' })
+  ).not.toBeVisible()
+  // No org/project/course/chat link anywhere in the drawer.
+  for (const label of [
+    'Projects',
+    'Chat',
+    'Transcripts',
+    'Organization settings',
+  ]) {
+    await expect(drawer.getByRole('button', { name: label })).not.toBeVisible()
+  }
+  // The two legal documents, listed in the drawer the same as every other
+  // screen (`components/AppShell.tsx`'s own Legal nav).
+  await expect(
+    drawer.getByRole('link', { name: 'Privacy policy' })
+  ).toBeVisible()
+  await expect(
+    drawer.getByRole('link', { name: 'Terms & conditions' })
+  ).toBeVisible()
+
+  // "Log in or sign up" is the sign-in entry point itself (`/`) —
+  // `App.tsx`'s own `resolveHomeRoute` sends a signed-out visitor straight
+  // to the sign-in screen.
+  await drawer.getByRole('button', { name: 'Log in or sign up' }).click()
+  await expect(page.getByTestId('accept-legal')).toBeVisible()
 })
 
-test('the privacy page carries the same chrome, signed in, with no sign-in prompt (WEB-76)', async ({
+test('the privacy page, signed in: same header, drawer offers a way back into the app instead of a sign-in prompt', async ({
   page,
 }) => {
   const email = `web76-${randomUUID().slice(0, 8)}@example.edu`
@@ -74,13 +111,23 @@ test('the privacy page carries the same chrome, signed in, with no sign-in promp
   await page.goto('/privacy')
 
   await expect(page.getByTestId('privacy-page')).toBeVisible()
+  await expect(page.getByRole('banner')).toContainText('Bloombot')
+  await expect(page.getByTestId('organization-switcher')).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'Open navigation menu' }).click()
+  const drawer = page.getByRole('dialog', { name: 'Navigation' })
   await expect(
-    page.getByRole('heading', { name: 'Bloombot', level: 1 })
+    drawer.getByRole('button', { name: 'Back to Bloombot' })
   ).toBeVisible()
-  await expect(page.getByTestId('site-footer')).toBeVisible()
-  // `SignInHeader` carries no sign-in action of its own — this is what
-  // actually proves a signed-in visitor never sees one here.
+  await expect(
+    drawer.getByRole('button', { name: 'Log in or sign up' })
+  ).not.toBeVisible()
+  // No sign-in prompt anywhere on this page for an account already signed
+  // in.
   await expect(
     page.getByRole('button', { name: /email me a sign-in link/i })
   ).not.toBeVisible()
+
+  await drawer.getByRole('button', { name: 'Back to Bloombot' }).click()
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
 })

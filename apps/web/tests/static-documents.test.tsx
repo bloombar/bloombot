@@ -17,7 +17,7 @@
  * here rather than ship.
  */
 
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { App } from '../src/App.js'
@@ -53,6 +53,13 @@ function renderAt(pathname: string) {
   return render(<App />)
 }
 
+// AppShell's own nav is a drawer at every width (`components/AppShell.tsx`'s
+// own module comment) — a click needs the hamburger opened first, the same
+// helper `tests/shell.test.tsx#openDrawer` already uses.
+function openDrawer() {
+  fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+}
+
 describe('/privacy and /terms (published legal documents)', () => {
   it('renders the privacy policy without a session', async () => {
     renderAt('/privacy')
@@ -72,46 +79,106 @@ describe('/privacy and /terms (published legal documents)', () => {
     ).toBeInTheDocument()
   })
 
-  // WEB-76 — these pages carry the same header/footer chrome the rest of the
-  // signed-out panel does, rather than a bare document nobody can navigate
-  // away from.
-  it('renders the site header and footer around the privacy policy', async () => {
-    renderAt('/privacy')
-    await screen.findByTestId('privacy-page')
+  // WEB-76 rework round 1 — a real header bar and drawer
+  // (`components/PublicChrome.tsx`, over `components/AppShell.tsx`), not a
+  // centred hero with no menu: the header names the app itself, never an
+  // organization, and the drawer holds only what a reader with no session
+  // context needs.
+  describe('the header and drawer (WEB-76)', () => {
+    it('names the app itself in the header, never an organization', async () => {
+      renderAt('/privacy')
+      await screen.findByTestId('privacy-page')
 
-    expect(
-      screen.getByRole('heading', { name: 'Bloombot' })
-    ).toBeInTheDocument()
-    expect(screen.getByTestId('site-footer')).toBeInTheDocument()
-  })
-
-  it('shows the header and footer, and no sign-in prompt, when a session is already signed in', async () => {
-    const { fetchMe } = await import('../src/api/client.js')
-    ;(fetchMe as ReturnType<typeof vi.fn>).mockResolvedValue({
-      account: {
-        id: 'account-1',
-        memberships: [
-          {
-            organizationId: 'org-1',
-            organizationName: 'Org One',
-            role: 'owner',
-          },
-        ],
-        connectedOrganizations: [],
-      },
+      // Scoped to the `<header>` landmark ("banner") — the document's own
+      // body mentions "Bloombot" too (as the operator's own name), which a
+      // bare `screen.getByText` would otherwise collide with.
+      const header = within(screen.getByRole('banner'))
+      expect(header.getByText(/Bloombot/)).toBeInTheDocument()
+      expect(header.getByText(/AI course assistant/)).toBeInTheDocument()
+      expect(header.queryByText('Org One')).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('organization-switcher')
+      ).not.toBeInTheDocument()
     })
-    renderAt('/privacy')
-    await screen.findByTestId('privacy-page')
 
-    expect(
-      screen.getByRole('heading', { name: 'Bloombot' })
-    ).toBeInTheDocument()
-    expect(screen.getByTestId('site-footer')).toBeInTheDocument()
-    // `SignInHeader` carries no sign-in action of its own — this is what
-    // actually proves a signed-in visitor never sees one on this page.
-    expect(
-      screen.queryByRole('button', { name: /sign in/i })
-    ).not.toBeInTheDocument()
+    it('signed out: offers to sign in, Home, and no organization/project/course/chat link', async () => {
+      renderAt('/privacy')
+      await screen.findByTestId('privacy-page')
+      openDrawer()
+
+      // Scoped to the drawer's own nav — the header's logo button also
+      // carries `aria-label="Home"` (`components/AppShell.tsx`'s own home
+      // control), so an unscoped query for "Home" is ambiguous between the
+      // two.
+      const nav = within(screen.getByRole('navigation', { name: 'Main' }))
+      expect(
+        nav.getByRole('button', { name: 'Log in or sign up' })
+      ).toBeInTheDocument()
+      expect(nav.getByRole('button', { name: 'Home' })).toBeInTheDocument()
+      expect(
+        nav.queryByRole('button', { name: 'Back to Bloombot' })
+      ).not.toBeInTheDocument()
+      for (const label of [
+        'Projects',
+        'Chat',
+        'Transcripts',
+        'Organization settings',
+      ]) {
+        expect(
+          nav.queryByRole('button', { name: label })
+        ).not.toBeInTheDocument()
+      }
+    })
+
+    it('signed in: offers a link back into the app instead of a sign-in prompt, and no organization link either', async () => {
+      const { fetchMe } = await import('../src/api/client.js')
+      ;(fetchMe as ReturnType<typeof vi.fn>).mockResolvedValue({
+        account: {
+          id: 'account-1',
+          memberships: [
+            {
+              organizationId: 'org-1',
+              organizationName: 'Org One',
+              role: 'owner',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+      renderAt('/privacy')
+      await screen.findByTestId('privacy-page')
+      openDrawer()
+
+      expect(
+        screen.getByRole('button', { name: 'Back to Bloombot' })
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Log in or sign up' })
+      ).not.toBeInTheDocument()
+      // No sign-in prompt anywhere on this page for an account that is
+      // already signed in.
+      expect(
+        screen.queryByRole('button', { name: /sign in/i })
+      ).not.toBeInTheDocument()
+      expect(screen.queryByText('Org One')).not.toBeInTheDocument()
+    })
+
+    it('still lists Privacy policy and Terms in the drawer, the same as every other screen', async () => {
+      renderAt('/privacy')
+      await screen.findByTestId('privacy-page')
+      openDrawer()
+
+      // Scoped to the drawer: `AppShell`'s own fixed footer lists the same
+      // two links (`components/AppShell.tsx#Footer`), so an unscoped query
+      // would find both copies.
+      const drawer = within(screen.getByRole('dialog', { name: 'Navigation' }))
+      expect(
+        drawer.getByRole('link', { name: 'Privacy policy' })
+      ).toBeInTheDocument()
+      expect(
+        drawer.getByRole('link', { name: 'Terms & conditions' })
+      ).toBeInTheDocument()
+    })
   })
 
   it('renders the Markdown body as headings, not as literal source', async () => {

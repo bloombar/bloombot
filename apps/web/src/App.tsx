@@ -558,15 +558,36 @@ export function App() {
     [navigate, refreshSession, joinedCourse, justInstalled]
   )
 
-  // Before every session-dependent branch below, deliberately: these two are
-  // published documents, and one that only a signed-in account can read is not
-  // published at all. They render identically whether or not anyone is signed
-  // in, and neither reads the session.
+  // Before every other session-dependent branch below, deliberately: these
+  // two are published documents, and one that only a signed-in account can
+  // read is not published at all. WEB-76 rework round 1 — they are no
+  // longer wholly session-blind (their own drawer now differs, signed in or
+  // out — `components/PublicChrome.tsx`'s own module comment), but they
+  // still render on the very first paint rather than waiting behind
+  // `session.kind === 'loading'`'s own skeleton below: `signedIn` here is
+  // simply `session.kind === 'signed-in'`, `false` for every render before
+  // that resolves — an ordinary state update swaps the drawer's one item
+  // once it does, the same as any other prop derived from `session`
+  // elsewhere in this file, not a special case for these two routes.
   if (route.kind === 'privacy') {
-    return <StaticDocument document={privacyDocument} testId="privacy-page" />
+    return (
+      <StaticDocument
+        document={privacyDocument}
+        testId="privacy-page"
+        signedIn={session.kind === 'signed-in'}
+        navigate={navigate}
+      />
+    )
   }
   if (route.kind === 'terms') {
-    return <StaticDocument document={termsDocument} testId="terms-page" />
+    return (
+      <StaticDocument
+        document={termsDocument}
+        testId="terms-page"
+        signedIn={session.kind === 'signed-in'}
+        navigate={navigate}
+      />
+    )
   }
 
   if (route.kind === 'sign-in') {

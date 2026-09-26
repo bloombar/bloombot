@@ -17,14 +17,31 @@
  * one Markdown surface a different, laxer policy is how the strict one stops
  * being the rule.
  *
- * WEB-76 — carries the same header and footer chrome `Home`/`SignIn` use
- * (`SignInHeader`, `SiteFooter`), so a visitor who lands here directly does
- * not find a bare document with no way back into the app. `SignInHeader` is
- * reused deliberately rather than the signed-in drawer chrome: it is pure
- * branding (`Logo`/title/one-line description) with no sign-in action of its
- * own, so it is already correct for *both* a signed-out visitor and a signed
- * -in one reading these pages from the footer link — no sign-in prompt ever
- * renders here to withhold. Recorded as `docs/DECISIONS.md`'s WEB-76 entry.
+ * **WEB-76 rework round 1** — carries the same header-bar-and-drawer chrome
+ * every signed-in screen already has (`components/PublicChrome.tsx`, over
+ * `components/AppShell.tsx`), not the centred, menu-less hero
+ * (`components/SignInHeader.tsx`) this used to reuse — the coordinator's
+ * own correction, recorded in `docs/DECISIONS.md`'s WEB-76 entry: a reader
+ * needs a real way back into the app, not only a logo.
+ *
+ * `signedIn`/`navigate` are both optional, defaulting to "nobody is signed
+ * in yet" and "do nothing" — the two callers that matter:
+ *
+ *  - `apps/web/prerender-plugin.ts` renders this component directly, with
+ *    no session to check at all (there is no `fetchMe()` call anywhere in
+ *    that build-time pass) — the defaults are exactly the signed-out
+ *    chrome a crawler should see, with no prop to pass for either.
+ *  - `App.tsx`'s own render passes both explicitly, `signedIn` computed
+ *    from `session.kind === 'signed-in'`. Its own initial value is always
+ *    `false` (`session` starts at `{ kind: 'loading' }`), so the very
+ *    first paint — even for an account that turns out to be signed in — is
+ *    always this same signed-out chrome; once the session resolves, an
+ *    ordinary re-render swaps to "Back to Bloombot" if it turns out to be
+ *    signed in. No hydration mismatch to reconcile either way:
+ *    `main.tsx` mounts with `createRoot`, not `hydrateRoot`
+ *    (`src/prerender/inject.ts`'s own comment on why), so the prerendered
+ *    markup this default produces is discarded outright the instant the
+ *    client bundle takes over, regardless of what it then renders.
  */
 
 import ReactMarkdown, { type Components } from 'react-markdown'
@@ -33,8 +50,8 @@ import rehypeSanitize from 'rehype-sanitize'
 
 import { CHAT_MARKDOWN_SCHEMA } from '../markdown-schema.js'
 import type { StaticDocument as StaticDocumentContent } from '../content/document.js'
-import { SignInHeader } from '../components/SignInHeader.js'
-import { SiteFooter } from '../components/SiteFooter.js'
+import type { Route } from '../routing/route.js'
+import { PublicChrome } from '../components/PublicChrome.js'
 
 /**
  * Tailwind has no default styling for bare `<h2>`/`<ul>`/`<blockquote>`, so a
@@ -79,33 +96,37 @@ export interface StaticDocumentProps {
   document: StaticDocumentContent
   /** Rendered as a testid suffix, so a test can name the page it asserts on. */
   testId: string
+  /** This file's own module comment on the default and why it is safe. */
+  signedIn?: boolean
+  navigate?: (route: Route) => void
 }
 
-export function StaticDocument({ document, testId }: StaticDocumentProps) {
+export function StaticDocument({
+  document,
+  testId,
+  signedIn = false,
+  navigate = () => {},
+}: StaticDocumentProps) {
   return (
-    <div className="min-h-screen bg-neutral-50" data-testid={testId}>
-      <main className="mx-auto max-w-3xl px-4 py-12">
-        <SignInHeader />
-        <div className="mt-10">
-          <h1 className="text-page-title font-semibold text-neutral-900">
-            {document.title}
-          </h1>
-          <p className="mt-1 text-sm text-neutral-600">{document.summary}</p>
-          <p className="mt-1 text-xs text-neutral-500">
-            Last updated {document.updated}
-          </p>
-          <div className="mt-6">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[[rehypeSanitize, CHAT_MARKDOWN_SCHEMA]]}
-              components={MARKDOWN_COMPONENTS}
-            >
-              {document.body}
-            </ReactMarkdown>
-          </div>
+    <PublicChrome signedIn={signedIn} navigate={navigate}>
+      <div data-testid={testId}>
+        <h1 className="text-page-title font-semibold text-neutral-900">
+          {document.title}
+        </h1>
+        <p className="mt-1 text-sm text-neutral-600">{document.summary}</p>
+        <p className="mt-1 text-xs text-neutral-500">
+          Last updated {document.updated}
+        </p>
+        <div className="mt-6">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[[rehypeSanitize, CHAT_MARKDOWN_SCHEMA]]}
+            components={MARKDOWN_COMPONENTS}
+          >
+            {document.body}
+          </ReactMarkdown>
         </div>
-      </main>
-      <SiteFooter />
-    </div>
+      </div>
+    </PublicChrome>
   )
 }

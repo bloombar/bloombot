@@ -1080,15 +1080,30 @@ export function listJobs(organizationId: string): Promise<JobStatus[]> {
  * What `pages/Usage.tsx` calls.
  */
 
-/** COST-4: usage cost per course in the caller's own organization, plus which students are approaching a course's own daily limit, for `day` (`YYYY-MM-DD`). */
+/**
+ * WEB-77/WEB-78 — the optional filters `fetchOrganizationUsage` narrows the
+ * read by, passed straight through to `costLedger.organizationUsage`'s own
+ * input schema (`packages/actions/src/actions/cost-ledger.ts`). All
+ * optional and all combine (`AND`) — see that schema's own comment for how.
+ */
+export interface OrganizationUsageFilters {
+  personId?: string
+  surface?: 'discord' | 'web' | 'mcp'
+  /** Epoch milliseconds — the same unit `TranscriptFilters.startAt`/`endAt` already use for the identical `<input type="date">` boundary. */
+  from?: number
+  to?: number
+}
+
+/** COST-4: usage cost per course in the caller's own organization, plus which students are approaching a course's own daily limit, for `day` (`YYYY-MM-DD`). `filters` (WEB-77/WEB-78, optional) narrows the totals by person, surface and/or a date range — `unfilteredTotalCostMicros`/`studentsNearLimit` in the result stay unaffected by it. */
 export function fetchOrganizationUsage(
   organizationId: string,
-  day: string
+  day: string,
+  filters: OrganizationUsageFilters = {}
 ): Promise<OrganizationUsageReport> {
   return dispatchAction<OrganizationUsageReport>(
     organizationId,
     'costLedger.organizationUsage',
-    { day }
+    { day, ...filters }
   )
 }
 

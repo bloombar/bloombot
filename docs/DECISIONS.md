@@ -14259,3 +14259,73 @@ on top of the first would have double-submitted the same edit (Usage's own spend
 tree entirely, but nothing clears whatever a person had already typed into `Team.tsx`'s own grant-form email
 first — the tab can still read as dirty with no field visible to explain why, and a leave-save through
 `saveAllDirtyTabs` would submit that stale value. Left unfixed here; it needs its own slice.
+
+## D-144 — `apps/web`: WEB-75..79 — a plain drawer rename, the signed-out chrome reused for signed-in too, server-side usage filters, and the cap's own unfiltered total
+
+**WEB-75.** The drawer's MCP entry becomes "Connect to other AI tools" — the route/key (`'mcp'`) and the `Mcp.tsx`
+page's own `<h1>MCP</h1>` heading are unchanged; only the nav item's own label moved. The brief named the drawer
+label alone, and nothing else in the screen (the heading, the page's own copy) claimed to be in scope.
+
+**WEB-76.** `/privacy` and `/terms` (`pages/StaticDocument.tsx`) now render `components/SignInHeader.tsx` above
+the document and `components/SiteFooter.tsx` below it — the same two components `pages/Home.tsx` already
+composes around its own `SignIn` panel. The brief asked for "whatever the signed-in or public header offers" for
+a signed-in visitor with no sign-in prompt, and left the choice to whichever was simplest and correct:
+`SignInHeader` turned out to already be exactly that. It is pure branding (a `Logo`, the "Bloombot" title, and a
+one-line description) with no sign-in control of its own at all — `Home.tsx`'s own layout puts the actual
+`<SignIn>` panel in a separate section below it, never inside `SignInHeader` itself. That means the same header
+is already correct for both audiences without any conditional: a signed-out visitor gets the branding a public
+document needs, and a signed-in one reading these pages from `SiteFooter`'s own link never sees a sign-in
+prompt, because `SignInHeader` was never capable of rendering one to begin with. The alternative the brief also
+offered — the signed-in `SignedInChrome` — was rejected: it needs the drawer, the organization switcher and a
+live session, none of which either document's own route resolves before rendering (`App.tsx` matches
+`/privacy`/`/terms` above every session-dependent branch, deliberately, per `StaticDocument.tsx`'s own module
+comment), and pulling that machinery in for two static pages would be the second, heavier place this decision
+did not need to reach for. `apps/web/prerender-plugin.ts` needed no changes at all — it already renders
+`StaticDocument` directly (never through `<App>`), so the new header/footer inside that same component are
+exactly what the build-time prerender now bakes into `dist/privacy/index.html`/`dist/terms/index.html` too.
+
+**WEB-77/WEB-78 — filters are server-side, and the cap reads a second, unfiltered total.** `getOrganizationUsageSummary`
+(`@bloombot/db`) gained an optional `filters: { personId?, surface?, from?, to? }`, applied to the same grouped
+`totals` query that already produces `courses`/`bySurface` — every filter combines with `AND`, and a course
+left with no rows after filtering still appears, at zero, exactly as an *unfiltered* course with no usage always
+has. `costLedger.organizationUsage` (`@bloombot/actions`) validates the same shape with zod (`surface` narrowed
+to the three real values, `'unknown'` excluded — a filter never offers the historical backfill bucket) and
+passes it straight through; `studentsNearLimit` is explicitly untouched, per the brief's own scope.
+
+The organization's own whole-organization spend is carried as a *second* field, `unfilteredTotalCostMicros`
+(computed by the existing, always-unscoped `getOrganizationSpentMicros`), alongside the now-possibly-filtered
+`totalCostMicros`. `pages/Usage.tsx`'s own cap banner ("Cap set at… spent so far" / "Cap reached…") reads only
+the unfiltered field for its own spent/reached judgement — WEB-78's own requirement, verbatim: a filter must
+never make the cap look like it has more or less room than it actually does. This is a second field on the same
+response rather than a second request, the same "the read already carries both numbers" reasoning
+`pages/Usage.tsx`'s own pre-existing module comment already gives for deriving `capReached` locally at all.
+
+The report also carries `people: OrganizationUsagePerson[]` — every person with a ledger row in the
+organization, always unfiltered, each with a display label (`people.displayName`, never an email — the same
+source `repos/transcript-access.ts#listPeopleWithTranscript` already reads for the identical no-email rule) and
+the `courseIds` they have usage in. The organization Usage tab's own Student filter lists this whole,
+unfiltered set; the course tab's own Student filter (`components/CourseUsage.tsx`) narrows it client-side to the
+one course by `courseIds.includes(courseId)` — no second server read for that narrower list, since the
+unfiltered one already carries enough to slice it.
+
+Both filter rows (`pages/Usage.tsx`, `components/CourseUsage.tsx`) mirror `components/TranscriptBrowser.tsx`'s
+own shape exactly: a Student select, a Surface select defaulting to "Any surface", two `type="date"` inputs, and
+an explicit "Apply filters" button — nothing here fetches on a keystroke. The local-day→epoch-ms boundary
+helper (`dayStart`/`dayEnd`) used to live only inside `TranscriptBrowser.tsx`; it moved out to its own module
+(`apps/web/src/day-boundary.ts`) so both Usage screens could reuse it rather than each keeping a second copy —
+`TranscriptBrowser.tsx` now imports it too, with no change to its own behaviour.
+
+`formatBySurface` (`components/usageFormat.ts`) stays — the admin console's own pages (`pages/admin/*`) keep an
+entirely separate copy in `pages/admin/shared.tsx`, untouched, and neither was in scope. `pages/Usage.tsx` and
+`components/CourseUsage.tsx` render the new `components/BySurfaceList.tsx` instead — a `<ul>`, one `<li>` per
+surface, reusing a new `formatBySurfaceEntry` (extracted from `formatBySurface`, which now just maps and joins
+it) so the wording lives in one place for both the inline line and the list.
+
+**WEB-79.** `CourseUsageSummary` (`@bloombot/db`, `@bloombot/actions`, and `apps/web`'s own mirror in
+`api/types.ts`) gained a `projectId` field — the report otherwise had no way to build a `course-editor` route
+(`routing/route.ts`, which needs `projectId` alongside `courseId`) for a course title's own link. "Usage by
+course"'s course titles are now `components/AppLink.tsx`, opened at that course's own Usage tab
+(`tab: 'usage'`), routed through `pages/Usage.tsx`'s own new `navigate` prop — threaded from `pages/Shell.tsx`
+through `pages/OrganizationSettings.tsx` exactly the way `components/GeneralSettings.tsx` already receives it,
+already wrapped in `guardedNavigate` at that same hand-off, so `Usage.tsx` calls it directly rather than reaching
+for `useNavigationGuard()` a second time.

@@ -72,6 +72,48 @@ describe('/privacy and /terms (published legal documents)', () => {
     ).toBeInTheDocument()
   })
 
+  // WEB-76 — these pages carry the same header/footer chrome the rest of the
+  // signed-out panel does, rather than a bare document nobody can navigate
+  // away from.
+  it('renders the site header and footer around the privacy policy', async () => {
+    renderAt('/privacy')
+    await screen.findByTestId('privacy-page')
+
+    expect(
+      screen.getByRole('heading', { name: 'Bloombot' })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('site-footer')).toBeInTheDocument()
+  })
+
+  it('shows the header and footer, and no sign-in prompt, when a session is already signed in', async () => {
+    const { fetchMe } = await import('../src/api/client.js')
+    ;(fetchMe as ReturnType<typeof vi.fn>).mockResolvedValue({
+      account: {
+        id: 'account-1',
+        memberships: [
+          {
+            organizationId: 'org-1',
+            organizationName: 'Org One',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    renderAt('/privacy')
+    await screen.findByTestId('privacy-page')
+
+    expect(
+      screen.getByRole('heading', { name: 'Bloombot' })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('site-footer')).toBeInTheDocument()
+    // `SignInHeader` carries no sign-in action of its own — this is what
+    // actually proves a signed-in visitor never sees one on this page.
+    expect(
+      screen.queryByRole('button', { name: /sign in/i })
+    ).not.toBeInTheDocument()
+  })
+
   it('renders the Markdown body as headings, not as literal source', async () => {
     renderAt('/privacy')
     await screen.findByTestId('privacy-page')

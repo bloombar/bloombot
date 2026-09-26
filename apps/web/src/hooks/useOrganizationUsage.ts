@@ -9,7 +9,11 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { ApiError, fetchOrganizationUsage } from '../api/client.js'
+import {
+  ApiError,
+  fetchOrganizationUsage,
+  type OrganizationUsageFilters,
+} from '../api/client.js'
 import type { OrganizationUsageReport } from '../api/types.js'
 
 /**
@@ -36,8 +40,18 @@ export function today(): string {
  * move the numbers (`pages/Usage.tsx`'s own cap save/clear, for instance).
  * `refresh` resolves once the fetch lands, so a caller with its own
  * follow-up state (`pages/Usage.tsx`'s `capInput`) can chain off it.
+ *
+ * `filters` (WEB-77/WEB-78, optional) is passed straight through to
+ * `fetchOrganizationUsage` — a caller re-fetches by passing a new object
+ * (`pages/Usage.tsx`/`components/CourseUsage.tsx`'s own "Apply filters"
+ * button, the same explicit-apply discipline
+ * `components/TranscriptBrowser.tsx` already uses rather than fetching on
+ * every keystroke).
  */
-export function useOrganizationUsageReport(organizationId: string): {
+export function useOrganizationUsageReport(
+  organizationId: string,
+  filters: OrganizationUsageFilters = {}
+): {
   report: OrganizationUsageReport | undefined
   loadError: ApiError | undefined
   refresh: () => Promise<void>
@@ -49,7 +63,7 @@ export function useOrganizationUsageReport(organizationId: string): {
 
   const refresh = useCallback(
     () =>
-      fetchOrganizationUsage(organizationId, today()).then(
+      fetchOrganizationUsage(organizationId, today(), filters).then(
         (result) => {
           setReport(result)
           setLoadError(undefined)
@@ -59,7 +73,13 @@ export function useOrganizationUsageReport(organizationId: string): {
           else throw caught
         }
       ),
-    [organizationId]
+    // `filters` is a plain object literal at every call site — comparing by
+    // its own serialized fields (rather than by reference) is what makes an
+    // unchanged filter set stable across a caller's own re-render, the same
+    // "compared by `JSON.stringify`, not a field-by-field diff" discipline
+    // `hooks/useFormDirty.ts`'s own module comment already holds itself to
+    // for the identical reason.
+    [organizationId, JSON.stringify(filters)]
   )
 
   useEffect(() => {

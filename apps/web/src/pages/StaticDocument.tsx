@@ -16,6 +16,15 @@
  * `CHAT_MARKDOWN_SCHEMA` is the allowlist this app already trusts, and giving
  * one Markdown surface a different, laxer policy is how the strict one stops
  * being the rule.
+ *
+ * WEB-76 — carries the same header and footer chrome `Home`/`SignIn` use
+ * (`SignInHeader`, `SiteFooter`), so a visitor who lands here directly does
+ * not find a bare document with no way back into the app. `SignInHeader` is
+ * reused deliberately rather than the signed-in drawer chrome: it is pure
+ * branding (`Logo`/title/one-line description) with no sign-in action of its
+ * own, so it is already correct for *both* a signed-out visitor and a signed
+ * -in one reading these pages from the footer link — no sign-in prompt ever
+ * renders here to withhold. Recorded as `docs/DECISIONS.md`'s WEB-76 entry.
  */
 
 import ReactMarkdown, { type Components } from 'react-markdown'
@@ -24,6 +33,8 @@ import rehypeSanitize from 'rehype-sanitize'
 
 import { CHAT_MARKDOWN_SCHEMA } from '../markdown-schema.js'
 import type { StaticDocument as StaticDocumentContent } from '../content/document.js'
+import { SignInHeader } from '../components/SignInHeader.js'
+import { SiteFooter } from '../components/SiteFooter.js'
 
 /**
  * Tailwind has no default styling for bare `<h2>`/`<ul>`/`<blockquote>`, so a
@@ -72,23 +83,29 @@ export interface StaticDocumentProps {
 
 export function StaticDocument({ document, testId }: StaticDocumentProps) {
   return (
-    <div className="mx-auto max-w-3xl p-6" data-testid={testId}>
-      <h1 className="text-page-title font-semibold text-neutral-900">
-        {document.title}
-      </h1>
-      <p className="mt-1 text-sm text-neutral-600">{document.summary}</p>
-      <p className="mt-1 text-xs text-neutral-500">
-        Last updated {document.updated}
-      </p>
-      <div className="mt-6">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[[rehypeSanitize, CHAT_MARKDOWN_SCHEMA]]}
-          components={MARKDOWN_COMPONENTS}
-        >
-          {document.body}
-        </ReactMarkdown>
-      </div>
+    <div className="min-h-screen bg-neutral-50" data-testid={testId}>
+      <main className="mx-auto max-w-3xl px-4 py-12">
+        <SignInHeader />
+        <div className="mt-10">
+          <h1 className="text-page-title font-semibold text-neutral-900">
+            {document.title}
+          </h1>
+          <p className="mt-1 text-sm text-neutral-600">{document.summary}</p>
+          <p className="mt-1 text-xs text-neutral-500">
+            Last updated {document.updated}
+          </p>
+          <div className="mt-6">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[[rehypeSanitize, CHAT_MARKDOWN_SCHEMA]]}
+              components={MARKDOWN_COMPONENTS}
+            >
+              {document.body}
+            </ReactMarkdown>
+          </div>
+        </div>
+      </main>
+      <SiteFooter />
     </div>
   )
 }

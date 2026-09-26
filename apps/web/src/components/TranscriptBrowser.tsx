@@ -60,6 +60,7 @@ import type {
   TranscriptExport,
   TranscriptStudent,
 } from '../api/types.js'
+import { dayEnd, dayStart } from '../day-boundary.js'
 import { personIdentity } from '../person-identity.js'
 import { surfaceLabel, TRANSCRIPT_SURFACES } from '../surface-label.js'
 import { Button } from './Button.js'
@@ -90,18 +91,6 @@ export interface TranscriptBrowserProps {
   onStartDateChange?: (value: string) => void
   endDate?: string
   onEndDateChange?: (value: string) => void
-}
-
-/** A `<input type="date">` value's own start-of-day/end-of-day boundary, in epoch milliseconds — `undefined` for an empty picker, so an unset filter is genuinely omitted rather than sent as `NaN`. */
-function dayStart(value: string): number | undefined {
-  if (!value) return undefined
-  const parsed = Date.parse(`${value}T00:00:00`)
-  return Number.isNaN(parsed) ? undefined : parsed
-}
-function dayEnd(value: string): number | undefined {
-  if (!value) return undefined
-  const parsed = Date.parse(`${value}T23:59:59.999`)
-  return Number.isNaN(parsed) ? undefined : parsed
 }
 
 /** Every export this course has requested is still `pending` a moment after being requested — polled, not pushed, the same "poll a job's own status" convention `pages/CourseEditor.tsx`'s own scaffold job polling already uses. */

@@ -111,6 +111,7 @@ describe('costLedger.organizationUsage', () => {
       {
         courseId: course.id,
         courseTitle: 'Test Course',
+        projectId,
         costMicros: 500,
         estimatedCostMicros: 0,
         callCount: 1,
@@ -166,6 +167,102 @@ describe('costLedger.organizationUsage', () => {
       dispatch(
         organizationUsageAction,
         { day: '8/31/2026' },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow()
+  })
+
+  // --- WEB-77/WEB-78: filters ------------------------------------------
+
+  it('validates and passes person/surface/date filters through, narrowing the totals but not the whole-organization spend', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Org A Term'
+    )
+    const course = seedCourse(organizationId, projectId, testDb.db)
+    const personA = people.createPerson(
+      organizationId,
+      { displayName: 'A' },
+      testDb.db
+    )
+    const personB = people.createPerson(
+      organizationId,
+      { displayName: 'B' },
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: personA.id,
+        model: 'gpt-4o',
+        inputTokens: 10,
+        outputTokens: 10,
+        costMicros: 100,
+        measurement: 'measured',
+        surface: 'mcp',
+      },
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: personB.id,
+        model: 'gpt-4o',
+        inputTokens: 10,
+        outputTokens: 10,
+        costMicros: 900,
+        measurement: 'measured',
+        surface: 'discord',
+      },
+      testDb.db
+    )
+
+    const filtered = await dispatch(
+      organizationUsageAction,
+      { day: '2026-08-31', personId: personA.id, surface: 'mcp' },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(filtered.totalCostMicros).toBe(100)
+    // COST-3's cap check reads the whole organization regardless of a
+    // filter — this must stay 1_000 (both rows) even while the totals above
+    // are narrowed to `personA`'s own `mcp` usage.
+    expect(filtered.unfilteredTotalCostMicros).toBe(1_000)
+    // WEB-77 — the person list itself is unfiltered: both people appear,
+    // not only the one the current filter names.
+    expect(filtered.people.map((p) => p.personId).sort()).toEqual(
+      [personA.id, personB.id].sort()
+    )
+  })
+
+  it('rejects a surface outside the three real values', async () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrganizationWithProject(testDb.db)
+
+    await expect(
+      dispatch(
+        organizationUsageAction,
+        // `dispatch`'s own `rawInput` is `unknown` (`dispatch.ts`'s own doc
+        // comment) — nothing here is a compile-time error, only the schema
+        // itself refuses this at runtime, the same as the malformed-day
+        // test above.
+        { day: '2026-08-31', surface: 'unknown' },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow()
+  })
+
+  it('rejects a negative from/to', async () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrganizationWithProject(testDb.db)
+
+    await expect(
+      dispatch(
+        organizationUsageAction,
+        { day: '2026-08-31', from: -1 },
         { organizationId, db: testDb.db }
       )
     ).rejects.toThrow()

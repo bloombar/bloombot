@@ -244,6 +244,7 @@ describe('cost-ledger repo', () => {
       {
         courseId: courseA.id,
         courseTitle: 'Web Design',
+        projectId: courseA.projectId,
         costMicros: 700,
         estimatedCostMicros: 0,
         callCount: 1,
@@ -380,6 +381,220 @@ describe('cost-ledger repo', () => {
     expect(summaryBySurface.get('discord')?.costMicros).toBe(100)
     expect(summaryBySurface.get('web')?.costMicros).toBe(200)
     expect(summaryBySurface.get('mcp')?.costMicros).toBe(300)
+  })
+
+  // --- WEB-77/WEB-78: filters on `getOrganizationUsageSummary` ------------
+
+  it('narrows totals by person, leaving a course with none of that person`s usage at zero', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA } = seedTwoOrganizations(testDb)
+    const personA = people.createPerson(orgA, { displayName: 'A' }, testDb.db)
+    const personC = people.createPerson(orgA, { displayName: 'C' }, testDb.db)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, { costMicros: 400 }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personC.id, { costMicros: 600 }),
+      testDb.db
+    )
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
+      personId: personA.id,
+    })
+
+    expect(summary.totalCostMicros).toBe(400)
+    expect(summary.courses[0]?.costMicros).toBe(400)
+    // WEB-78 — the whole-organization total stays unfiltered even while the
+    // totals above are narrowed to one person's own usage.
+    expect(summary.unfilteredTotalCostMicros).toBe(1_000)
+  })
+
+  it('narrows totals by surface', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 100,
+        surface: 'discord',
+      }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, { costMicros: 200, surface: 'mcp' }),
+      testDb.db
+    )
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
+      surface: 'mcp',
+    })
+
+    expect(summary.totalCostMicros).toBe(200)
+    expect(summary.bySurface).toEqual([
+      { surface: 'mcp', costMicros: 200, estimatedCostMicros: 0, callCount: 1 },
+    ])
+    expect(summary.unfilteredTotalCostMicros).toBe(300)
+  })
+
+  it('narrows totals by a from/to window over `createdAt`, both boundaries inclusive', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    const early = costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, { costMicros: 100 }),
+      testDb.db
+    )
+    const late = costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, { costMicros: 200 }),
+      testDb.db
+    )
+    if (!early || !late) throw new Error('seed ledger entry failed')
+
+    // Widen the two rows' own `createdAt` well apart so a boundary test does
+    // not depend on how fast this test happens to run.
+    testDb.db.run(
+      `update cost_ledger_entries set created_at = 1000 where id = '${early.id}'`
+    )
+    testDb.db.run(
+      `update cost_ledger_entries set created_at = 2000 where id = '${late.id}'`
+    )
+
+    const fromOnly = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
+      from: 1500,
+    })
+    expect(fromOnly.totalCostMicros).toBe(200)
+
+    const toOnly = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
+      to: 1500,
+    })
+    expect(toOnly.totalCostMicros).toBe(100)
+
+    // Both boundaries inclusive — a row exactly at `from` or `to` counts.
+    const bothInclusive = costLedger.getOrganizationUsageSummary(
+      orgA,
+      testDb.db,
+      { from: 1000, to: 2000 }
+    )
+    expect(bothInclusive.totalCostMicros).toBe(300)
+  })
+
+  it('combines person, surface and date filters (AND, not OR)', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA } = seedTwoOrganizations(testDb)
+    const personA = people.createPerson(orgA, { displayName: 'A' }, testDb.db)
+    const personC = people.createPerson(orgA, { displayName: 'C' }, testDb.db)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 100,
+        surface: 'mcp',
+      }),
+      testDb.db
+    )
+    // Same person, wrong surface — must not count once `surface: 'mcp'` is
+    // also applied.
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 900,
+        surface: 'discord',
+      }),
+      testDb.db
+    )
+    // Right surface, wrong person — must not count once `personId` is also
+    // applied.
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personC.id, {
+        costMicros: 900,
+        surface: 'mcp',
+      }),
+      testDb.db
+    )
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
+      personId: personA.id,
+      surface: 'mcp',
+    })
+
+    expect(summary.totalCostMicros).toBe(100)
+    expect(summary.unfilteredTotalCostMicros).toBe(1_900)
+  })
+
+  it('still lists a course with no usage left after filtering, at zero', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA } = seedTwoOrganizations(testDb)
+    const personA = people.createPerson(orgA, { displayName: 'A' }, testDb.db)
+    const personC = people.createPerson(orgA, { displayName: 'C' }, testDb.db)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personC.id, { costMicros: 500 }),
+      testDb.db
+    )
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
+      personId: personA.id,
+    })
+
+    // `courseA` has usage, but none of it is `personA`'s own — it still
+    // appears here, at zero, the same as a course with no usage at all
+    // (this function's own long-standing, unfiltered behaviour).
+    expect(summary.courses).toEqual([
+      {
+        courseId: courseA.id,
+        courseTitle: 'Web Design',
+        projectId: courseA.projectId,
+        costMicros: 0,
+        estimatedCostMicros: 0,
+        callCount: 0,
+        bySurface: [],
+      },
+    ])
+  })
+
+  // --- WEB-77: the unfiltered `people` list --------------------------------
+
+  it('lists every person with usage in the organization, unfiltered, with the courses each has usage in', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA } = seedTwoOrganizations(testDb)
+    const personA = people.createPerson(orgA, { displayName: 'Ada' }, testDb.db)
+    const personC = people.createPerson(orgA, { displayName: 'Cy' }, testDb.db)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personC.id),
+      testDb.db
+    )
+
+    // The `personId` filter narrows `totals`/`courses` but must not narrow
+    // `people` — the whole point of WEB-77's own list is that it offers
+    // every person the filter *could* be set to, including one the current
+    // filter has already excluded from the figures above.
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db, {
+      personId: personA.id,
+    })
+
+    const byPersonId = new Map(summary.people.map((p) => [p.personId, p]))
+    expect(byPersonId.get(personA.id)).toEqual({
+      personId: personA.id,
+      personDisplayName: 'Ada',
+      courseIds: [courseA.id],
+    })
+    expect(byPersonId.get(personC.id)).toEqual({
+      personId: personC.id,
+      personDisplayName: 'Cy',
+      courseIds: [courseA.id],
+    })
+    expect(summary.people).toHaveLength(2)
   })
 
   it('reports totals per organization, and nothing about a conversation', () => {

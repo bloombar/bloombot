@@ -116,9 +116,11 @@ function report(
     spendingCapMicros: null,
     totalCostMicros: 0,
     totalEstimatedCostMicros: 0,
+    unfilteredTotalCostMicros: overrides.totalCostMicros ?? 0,
     courses: [],
     studentsNearLimit: [],
     bySurface: [],
+    people: [],
     ...overrides,
   }
 }
@@ -169,6 +171,7 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
           {
             courseId: COURSE.id,
             courseTitle: COURSE.title,
+            projectId: PROJECT.id,
             costMicros: 1_500_000,
             estimatedCostMicros: 0,
             callCount: 3,
@@ -179,6 +182,7 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
           {
             courseId: 'course-2',
             courseTitle: 'Another Course',
+            projectId: PROJECT.id,
             costMicros: 9_000_000,
             estimatedCostMicros: 0,
             callCount: 9,
@@ -241,6 +245,76 @@ describe('CourseEditor — Usage tab (WEB-63)', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Something went wrong. Try again.'
+    )
+  })
+
+  // --- WEB-77/WEB-78: person/surface/date filters, server-side ------------
+
+  it('lists only this course’s own people in the Student filter, not another course’s', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        people: [
+          {
+            personId: 'person-1',
+            personDisplayName: 'Alice',
+            courseIds: [COURSE.id],
+          },
+          {
+            personId: 'person-2',
+            personDisplayName: 'Bob',
+            courseIds: ['course-2'],
+          },
+        ],
+      })
+    )
+
+    renderEditor('usage')
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Student')).toHaveTextContent('Alice')
+    )
+    expect(screen.getByLabelText('Student')).not.toHaveTextContent('Bob')
+  })
+
+  it('applies the person/surface/date filters only once "Apply filters" is clicked, narrowing the fetch', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        people: [
+          {
+            personId: 'person-1',
+            personDisplayName: 'Alice',
+            courseIds: [COURSE.id],
+          },
+        ],
+      })
+    )
+
+    renderEditor('usage')
+    await waitFor(() =>
+      expect(screen.getByLabelText('Student')).toHaveTextContent('Alice')
+    )
+    // The mount-triggered read — the one call before any filter is applied.
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(screen.getByLabelText('Student'), {
+      target: { value: 'person-1' },
+    })
+    fireEvent.change(screen.getByLabelText('Surface'), {
+      target: { value: 'mcp' },
+    })
+    // Changing the fields alone must not re-fetch — only "Apply filters"
+    // does, the same discipline `components/TranscriptBrowser.tsx` already
+    // holds itself to.
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    await waitFor(() =>
+      expect(fetchOrganizationUsage).toHaveBeenLastCalledWith(
+        'org-1',
+        expect.any(String),
+        { personId: 'person-1', surface: 'mcp' }
+      )
     )
   })
 })

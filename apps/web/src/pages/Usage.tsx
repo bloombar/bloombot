@@ -52,29 +52,47 @@
  * (`components/CourseUsage.tsx`), which filters this same organization-wide
  * report down to one course rather than reading a second, course-scoped
  * action that does not exist.
+ *
+ * **WEB-77/WEB-78 — person, surface and date-range filters, applied
+ * server-side.** The same three-plus-dates shape
+ * `components/TranscriptBrowser.tsx`'s own filter row already uses (a
+ * Student select, a Surface select with "Any surface", two `type="date"`
+ * inputs, and an explicit "Apply filters" button rather than a fetch on
+ * every keystroke) — `filters` (below) is only ever updated by that button,
+ * and `useOrganizationUsageReport` re-fetches whenever it changes. The
+ * Student select lists `report.people` — every person with usage in the
+ * organization, entirely unfiltered by the current selection — never the
+ * `studentsNearLimit` list, which is a different, narrower set. The cap
+ * banner reads `report.unfilteredTotalCostMicros`, not `totalCostMicros`,
+ * so an applied filter can never make the cap look like it has more or
+ * less room than it actually does (`docs/DECISIONS.md`'s WEB-78 entry).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError, setSpendingCap } from '../api/client.js'
+import type { OrganizationUsageFilters } from '../api/client.js'
 import type { OrganizationUsageReport } from '../api/types.js'
+import { AppLink } from '../components/AppLink.js'
+import { BySurfaceList } from '../components/BySurfaceList.js'
 import { Button } from '../components/Button.js'
+import { dayEnd, dayStart } from '../day-boundary.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
-import {
-  formatBySurface,
-  formatMicros,
-  studentLabel,
-} from '../components/usageFormat.js'
+import { formatMicros, studentLabel } from '../components/usageFormat.js'
 import { useOrganizationUsageReport } from '../hooks/useOrganizationUsage.js'
 import type { TabDirtyActions } from '../hooks/tabDirtyActions.js'
 import { InfoIcon, WarningIcon } from '../icons.js'
+import type { Route } from '../routing/route.js'
+import { surfaceLabel, TRANSCRIPT_SURFACES } from '../surface-label.js'
 
 export interface UsageScreenProps {
   organizationId: string
   /** Whether the caller's own membership in this organization is `'owner'` — see this file's own module comment for why the form is withheld rather than merely disabled for anyone else. */
   isOwner: boolean
+  /** WEB-79 — a course title in "Usage by course" links to that course's own settings, opened at its Usage tab (`components/AppLink.tsx`, `routing/route.ts#CourseEditorTab`). `pages/Shell.tsx`'s own `navigate`, threaded through `pages/OrganizationSettings.tsx` exactly the same way it already reaches `components/GeneralSettings.tsx` — already wrapped in `guardedNavigate` there, so this file calls it directly rather than reaching for `useNavigationGuard()` a second time. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
   /**
    * WEB-69 — called on every change to whether this screen's own cap input
    * currently disagrees with the last-saved cap, so
@@ -117,9 +135,24 @@ function capInputFromReport(report: OrganizationUsageReport): string {
 export function Usage({
   organizationId,
   isOwner,
+  navigate,
   onDirtyChange = () => {},
   onRegisterActions,
 }: UsageScreenProps) {
+  // WEB-77/WEB-78 — the filter row's own draft values, matching
+  // `components/TranscriptBrowser.tsx`'s own uncontrolled Student/Surface/
+  // date fields: nothing here reaches the server until "Apply filters" is
+  // clicked (`handleApplyFilters`, below), which copies them into
+  // `appliedFilters` — the object actually passed to the fetch.
+  const [filterPersonId, setFilterPersonId] = useState('')
+  const [filterSurface, setFilterSurface] = useState<
+    '' | 'discord' | 'web' | 'mcp'
+  >('')
+  const [filterStartDate, setFilterStartDate] = useState('')
+  const [filterEndDate, setFilterEndDate] = useState('')
+  const [appliedFilters, setAppliedFilters] =
+    useState<OrganizationUsageFilters>({})
+
   // WEB-63 — the fetch itself is shared with the course tab's own
   // `CourseUsage` (this file's own module comment); `refresh` is re-run
   // below after a cap save/clear, the same as before this extraction.
@@ -127,7 +160,22 @@ export function Usage({
     report,
     loadError,
     refresh: refreshReport,
-  } = useOrganizationUsageReport(organizationId)
+  } = useOrganizationUsageReport(organizationId, appliedFilters)
+
+  // WEB-77/WEB-78 — reads the draft fields above into the filters object
+  // the hook actually fetches with; the `useOrganizationUsageReport` effect
+  // re-runs once `appliedFilters` changes identity (a fresh object every
+  // click, the same as `TranscriptBrowser.tsx#currentFilters`).
+  const handleApplyFilters = () => {
+    const startAt = dayStart(filterStartDate)
+    const endAt = dayEnd(filterEndDate)
+    setAppliedFilters({
+      ...(filterPersonId ? { personId: filterPersonId } : {}),
+      ...(filterSurface ? { surface: filterSurface } : {}),
+      ...(startAt !== undefined ? { from: startAt } : {}),
+      ...(endAt !== undefined ? { to: endAt } : {}),
+    })
+  }
   const [capInput, setCapInput] = useState('')
   const [capParseError, setCapParseError] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -259,11 +307,14 @@ export function Usage({
 
   // COST-3: the same comparison `@bloombot/db`'s own `hasReachedSpendingCap`
   // makes (`spent >= cap`) — this file's own module comment has why it is
-  // safe to derive here rather than a second request.
+  // safe to derive here rather than a second request. WEB-78 —
+  // `unfilteredTotalCostMicros`, not `totalCostMicros`: this judgement must
+  // stay true to the whole organization's own spend even while a filter has
+  // narrowed the figures rendered below it.
   const capReached =
     report !== undefined &&
     report.spendingCapMicros !== null &&
-    report.totalCostMicros >= report.spendingCapMicros
+    report.unfilteredTotalCostMicros >= report.spendingCapMicros
 
   return (
     <div className="flex flex-col gap-6" data-testid="usage-screen">
@@ -272,6 +323,66 @@ export function Usage({
       <p role="status" className="sr-only">
         {statusMessage}
       </p>
+
+      {/* WEB-77/WEB-78 — the same Student/Surface/date-range filter row
+          `components/TranscriptBrowser.tsx` already uses, with the same
+          explicit "Apply filters" button rather than a fetch per keystroke.
+          `report.people` — unfiltered — is what the Student select lists. */}
+      <div className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-end">
+        <FormField label="Student">
+          <select
+            aria-label="Student"
+            value={filterPersonId}
+            onChange={(event) => setFilterPersonId(event.target.value)}
+            className={textInputClasses}
+          >
+            <option value="">Every student</option>
+            {(report?.people ?? []).map((person) => (
+              <option key={person.personId} value={person.personId}>
+                {person.personDisplayName ?? person.personId}
+              </option>
+            ))}
+          </select>
+        </FormField>
+        <FormField label="Surface">
+          <select
+            aria-label="Surface"
+            value={filterSurface}
+            onChange={(event) =>
+              setFilterSurface(event.target.value as typeof filterSurface)
+            }
+            className={textInputClasses}
+          >
+            <option value="">Any surface</option>
+            {TRANSCRIPT_SURFACES.map((candidate) => (
+              <option key={candidate} value={candidate}>
+                {surfaceLabel(candidate)}
+              </option>
+            ))}
+          </select>
+        </FormField>
+        <FormField label="From">
+          <input
+            aria-label="From date"
+            type="date"
+            value={filterStartDate}
+            onChange={(event) => setFilterStartDate(event.target.value)}
+            className={textInputClasses}
+          />
+        </FormField>
+        <FormField label="To">
+          <input
+            aria-label="To date"
+            type="date"
+            value={filterEndDate}
+            onChange={(event) => setFilterEndDate(event.target.value)}
+            className={textInputClasses}
+          />
+        </FormField>
+        <Button variant="primary" onClick={handleApplyFilters}>
+          Apply filters
+        </Button>
+      </div>
 
       <section aria-label="Spending cap" className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Spending cap</h2>
@@ -294,7 +405,7 @@ export function Usage({
           <div className="flex items-center gap-2 rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800">
             <InfoIcon aria-hidden="true" className="size-4 shrink-0" />
             Cap set at {formatMicros(report.spendingCapMicros)} —{' '}
-            {formatMicros(report.totalCostMicros)} spent so far.
+            {formatMicros(report.unfilteredTotalCostMicros)} spent so far.
           </div>
         )}
         {report && capReached && report.spendingCapMicros !== null && (
@@ -303,18 +414,23 @@ export function Usage({
             className="flex items-center gap-2 rounded-md border border-danger-600 bg-danger-50 px-3 py-2 text-sm text-danger-700"
           >
             <WarningIcon aria-hidden="true" className="size-4 shrink-0" />
-            Cap reached — {formatMicros(report.totalCostMicros)} of{' '}
-            {formatMicros(report.spendingCapMicros)} spent. The assistant will
-            not answer until this is raised or cleared.
+            Cap reached — {formatMicros(
+              report.unfilteredTotalCostMicros
+            )} of {formatMicros(report.spendingCapMicros)} spent. The assistant
+            will not answer until this is raised or cleared.
           </div>
         )}
         {report && report.bySurface.length > 0 && (
-          // COST-7 — the organization's own total above, broken down by
-          // surface: the same terse register the total itself uses, not a
-          // second table.
-          <p className="text-sm text-neutral-500">
-            By surface: {formatBySurface(report.bySurface)}
-          </p>
+          // COST-7/WEB-77 — the organization's own (possibly filtered)
+          // total above, broken down by surface, as a `<ul>` rather than
+          // one inline line.
+          <div className="text-sm text-neutral-500">
+            <p>By surface:</p>
+            <BySurfaceList
+              bySurface={report.bySurface}
+              className="list-disc pl-5"
+            />
+          </div>
         )}
 
         {isOwner && (
@@ -376,9 +492,22 @@ export function Usage({
                 className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium text-neutral-900">
+                  {/* WEB-79 — links to this course's own settings, opened
+                      directly at its Usage tab (`routing/route.ts#CourseEditorTab`),
+                      rather than a plain, unclickable title. */}
+                  <AppLink
+                    to={{
+                      kind: 'course-editor',
+                      organizationId,
+                      projectId: course.projectId,
+                      courseId: course.courseId,
+                      tab: 'usage',
+                    }}
+                    navigate={navigate}
+                    className="text-sm font-medium text-brand-700 underline"
+                  >
                     {course.courseTitle}
-                  </p>
+                  </AppLink>
                   <p className="text-sm text-neutral-500">
                     {formatMicros(course.costMicros)} · {course.callCount}{' '}
                     {course.callCount === 1 ? 'call' : 'calls'}
@@ -390,11 +519,16 @@ export function Usage({
                   </p>
                 </div>
                 {course.bySurface.length > 0 && (
-                  // COST-7 — this course's own total above, broken down by
-                  // surface: the same terse register the total itself uses.
-                  <p className="text-xs text-neutral-400">
-                    By surface: {formatBySurface(course.bySurface)}
-                  </p>
+                  // COST-7/WEB-77 — this course's own total above, broken
+                  // down by surface, as a `<ul>` rather than one inline
+                  // line.
+                  <div className="text-xs text-neutral-400">
+                    <p>By surface:</p>
+                    <BySurfaceList
+                      bySurface={course.bySurface}
+                      className="list-disc pl-5"
+                    />
+                  </div>
                 )}
               </li>
             ))}

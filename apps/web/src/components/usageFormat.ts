@@ -16,19 +16,29 @@ export function formatMicros(micros: number): string {
 }
 
 /**
+ * COST-7 — one surface's own entry: label, cost, call count and an
+ * "(includes an estimate)" note when any part of it is an estimate. Shared
+ * by `formatBySurface` (below, for a screen still rendering one inline
+ * line) and `BySurfaceList` (WEB-77/WEB-78's own `<ul>`, one `<li>` per
+ * entry) — the wording lives in exactly one place either way.
+ */
+export function formatBySurfaceEntry(entry: CostBySurface): string {
+  const calls = entry.callCount === 1 ? 'call' : 'calls'
+  const estimateNote =
+    entry.estimatedCostMicros > 0 ? ' (includes an estimate)' : ''
+  return `${surfaceLabel(entry.surface)}: ${formatMicros(entry.costMicros)} · ${entry.callCount} ${calls}${estimateNote}`
+}
+
+/**
  * COST-7 — a terse, inline "By surface: ..." line, one entry per surface
  * `bySurface` carries (at most `discord`/`web`/`mcp`/`unknown`), joined with
- * ` · ` so this reads as a short list rather than a wall of text.
+ * ` · ` so this reads as a short list rather than a wall of text. Still used
+ * where a `<ul>` (`BySurfaceList`, `components/BySurfaceList.tsx`) has not
+ * replaced it (the admin console's own pages) — `pages/Usage.tsx` and
+ * `components/CourseUsage.tsx` render `BySurfaceList` instead (WEB-77/78).
  */
 export function formatBySurface(bySurface: CostBySurface[]): string {
-  return bySurface
-    .map((entry) => {
-      const calls = entry.callCount === 1 ? 'call' : 'calls'
-      const estimateNote =
-        entry.estimatedCostMicros > 0 ? ' (includes an estimate)' : ''
-      return `${surfaceLabel(entry.surface)}: ${formatMicros(entry.costMicros)} · ${entry.callCount} ${calls}${estimateNote}`
-    })
-    .join(' · ')
+  return bySurface.map(formatBySurfaceEntry).join(' · ')
 }
 
 /** What a near-limit row shows in place of a name — `personDisplayName` when the person has one, `personId` otherwise (never an email — `pages/Usage.tsx`'s own module comment on why). */

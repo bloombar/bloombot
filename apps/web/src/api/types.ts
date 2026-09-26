@@ -1104,6 +1104,8 @@ export interface CostBySurface {
 export interface CourseUsageSummary {
   courseId: string
   courseTitle: string
+  /** WEB-79 — what `pages/Usage.tsx` links a course's own title to its settings' Usage tab with. */
+  projectId: string
   costMicros: number
   /** The portion of `costMicros` that came from an estimate rather than a measurement (COST-6) — see `pages/Usage.tsx`'s own module comment for what this changes about how a total is shown. */
   estimatedCostMicros: number
@@ -1130,16 +1132,27 @@ export interface UsageNearLimit {
   maxRequestsPerDay: number
 }
 
+/** WEB-77 — one person with usage in the organization, unfiltered, and the courses they have usage in. Mirrors `@bloombot/db`'s own `costLedger.OrganizationUsagePerson` by hand — same no-email rule as `UsageNearLimit` above. */
+export interface OrganizationUsagePerson {
+  personId: string
+  personDisplayName: string | null
+  courseIds: string[]
+}
+
 /** COST-4 — `costLedger.organizationUsage`'s own report: every course's usage in the caller's organization, its cap (if any), and which students are approaching a course's own daily limit. Mirrors `@bloombot/actions`' own `OrganizationUsageReport` by hand. */
 export interface OrganizationUsageReport {
   organizationId: string
   spendingCapMicros: number | null
   totalCostMicros: number
   totalEstimatedCostMicros: number
+  /** WEB-78 — the organization's own whole-organization spend, unaffected by any filter passed to `fetchOrganizationUsage` — what the spending-cap banner's own "spent"/"reached" judgement must always compare against. */
+  unfilteredTotalCostMicros: number
   courses: CourseUsageSummary[]
   studentsNearLimit: UsageNearLimit[]
   /** COST-7 — the organization's own totals above, broken down by surface across every course. */
   bySurface: CostBySurface[]
+  /** WEB-77 — every person with usage in the organization, unfiltered. */
+  people: OrganizationUsagePerson[]
 }
 
 /** COST-3 — `costLedger.setSpendingCap`'s own return: what is now stored, after the call. Mirrors `@bloombot/actions`' own `SetSpendingCapResult` by hand. */

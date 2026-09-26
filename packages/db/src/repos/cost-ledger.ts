@@ -17,7 +17,7 @@
  * organization (`people.ts`'s own module comment on that mapping).
  */
 
-import { and, eq, inArray, isNull, sql, sum } from 'drizzle-orm'
+import { and, asc, eq, gte, inArray, isNull, lte, sql, sum } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import {
@@ -249,14 +249,64 @@ function sortBySurface(entries: CostBySurface[]): CostBySurface[] {
  * `estimatedCostMicros`/`callCount` above — those stay the course's whole
  * total, `bySurface`'s own entries reconcile to them rather than replacing
  * them.
+ *
+ * `projectId` (WEB-79) is what lets `pages/Usage.tsx` link a course's own
+ * title straight to its settings screen — `routing/route.ts`'s own
+ * `course-editor` route needs a `projectId` alongside `courseId`, which
+ * this summary otherwise never carries.
  */
 export interface CourseUsageSummary {
   courseId: string
   courseTitle: string
+  projectId: string
   costMicros: number
   estimatedCostMicros: number
   callCount: number
   bySurface: CostBySurface[]
+}
+
+/**
+ * WEB-77/WEB-78 — optional filters on `getOrganizationUsageSummary`'s own
+ * grouped totals: a person, a surface (one of the three real values —
+ * `'unknown'` is the historical backfill bucket, not something a filter
+ * offers), and/or a `from`/`to` window over `cost_ledger_entries.created_at`
+ * (epoch milliseconds, the same unit `recordCostLedgerEntry` already writes
+ * it in). Every field is optional and they combine (`AND`), the same way
+ * `transcripts.read`'s own filters do. A course with no rows left after
+ * filtering still appears in `courses`, at zero — this function's own
+ * long-standing behaviour (see its doc comment below), unchanged by
+ * filtering. The cap's own "spent"/"reached" judgement is deliberately
+ * unaffected by any of these — `unfilteredTotalCostMicros`, below, always
+ * reads the whole organization regardless (WEB-78: a filtered view must
+ * never make a caller believe the cap has more or less room than it does).
+ */
+export interface OrganizationUsageFilters {
+  personId?: string
+  surface?: Surface
+  from?: number
+  to?: number
+}
+
+/**
+ * WEB-77 — every person with at least one ledger row in the organization,
+ * *unfiltered* by `OrganizationUsageFilters` — so the organization's own
+ * Usage screen can offer every person its own "Student" filter could
+ * narrow down to, not merely who is left once a filter has already
+ * applied. `personDisplayName`, never an email — the same rule
+ * `pages/Usage.tsx`'s own module comment already gives for
+ * `studentsNearLimit`, mirrored here for the identical reason
+ * (`repos/transcript-access.ts#listPeopleWithTranscript`'s own
+ * `people.displayName` read is the same source). `courseIds` is what lets
+ * the course tab (`components/CourseUsage.tsx`) narrow this same list down
+ * to one course's own people, the same way `courses` already narrows to
+ * one course's own totals — a `null` `courseId` (PROJ-8: a deleted course's
+ * own ledger rows survive it) contributes to the organization-wide list but
+ * to no course's own.
+ */
+export interface OrganizationUsagePerson {
+  personId: string
+  personDisplayName: string | null
+  courseIds: string[]
 }
 
 /** COST-4's instructor read: usage across every course in the caller's own organization, plus what its cap looks like. */
@@ -266,9 +316,20 @@ export interface OrganizationUsageSummary {
   totalCostMicros: number
   /** The sum of every course's own `estimatedCostMicros` — see `CourseUsageSummary`'s own comment for why this exists at all. */
   totalEstimatedCostMicros: number
+  /**
+   * WEB-78 — the organization's own whole-organization spend, always
+   * unfiltered even when `filters` narrowed `totalCostMicros`/`courses`/
+   * `bySurface` above — the same total `getOrganizationSpentMicros` already
+   * computes, carried here so a caller does not need a second request just
+   * to keep the cap's own "spent"/"reached" judgement honest while a filter
+   * is applied.
+   */
+  unfilteredTotalCostMicros: number
   courses: CourseUsageSummary[]
   /** COST-7 — the organization's own totals above, broken down by surface across every course rather than per course. */
   bySurface: CostBySurface[]
+  /** WEB-77 — every person with usage in the organization, unfiltered — see `OrganizationUsagePerson`'s own doc comment. */
+  people: OrganizationUsagePerson[]
 }
 
 /**
@@ -277,10 +338,15 @@ export interface OrganizationUsageSummary {
  * organization's cap (if any) and its running total. A course with no
  * ledger rows yet still appears, at zero — an instructor should see every
  * course they have, not only the ones that have already cost something.
+ *
+ * `filters` (WEB-77/WEB-78, optional) narrows the totals below by person,
+ * surface and/or a `from`/`to` window — see `OrganizationUsageFilters`'s
+ * own doc comment for what stays unaffected by it.
  */
 export function getOrganizationUsageSummary(
   organizationId: string,
-  db: Database
+  db: Database,
+  filters: OrganizationUsageFilters = {}
 ): OrganizationUsageSummary {
   // DATA-9 — a soft-deleted organization or course does not appear in its
   // own usage summary.
@@ -293,12 +359,33 @@ export function getOrganizationUsageSummary(
     .get()
 
   const courseRows = db
-    .select({ id: courses.id, title: courses.title })
+    .select({
+      id: courses.id,
+      title: courses.title,
+      projectId: courses.projectId,
+    })
     .from(courses)
     .where(
       and(eq(courses.organizationId, organizationId), isNull(courses.deletedAt))
     )
     .all()
+
+  // WEB-77/WEB-78 — every filter is optional and they combine with `AND`,
+  // alongside the `organizationId` scope every query in this file already
+  // carries.
+  const totalsFilters = [eq(costLedgerEntries.organizationId, organizationId)]
+  if (filters.personId !== undefined) {
+    totalsFilters.push(eq(costLedgerEntries.personId, filters.personId))
+  }
+  if (filters.surface !== undefined) {
+    totalsFilters.push(eq(costLedgerEntries.surface, filters.surface))
+  }
+  if (filters.from !== undefined) {
+    totalsFilters.push(gte(costLedgerEntries.createdAt, filters.from))
+  }
+  if (filters.to !== undefined) {
+    totalsFilters.push(lte(costLedgerEntries.createdAt, filters.to))
+  }
 
   // COST-7 — grouped by course *and* surface in the one query, the same
   // "a CASE inside the aggregate, not a second SELECT" style the existing
@@ -315,7 +402,7 @@ export function getOrganizationUsageSummary(
       callCount: sql<number>`count(*)`,
     })
     .from(costLedgerEntries)
-    .where(eq(costLedgerEntries.organizationId, organizationId))
+    .where(and(...totalsFilters))
     .groupBy(costLedgerEntries.courseId, costLedgerEntries.surface)
     .all()
 
@@ -391,6 +478,7 @@ export function getOrganizationUsageSummary(
     return {
       courseId: row.id,
       courseTitle: row.title,
+      projectId: row.projectId,
       costMicros: totalsForCourse?.costMicros ?? 0,
       estimatedCostMicros: totalsForCourse?.estimatedCostMicros ?? 0,
       callCount: totalsForCourse?.callCount ?? 0,
@@ -398,13 +486,58 @@ export function getOrganizationUsageSummary(
     }
   })
 
+  // WEB-77 — every person with a ledger row in this organization, entirely
+  // unfiltered by `filters`, plus every course they have a row in: the same
+  // `people.displayName` (never an email) source
+  // `repos/transcript-access.ts#listPeopleWithTranscript` already reads,
+  // grouped here rather than joined through it directly since this needs
+  // `courseId` alongside the display name, not a course-scoped list.
+  const peopleRows = db
+    .selectDistinct({
+      personId: costLedgerEntries.personId,
+      personDisplayName: people.displayName,
+      courseId: costLedgerEntries.courseId,
+    })
+    .from(costLedgerEntries)
+    .innerJoin(
+      people,
+      and(
+        eq(people.id, costLedgerEntries.personId),
+        eq(people.organizationId, organizationId),
+        // DATA-9 — a soft-deleted person does not appear in the Student
+        // filter's own list either, the same exclusion
+        // `listPeopleWithTranscript`'s own `isNull(people.deletedAt)`
+        // already gives its identical join.
+        isNull(people.deletedAt)
+      )
+    )
+    .where(eq(costLedgerEntries.organizationId, organizationId))
+    .orderBy(asc(people.displayName), asc(costLedgerEntries.personId))
+    .all()
+  const peopleByPersonId = new Map<string, OrganizationUsagePerson>()
+  for (const row of peopleRows) {
+    const person = peopleByPersonId.get(row.personId) ?? {
+      personId: row.personId,
+      personDisplayName: row.personDisplayName,
+      courseIds: [],
+    }
+    // PROJ-8 — a `null` `courseId` (a deleted course's own surviving ledger
+    // row) belongs on the organization-wide list but names no course to add
+    // here.
+    if (row.courseId !== null) person.courseIds.push(row.courseId)
+    peopleByPersonId.set(row.personId, person)
+  }
+
   return {
     organizationId,
     spendingCapMicros: organization?.spendingCapMicros ?? null,
     totalCostMicros,
     totalEstimatedCostMicros,
+    // WEB-78 — always the whole organization, never narrowed by `filters`.
+    unfilteredTotalCostMicros: getOrganizationSpentMicros(organizationId, db),
     courses: coursesSummary,
     bySurface: sortBySurface([...organizationBySurface.values()]),
+    people: [...peopleByPersonId.values()],
   }
 }
 

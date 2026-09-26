@@ -49,7 +49,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { navigateTo } from './support/navigate.js'
+import { navigateToOrganizationSettingsTab } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 
 test('a Discord binding this browser never installed still shows as installed after a reload, with Remove reachable (TEN-8, WEB-4)', async ({
@@ -92,7 +92,7 @@ test('a Discord binding this browser never installed still shows as installed af
   //    ran in this test), so before this slice the Discord tab would have
   //    offered "Install" here regardless of what step 2 just bound.
   await page.reload()
-  await navigateTo(page, 'Discord')
+  await navigateToOrganizationSettingsTab(page, 'Discord')
 
   // The fetched binding is shown as installed — proves the panel reads what
   // is actually bound server-side rather than only this session's own

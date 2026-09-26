@@ -37,7 +37,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { navigateTo } from './support/navigate.js'
+import { navigateToOrganizationSettingsTab } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 
 test('a job that failed permanently in an earlier session is visible on the Jobs tab, with its error and attempt count (JOB-2)', async ({
@@ -102,7 +102,7 @@ test('a job that failed permanently in an earlier session is visible on the Jobs
   //    dispatched anything and never held this job's own id — lists it
   //    anyway: failed, distinguishable from pending/running, with its own
   //    attempt count and the reason it stopped.
-  await navigateTo(page, 'Jobs')
+  await navigateToOrganizationSettingsTab(page, 'Jobs')
   await expect(page.getByRole('heading', { name: 'Jobs' })).toBeVisible()
   const row = page
     .getByTestId('jobs-list')

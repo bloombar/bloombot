@@ -42,7 +42,10 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { navigateTo } from './support/navigate.js'
+import {
+  navigateTo,
+  navigateToOrganizationSettingsTab,
+} from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 
 test('an organization with two active Discord bindings lists both, and a course assigned to one of them is recorded against that one, not the other (TEN-9)', async ({
@@ -95,7 +98,7 @@ test('an organization with two active Discord bindings lists both, and a course 
   //    single Install/Remove pair this screen used to be — and still offers
   //    installing another.
   await page.reload()
-  await navigateTo(page, 'Discord')
+  await navigateToOrganizationSettingsTab(page, 'Discord')
   await expect(page.getByText(guildA)).toBeVisible()
   await expect(page.getByText(guildB)).toBeVisible()
   await expect(page.getByRole('button', { name: 'Remove' })).toHaveCount(2)

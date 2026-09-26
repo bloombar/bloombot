@@ -19,8 +19,8 @@ export async function openDrawer(page: Page): Promise<void> {
 }
 
 /**
- * Opens the drawer and clicks the nav item named `label` — Discord,
- * Projects, Chat, Transcripts, Usage, Team or Jobs
+ * Opens the drawer and clicks the nav item named `label` — Projects, Chat,
+ * Transcripts, MCP or "Organization settings"
  * (`pages/Shell.tsx`'s own two nav groups). Waits for the drawer to
  * actually finish closing before returning, not merely for the click to
  * register: `e2e/keyboard.spec.ts`'s own module comment has the "why" —
@@ -30,6 +30,11 @@ export async function openDrawer(page: Page): Promise<void> {
  * open, so a caller that does not wait risks its very next interaction
  * landing on an inert element (confirmed directly while building this
  * helper — see `docs/DECISIONS.md`'s own WEB-29/WEB-30 entry).
+ *
+ * WEB-69 — Discord, Team, Usage and Jobs are no longer their own nav item;
+ * a spec that used to reach one of the four directly now reaches the one
+ * "Organization settings" item and picks its own tab —
+ * `navigateToOrganizationSettingsTab`, below, is what does both steps.
  */
 export async function navigateTo(page: Page, label: string): Promise<void> {
   await openDrawer(page)
@@ -38,6 +43,26 @@ export async function navigateTo(page: Page, label: string): Promise<void> {
     .getByRole('button', { name: label })
     .click()
   await expect(page.getByRole('dialog', { name: 'Navigation' })).toBeHidden()
+}
+
+/**
+ * WEB-69 — the drawer's own "Organization settings" entry, followed by a
+ * click on `tab` (Discord, Team, Usage, Jobs or Danger zone) in the tablist
+ * it opens on — the two-step replacement for what used to be a single
+ * `navigateTo(page, 'Discord')` (or Team/Usage/Jobs) before those four
+ * became tabs on one screen rather than their own drawer entries. Skips the
+ * tab click when `tab` is Discord — the first tab, and so already showing
+ * once the drawer item lands — the same way `pages/Shell.tsx`'s own
+ * `ORGANIZATION_SETTINGS_TABS[0]` default works everywhere else in this
+ * app.
+ */
+export async function navigateToOrganizationSettingsTab(
+  page: Page,
+  tab: 'Discord' | 'Team' | 'Usage' | 'Jobs' | 'Danger zone'
+): Promise<void> {
+  await navigateTo(page, 'Organization settings')
+  if (tab === 'Discord') return
+  await page.getByRole('tab', { name: tab }).click()
 }
 
 /**

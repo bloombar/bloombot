@@ -1,20 +1,18 @@
 /**
- * WEB-69 (rework round 1): the Organization settings screen's own General
- * tab — the organization's own name, editable, and (owner-only, at the
- * bottom, visibly separated) its Danger zone.
+ * WEB-69/D-143 (`docs/DECISIONS.md`): the Organization settings screen's
+ * own General tab — the organization's own name, editable, and (owner-only,
+ * at the bottom, visibly separated) its Danger zone.
  *
  * **The rename itself is not new** — WEB-57 already built it, reached from
  * `components/OrganizationList.tsx`'s own row kebab (the Account page's
  * organization menu) and, separately, an MCP tool (`organizations_rename`,
  * `apps/mcp/src/tool-surface.ts`). This component is a second surface for
  * the identical capability, reusing `api/client.ts#renameOrganization`
- * (`organizations.rename`) rather than adding anything server-side — the
- * user's own rework brief for this round is explicit that no API code is
- * added. `OrganizationList.tsx`'s own rename stays exactly where it is
- * (a kebab-driven `prompt()` dialog on the Account page's own organization
- * list) — this is a second way to reach the same action, an inline field
- * on the tab an owner is already looking at rather than a modal reached
- * from a menu, not a replacement for it.
+ * (`organizations.rename`) rather than adding anything server-side.
+ * `OrganizationList.tsx`'s own rename stays exactly where it is (a
+ * kebab-driven `prompt()` dialog on the Account page's own organization
+ * list) — this is a second way to reach the same action, an inline field on
+ * the tab an owner is already looking at, not a replacement for it.
  *
  * **Owner-only, both to write and to show the control at all** — the same
  * "the server refuses regardless, this only decides what the panel offers"
@@ -25,9 +23,7 @@
  * A non-owner sees the name read-only, as plain text, not a disabled input
  * — a control nobody reading it could ever use is not a control.
  *
- * **The Danger zone lives here now, not its own tab.** WEB-69's own first
- * round gave it a fifth tab; the user's own final decision (rework round 1,
- * `docs/DECISIONS.md`) puts it back at the bottom of General instead —
+ * **The Danger zone lives here, not its own tab** (D-143) —
  * `components/DangerZone.tsx` itself is unchanged, still owner-only, still
  * the last, visibly separated section, still deleting exactly what it
  * always deleted.
@@ -113,7 +109,24 @@ export function GeneralSettings({
   // `onRegisterActions`, below.
   const handleSave = useCallback(async (): Promise<boolean> => {
     const trimmed = nameInput.trim()
-    if (trimmed === '') return false
+    if (trimmed === '') {
+      // Round 2: reached through the tab-switch/leave-screen prompt, not
+      // only this section's own Save button — that button is `disabled`
+      // for a blank name (below), but the prompt calls this function
+      // directly, bypassing that disabled state entirely. Refusing
+      // silently left someone stuck: the prompt's "Save changes" answer did
+      // nothing, gave no reason, and never moved on. The server would
+      // refuse this identically (`organizations.ts#renameInputSchema`'s own
+      // `.min(1)`), so this renders the same validation message inline
+      // rather than making a request that could only fail.
+      setSaveError(
+        new ApiError(400, {
+          error: 'action_input_invalid',
+          issues: [{ path: ['name'], message: 'Enter an organization name.' }],
+        })
+      )
+      return false
+    }
     setSaveError(undefined)
     setStatusMessage(undefined)
     setSaving(true)

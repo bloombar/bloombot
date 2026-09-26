@@ -224,6 +224,21 @@ export function MembershipInvitations({
     onDirtyChange(isDirty)
   }, [isDirty, onDirtyChange])
 
+  // Round 2: reports not-dirty when this form unmounts outright, which
+  // `Team.tsx`'s own loadError early return does whenever a member-list
+  // refresh fails — that early return swaps this form out of the tree
+  // without ever visiting `isDirty: false` again, so without this,
+  // `Team.tsx`'s own `invitationsDirty` flag stayed `true` for the rest of
+  // the session, and the leave-guard kept asking about an edit this form no
+  // longer holds. A ref tracks the latest `onDirtyChange` across renders so
+  // this cleanup — which fires exactly once, on unmount, not on every
+  // re-registration below — calls whichever one is actually still current.
+  const onDirtyChangeRef = useRef(onDirtyChange)
+  onDirtyChangeRef.current = onDirtyChange
+  useEffect(() => {
+    return () => onDirtyChangeRef.current(false)
+  }, [])
+
   const discard = useCallback(() => {
     setEmail('')
     setInviteError(undefined)

@@ -129,13 +129,12 @@ export type OrganizationRoute =
   | { kind: 'chat'; organizationId: string; courseId?: string }
   | TranscriptsRoute
   // WEB-69 — Discord, Team, Usage and Jobs were each their own route kind
-  // (and their own drawer entry); they are now one screen, one tab each,
-  // plus the Danger zone tab this slice added (`ORGANIZATION_SETTINGS_TABS`'s
-  // own comment on why). `buildPath` no longer has a case for any of the
-  // four old kinds — `parseRoute` still recognises their old addresses,
-  // mapping each to this same kind at the tab it named, so a bookmark or a
-  // shared link keeps working (this file's own module comment on
-  // `legacyOrganizationSettingsRedirect`, below).
+  // (and their own drawer entry); they are now one screen, one tab each
+  // (`ORGANIZATION_SETTINGS_TABS`'s own comment on the fifth, General).
+  // `buildPath` no longer has a case for any of the four old kinds —
+  // `parseRoute` still recognises their old addresses, mapping each to this
+  // same kind at the tab it named, so a bookmark or a shared link keeps
+  // working (`legacyOrganizationSettingsRedirect`, below).
   | {
       kind: 'organization-settings'
       organizationId: string
@@ -729,8 +728,12 @@ export function isSameOrganizationSettingsScreen(a: Route, b: Route): boolean {
  * unchanged (this file's own module comment on why `'not-found'` is never
  * actually navigated to on purpose).
  */
+// A trailing slash (`/o/x/team/`) still names the legacy address — `rest`
+// (`parseRoute`'s own path split, above) already ignores a trailing empty
+// segment, so this regex would otherwise miss exactly the address it
+// parses, and never correct the address bar for it.
 const LEGACY_ORGANIZATION_SETTINGS_PATH =
-  /^\/o\/[^/]+\/(discord|team|usage|jobs)$/
+  /^\/o\/[^/]+\/(discord|team|usage|jobs)\/?$/
 
 export function legacyOrganizationSettingsRedirect(
   pathname: string

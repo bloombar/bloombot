@@ -6,37 +6,26 @@
  * address (`routing/route.ts#ORGANIZATION_SETTINGS_TABS`, `pages/Shell.tsx`'s
  * own `onNavigateTab`), the tab bar is a real `role="tablist"` reachable by
  * arrow keys with roving `tabIndex`, and a tab's own contents load only once
- * it is first opened (`visitedTabs`, below — `pages/CourseEditor.tsx`'s own
- * "rework round 1, must-fix 1" reasoning applies verbatim: every tab ever
- * shown stays mounted, hidden, so switching tabs never strands an in-flight
- * fetch or a pending edit the way conditionally rendering the active tab
- * alone used to).
+ * it is first opened (`visitedTabs`, below) — every tab ever shown stays
+ * mounted, hidden, so switching tabs never strands an in-flight fetch or a
+ * pending edit.
  *
- * **General is a fifth tab, added by this slice, first in the bar and the
- * default.** WEB-69's own SPEC text names four; this slice's own decision
- * (`docs/DECISIONS.md`) adds General for the organization's own name
+ * **General is a fifth tab, first in the bar and the default** (D-143,
+ * `docs/DECISIONS.md`): the organization's own name
  * (`components/GeneralSettings.tsx`, reusing WEB-57's existing rename) and,
  * at its own bottom, the Danger zone (`components/DangerZone.tsx`,
  * WEB-72/DATA-7's delete-organization control, moved out of
- * `components/Team.tsx` where it used to live). Rework round 1 tried a
- * *sixth* tab, Danger zone on its own, reached only by an owner; the user's
- * own final decision folds it into General instead — see
- * `components/GeneralSettings.tsx`'s own module comment and
- * `docs/DECISIONS.md` for why. Every tab here — General included — renders
- * for every caller regardless of role; a tab's own contents decide what an
- * owner sees that a non-owner does not, the same split Team/Usage already
- * draw for their own owner-only sections.
+ * `components/Team.tsx` where it used to live). Every tab here — General
+ * included — renders for every caller regardless of role; a tab's own
+ * contents decide what an owner sees that a non-owner does not, the same
+ * split Team/Usage already draw for their own owner-only sections.
  *
- * **The Discord tab now fetches on its own first visit, like every other
- * tab.** Rework round 1 kept `discordServers.list` eager, in `Shell.tsx`,
- * as a deliberate one-tab exception. The user's own final decision removes
- * that exception: `components/DiscordSettings.tsx` fetches from its own
- * mount effect, and this screen's `visitedTabs` is what decides when that
- * mount happens — see that file's own module comment for the fetch itself,
- * carried over verbatim from `Shell.tsx`'s former implementation, and
- * `docs/DECISIONS.md` for why switching organization needs no extra logic
- * here beyond this screen's own existing `key={activeOrganizationId}`
- * remount (`pages/Shell.tsx`).
+ * **The Discord tab fetches on its own first visit, like every other tab**
+ * — `components/DiscordSettings.tsx` fetches from its own mount effect, and
+ * this screen's `visitedTabs` decides when that mount happens (D-143 has
+ * why switching organization needs no extra logic here, beyond this
+ * screen's own existing `key={activeOrganizationId}` remount in
+ * `pages/Shell.tsx`).
  *
  * **Per-tab unsaved changes, not one shared flag.** General's own name
  * field, Usage's spending-cap input and Team's grant/invitation forms are
@@ -49,22 +38,23 @@
  * versions of that file's `instructionsDirty`/`instructionsActionsRef`.
  * `goToTabGuarded` asks the WEB-38 three-answer question (save/discard/stay,
  * Cancel and `Escape` both meaning stay) exactly the way
- * `pages/CourseEditor.tsx#goToTabGuarded` already does; leaving the screen
- * altogether asks the identical question through a guard this screen
- * registers directly with `hooks/navigation-guard.tsx`'s own `registerGuard`
- * (below) rather than `hooks/useUnsavedChangesGuard.ts`'s own `confirmDiscard`
- * — that hook's own two-answer "discard, or keep editing" is right for
- * `pages/CourseEditor.tsx` (this screen's own decision on why it does not
- * reuse it verbatim is in `docs/DECISIONS.md`), but WEB-69's own text asks
- * for the identical three-answer prompt on *both* moves here, and a plain
- * `confirm` cannot express "save and carry on" as a third answer. The
- * `beforeunload` half of that hook is still what this screen wants for a
- * browser-level unload, so it is reproduced verbatim below rather than
- * invented twice.
+ * `pages/CourseEditor.tsx#goToTabGuarded` already does, for whichever tab is
+ * on screen. Leaving the screen altogether asks the identical question
+ * through a guard this screen registers directly with
+ * `hooks/navigation-guard.tsx`'s own `registerGuard` (below) — not
+ * `hooks/useUnsavedChangesGuard.ts`'s own two-answer `confirmDiscard`, since
+ * WEB-69 asks for the same three-answer prompt on both moves and a plain
+ * `confirm` cannot express "save and carry on" as a third answer (D-143 has
+ * why this screen does not reuse that hook verbatim). Unlike a tab switch,
+ * leaving can find more than one tab dirty at once — `saveAllDirtyTabs`/
+ * `discardAllDirtyTabs`, below, act on every dirty tab, not only the one on
+ * screen. The `beforeunload` half of that hook is still what this screen
+ * wants for a browser-level unload, so it is reproduced verbatim below
+ * rather than invented twice.
  *
  * A tab's own label carries a small "•" once it holds an unsaved edit —
- * kept from this slice's first round; `docs/DECISIONS.md` records that it
- * is optional but harmless, not a requirement this rework needed to add.
+ * optional but harmless (D-143), not a requirement WEB-69's own text asks
+ * for.
  */
 
 import {
@@ -130,11 +120,9 @@ export function OrganizationSettings({
   refreshAccount,
   justInstalled,
 }: OrganizationSettingsProps) {
-  // WEB-69 — every tab renders for every caller now; a role decides what a
+  // WEB-69 — every tab renders for every caller; a role decides what a
   // tab's own contents show (General's own field/Danger zone, Team's own
-  // grant form), not whether the tab exists at all (this file's own module
-  // comment on why rework round 1's owner-only Danger zone tab did not
-  // survive to this round).
+  // grant form), not whether the tab exists at all.
   const tabs = ORGANIZATION_SETTINGS_TABS
 
   // The same `activeTab`/`activeTabRef`/`visitedTabs` shape
@@ -182,11 +170,21 @@ export function OrganizationSettings({
   const [tabDirty, setTabDirty] = useState<
     Partial<Record<OrganizationSettingsTab, boolean>>
   >({})
+  // A ref mirror of `tabDirty`, read by `saveAllDirtyTabs`/`discardAllDirtyTabs`
+  // (below) for the same reason `activeTabRef` mirrors `activeTab`: the
+  // leave-guard's own callback is registered in an effect keyed on `isDirty`
+  // alone (so it does not re-register on every tab switch), and `isDirty`
+  // can stay `true` while *which* tabs are dirty changes underneath it — a
+  // closure over the `tabDirty` state itself would then act on a stale set.
+  const tabDirtyRef = useRef<Partial<Record<OrganizationSettingsTab, boolean>>>(
+    {}
+  )
   const tabActionsRef = useRef<
     Partial<Record<OrganizationSettingsTab, TabDirtyActions>>
   >({})
   const registerTabDirty = useCallback(
     (id: OrganizationSettingsTab) => (dirty: boolean) => {
+      tabDirtyRef.current = { ...tabDirtyRef.current, [id]: dirty }
       setTabDirty((current) =>
         current[id] === dirty ? current : { ...current, [id]: dirty }
       )
@@ -203,10 +201,11 @@ export function OrganizationSettings({
 
   const isDirty = Object.values(tabDirty).some(Boolean)
   const { choose } = useModal()
-  // Round 2 finding (mirroring `pages/CourseEditor.tsx#saveDirtyWork`'s own
-  // "which of two independent halves is actually dirty" split) — true only
-  // for the currently active tab's own flag, since a switch or a leave only
-  // ever asks about the tab actually showing.
+  // True only for the currently active tab's own flag — a *switch* only
+  // ever asks about the tab actually showing, since every other tab stays
+  // mounted, untouched, behind it. Leaving the screen altogether is not the
+  // same question — `saveAllDirtyTabs`/`discardAllDirtyTabs`, below, answer
+  // that one.
   const activeTabDirty = tabDirty[activeTabRef.current] ?? false
 
   /** Saves whichever tab this screen is asking about, through that tab's own registered actions. `false` when no actions are registered at all — defended, not assumed, the same discipline `pages/CourseEditor.tsx#saveDirtyWork`'s own doc comment already holds itself to for the identical "should never happen but is not asserted" case. */
@@ -220,6 +219,35 @@ export function OrganizationSettings({
   }
   const isTabSaving = (id: OrganizationSettingsTab): boolean =>
     tabActionsRef.current[id]?.isSaving() ?? false
+
+  /**
+   * Saves every tab that is currently dirty, not only the one on screen —
+   * the leave-guard's own "Save changes" answer, below. Reading
+   * `tabDirtyRef` (rather than closing over each tab's own flag) means this
+   * always acts on the dirty set as of the moment it runs, whichever tab
+   * that turns out to be. Stops at the first tab whose own save refuses,
+   * switching to it (`goToTab`) so the refusal renders where a person can
+   * actually see it, exactly the way `pages/CourseEditor.tsx#saveDirtyWork`'s
+   * own field-refusal already lands on the tab that names it — a save
+   * already written for an earlier tab in this pass is not undone.
+   */
+  const saveAllDirtyTabs = async (): Promise<boolean> => {
+    for (const id of tabs) {
+      if (!tabDirtyRef.current[id]) continue
+      if (!(await saveTab(id))) {
+        goToTab(id)
+        return false
+      }
+    }
+    return true
+  }
+
+  /** Discards every tab that is currently dirty, not only the one on screen — the leave-guard's own "Discard changes" answer, below. */
+  const discardAllDirtyTabs = () => {
+    for (const id of tabs) {
+      if (tabDirtyRef.current[id]) discardTab(id)
+    }
+  }
 
   /**
    * WEB-38/WEB-69 — a tab switch a person actually asked for (a click, or
@@ -257,11 +285,17 @@ export function OrganizationSettings({
   // WEB-69 — leaving the screen altogether (the drawer, the home control,
   // an organization switch) asks the identical three-answer question, not
   // `hooks/useUnsavedChangesGuard.ts`'s own two-answer `confirmDiscard` —
-  // this screen's own module comment, and `docs/DECISIONS.md`, have why.
-  // Registered directly with `hooks/navigation-guard.tsx` rather than
+  // this screen's own module comment, and D-143 (`docs/DECISIONS.md`), have
+  // why. Registered directly with `hooks/navigation-guard.tsx` rather than
   // through that hook, since the hook bundles this registration together
   // with its own two-answer dialog and there is no way to take only its
   // `beforeunload` half.
+  //
+  // Every dirty tab is saved or discarded here, not only the one on
+  // screen — a hidden tab can be dirty (Back/Forward between settings tabs
+  // does not itself prompt, `routing/route.ts#isSameOrganizationSettingsScreen`)
+  // and leaving from a *different* tab used to save or discard only that
+  // other tab, silently losing whichever edit was not on screen.
   const { registerGuard } = useNavigationGuard()
   useEffect(() => {
     if (!isDirty) {
@@ -279,15 +313,14 @@ export function OrganizationSettings({
         cancelLabel: 'Cancel',
       })
       if (choice === 'cancel') return false
-      if (choice === 'confirm') return saveTab(activeTabRef.current)
-      discardTab(activeTabRef.current)
+      if (choice === 'confirm') return saveAllDirtyTabs()
+      discardAllDirtyTabs()
       return true
     })
     return () => registerGuard(null)
-    // `isTabSaving`/`saveTab`/`discardTab` read `tabActionsRef.current`
-    // fresh on every call already (a plain ref, not a dependency), and
-    // `activeTabRef.current` is read the same way `pages/CourseEditor.tsx#goToTabGuarded`
-    // reads its own — deliberately not in this effect's own deps, so
+    // `isTabSaving`/`saveAllDirtyTabs`/`discardAllDirtyTabs` all read their
+    // refs (`tabActionsRef`, `tabDirtyRef`, `activeTabRef`) fresh on every
+    // call already — deliberately not in this effect's own deps, so
     // re-registering on every tab switch (which does not change whether
     // this screen is dirty) is not needed.
   }, [isDirty, registerGuard, choose])
@@ -375,13 +408,21 @@ export function OrganizationSettings({
         ))}
       </div>
 
-      {visitedTabs.has('general') && (
-        <div
-          role="tabpanel"
-          id="organization-settings-tabpanel-general"
-          aria-labelledby="organization-settings-tab-general"
-          hidden={activeTab !== 'general'}
-        >
+      {/* Each wrapper below — id, aria-labelledby, `hidden` — stays in the
+          DOM for every tab, always, the same rule
+          `pages/CourseEditor.tsx:2106-2123` already holds itself to: a
+          `role="tab"`'s own `aria-controls` must resolve on first load, not
+          only once that tab has actually been opened. Only the *content*
+          inside is gated on `visitedTabs`, and it is that content — not
+          this div — whose mount is what a fetch or a piece of local state
+          actually depends on. */}
+      <div
+        role="tabpanel"
+        id="organization-settings-tabpanel-general"
+        aria-labelledby="organization-settings-tab-general"
+        hidden={activeTab !== 'general'}
+      >
+        {visitedTabs.has('general') && (
           <GeneralSettings
             organizationId={organizationId}
             organizationName={organizationName}
@@ -391,30 +432,30 @@ export function OrganizationSettings({
             onDirtyChange={registerTabDirty('general')}
             onRegisterActions={registerTabActions('general')}
           />
-        </div>
-      )}
+        )}
+      </div>
 
-      {visitedTabs.has('discord') && (
-        <div
-          role="tabpanel"
-          id="organization-settings-tabpanel-discord"
-          aria-labelledby="organization-settings-tab-discord"
-          hidden={activeTab !== 'discord'}
-        >
+      <div
+        role="tabpanel"
+        id="organization-settings-tabpanel-discord"
+        aria-labelledby="organization-settings-tab-discord"
+        hidden={activeTab !== 'discord'}
+      >
+        {visitedTabs.has('discord') && (
           <DiscordSettings
             organizationId={organizationId}
             {...(justInstalled ? { justInstalled } : {})}
           />
-        </div>
-      )}
+        )}
+      </div>
 
-      {visitedTabs.has('team') && (
-        <div
-          role="tabpanel"
-          id="organization-settings-tabpanel-team"
-          aria-labelledby="organization-settings-tab-team"
-          hidden={activeTab !== 'team'}
-        >
+      <div
+        role="tabpanel"
+        id="organization-settings-tabpanel-team"
+        aria-labelledby="organization-settings-tab-team"
+        hidden={activeTab !== 'team'}
+      >
+        {visitedTabs.has('team') && (
           <Team
             organizationId={organizationId}
             isOwner={isOwner}
@@ -422,35 +463,33 @@ export function OrganizationSettings({
             onDirtyChange={registerTabDirty('team')}
             onRegisterActions={registerTabActions('team')}
           />
-        </div>
-      )}
+        )}
+      </div>
 
-      {visitedTabs.has('usage') && (
-        <div
-          role="tabpanel"
-          id="organization-settings-tabpanel-usage"
-          aria-labelledby="organization-settings-tab-usage"
-          hidden={activeTab !== 'usage'}
-        >
+      <div
+        role="tabpanel"
+        id="organization-settings-tabpanel-usage"
+        aria-labelledby="organization-settings-tab-usage"
+        hidden={activeTab !== 'usage'}
+      >
+        {visitedTabs.has('usage') && (
           <Usage
             organizationId={organizationId}
             isOwner={isOwner}
             onDirtyChange={registerTabDirty('usage')}
             onRegisterActions={registerTabActions('usage')}
           />
-        </div>
-      )}
+        )}
+      </div>
 
-      {visitedTabs.has('jobs') && (
-        <div
-          role="tabpanel"
-          id="organization-settings-tabpanel-jobs"
-          aria-labelledby="organization-settings-tab-jobs"
-          hidden={activeTab !== 'jobs'}
-        >
-          <Jobs organizationId={organizationId} />
-        </div>
-      )}
+      <div
+        role="tabpanel"
+        id="organization-settings-tabpanel-jobs"
+        aria-labelledby="organization-settings-tab-jobs"
+        hidden={activeTab !== 'jobs'}
+      >
+        {visitedTabs.has('jobs') && <Jobs organizationId={organizationId} />}
+      </div>
     </div>
   )
 }

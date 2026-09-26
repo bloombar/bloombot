@@ -333,7 +333,11 @@ describe('Shell (WEB-3, WEB-4)', () => {
       <Shell
         account={CONNECTED_NON_MEMBER_ACCOUNT}
         onSignedOut={vi.fn()}
-        route={{ kind: 'discord', organizationId: 'institution-org' }}
+        route={{
+          kind: 'organization-settings',
+          organizationId: 'institution-org',
+          tab: 'discord',
+        }}
         navigate={navigate}
       />
     )
@@ -360,7 +364,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
-    fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Organization settings' })
+    )
 
     // Switch away from the organization this mounted with...
     switchOrganization('Org Two')
@@ -392,7 +398,11 @@ describe('Shell (WEB-3, WEB-4)', () => {
       account: MULTI_MEMBERSHIP_ACCOUNT,
       justInstalled: { organizationId: 'org-2', serverId: 'guild-42' },
       onSignedOut: vi.fn(),
-      route: { kind: 'discord', organizationId: 'org-2' },
+      route: {
+        kind: 'organization-settings',
+        organizationId: 'org-2',
+        tab: 'discord',
+      },
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
@@ -540,7 +550,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
-    fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Organization settings' })
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Usage' }))
 
     expect(
       await screen.findByRole('heading', { name: 'Usage' })
@@ -570,7 +583,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     switchOrganization('Org Two')
     openDrawer()
-    fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Organization settings' })
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Usage' }))
 
     await screen.findByRole('heading', { name: 'Usage' })
     expect(screen.queryByLabelText('Spending cap ($)')).not.toBeInTheDocument()
@@ -585,7 +601,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
-    fireEvent.click(screen.getByRole('button', { name: 'Team' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Organization settings' })
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
 
     expect(
       await screen.findByRole('heading', { name: 'Team' })
@@ -604,7 +623,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     switchOrganization('Org Two')
     openDrawer()
-    fireEvent.click(screen.getByRole('button', { name: 'Team' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Organization settings' })
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
 
     await screen.findByRole('heading', { name: 'Team' })
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
@@ -619,7 +641,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
-    fireEvent.click(screen.getByRole('button', { name: 'Jobs' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Organization settings' })
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Jobs' }))
 
     expect(
       await screen.findByRole('heading', { name: 'Jobs' })
@@ -647,7 +672,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       )
       openDrawer()
       expect(
-        screen.getByRole('button', { name: 'Discord' })
+        screen.getByRole('button', { name: 'Organization settings' })
       ).toBeInTheDocument()
       expect(
         screen.getByRole('button', { name: 'Transcripts' })
@@ -672,7 +697,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       // nothing to show.
       openDrawer()
       expect(
-        screen.queryByRole('button', { name: 'Discord' })
+        screen.queryByRole('button', { name: 'Organization settings' })
       ).not.toBeInTheDocument()
       expect(
         screen.queryByRole('button', { name: 'Projects' })
@@ -693,9 +718,12 @@ describe('Shell (WEB-3, WEB-4)', () => {
         account: CONNECTED_NON_MEMBER_ACCOUNT,
         onSignedOut: vi.fn(),
       })
-      // Select Discord while still on the membership organization...
+      // Select the settings screen's own Discord tab (its default) while
+      // still on the membership organization...
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
       expect(
         screen.getByRole('heading', { name: 'Discord' })
       ).toBeInTheDocument()
@@ -780,7 +808,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
 
       // A fetched binding this session never created still renders as
       // installed. TEN-9 — installing another is offered too, now, alongside
@@ -824,7 +854,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
 
       expect(await screen.findByText('Study Hall')).toBeInTheDocument()
       expect(screen.getByText('guild-99')).toBeInTheDocument()
@@ -845,7 +877,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
 
       // An owner seeing "Install" for a server that is already bound is the
       // exact bug this fetch exists to fix — a momentary version of it,
@@ -868,7 +902,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
 
       // Rendering "Install" here would be the exact same bug this slice
       // fixes, reached by a different path (a failed round trip standing
@@ -908,7 +944,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
 
       expect(await screen.findByText(/guild-a/)).toBeInTheDocument()
       expect(screen.getByText(/guild-b/)).toBeInTheDocument()
@@ -930,7 +968,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
       await screen.findByText(/guild-a/)
 
       // Two rows, each with its own Remove — click the first one's.
@@ -997,7 +1037,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
         onSignedOut: vi.fn(),
       })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
       expect(await screen.findByText(/guild-42/)).toBeInTheDocument()
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
@@ -1045,7 +1087,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
       expect(await screen.findByText(/guild-1/)).toBeInTheDocument()
 
       switchOrganization('Org Two')
@@ -1087,7 +1131,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
 
       expect(await screen.findByText(/guild-active/)).toBeInTheDocument()
       expect(screen.queryByText(/guild-removed/)).not.toBeInTheDocument()
@@ -1114,7 +1160,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
         onSignedOut: vi.fn(),
       })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Organization settings' })
+      )
       // `justInstalled` is the immediate signal while the mount fetch above
       // is still in flight (this file's own regression test, above).
       expect(await screen.findByText(/guild-42/)).toBeInTheDocument()
@@ -1218,16 +1266,19 @@ describe('Shell (WEB-3, WEB-4)', () => {
       const separator = screen.getByRole('separator')
       expect(nav).toContainElement(separator)
       // The everyday group (Projects, Chat, Transcripts) precedes the
-      // separator; the organization group (Discord, Team, Usage, Jobs)
+      // separator; the organization group (WEB-69's own one "Organization
+      // settings" entry, in place of the four this drawer used to carry)
       // follows it.
       const projects = screen.getByRole('button', { name: 'Projects' })
-      const discord = screen.getByRole('button', { name: 'Discord' })
+      const settings = screen.getByRole('button', {
+        name: 'Organization settings',
+      })
       expect(
         projects.compareDocumentPosition(separator) &
           Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy()
       expect(
-        separator.compareDocumentPosition(discord) &
+        separator.compareDocumentPosition(settings) &
           Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy()
     })
@@ -1328,12 +1379,15 @@ describe('Shell (WEB-3, WEB-4)', () => {
         const nav = screen.getByRole('navigation', { name: 'Main' })
         const adminLink = screen.getByRole('button', { name: 'Admin' })
         expect(nav).toContainElement(adminLink)
-        // Below every other group — the organization group's own last item
-        // (Jobs) precedes it, the same "later in the DOM" relation this
-        // describe block's own first test already uses for the divider.
-        const jobs = screen.getByRole('button', { name: 'Jobs' })
+        // Below every other group — the organization group's own one item
+        // (WEB-69's "Organization settings") precedes it, the same "later
+        // in the DOM" relation this describe block's own first test already
+        // uses for the divider.
+        const settings = screen.getByRole('button', {
+          name: 'Organization settings',
+        })
         expect(
-          jobs.compareDocumentPosition(adminLink) &
+          settings.compareDocumentPosition(adminLink) &
             Node.DOCUMENT_POSITION_FOLLOWING
         ).toBeTruthy()
         // Its own divider, distinct from the one between the everyday and

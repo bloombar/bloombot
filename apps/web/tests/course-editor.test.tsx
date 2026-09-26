@@ -2837,8 +2837,9 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
 
     await waitFor(() =>
       expect(navigate).toHaveBeenCalledWith({
-        kind: 'discord',
+        kind: 'organization-settings',
         organizationId: 'org-1',
+        tab: 'discord',
       })
     )
   })
@@ -2876,8 +2877,9 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
 
     await waitFor(() =>
       expect(navigate).toHaveBeenCalledWith({
-        kind: 'discord',
+        kind: 'organization-settings',
         organizationId: 'org-1',
+        tab: 'discord',
       })
     )
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

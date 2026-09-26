@@ -28,7 +28,6 @@ const {
   listMembershipInvitations,
   createMembershipInvitation,
   revokeMembershipInvitation,
-  softDeleteOrganization,
 } = vi.hoisted(() => ({
   listMemberships: vi.fn(),
   grantMembership: vi.fn(),
@@ -36,8 +35,6 @@ const {
   listMembershipInvitations: vi.fn(),
   createMembershipInvitation: vi.fn(),
   revokeMembershipInvitation: vi.fn(),
-  // WEB-72/DATA-7 — the Danger zone's own delete.
-  softDeleteOrganization: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -52,7 +49,6 @@ vi.mock('../src/api/client.js', async () => {
     listMembershipInvitations,
     createMembershipInvitation,
     revokeMembershipInvitation,
-    softDeleteOrganization,
   }
 })
 
@@ -84,14 +80,7 @@ describe('Team (ENRL-5)', () => {
     listMemberships.mockResolvedValue([])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
 
     expect(
@@ -112,14 +101,7 @@ describe('Team (ENRL-5)', () => {
     ])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
 
     expect(await screen.findByText(/TA Tam — Instructor/)).toBeInTheDocument()
@@ -135,14 +117,7 @@ describe('Team (ENRL-5)', () => {
     ])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
 
     expect(await screen.findByText(/Owner Ora — Owner/)).toBeInTheDocument()
@@ -160,14 +135,7 @@ describe('Team (ENRL-5)', () => {
     ])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
 
     const row = await screen.findByText(/Owner Ora — Owner/)
@@ -178,14 +146,7 @@ describe('Team (ENRL-5)', () => {
     listMemberships.mockResolvedValue([entry()])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={false}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={false} viewerAccountId="viewer-1" />
     )
 
     await screen.findByText(/Owner Ora — Owner/)
@@ -207,14 +168,7 @@ describe('Team (ENRL-5)', () => {
     })
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
     await screen.findByText(/Owner Ora — Owner/)
 
@@ -252,14 +206,7 @@ describe('Team (ENRL-5)', () => {
     listMemberships.mockResolvedValue([entry()])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
     await screen.findByText(/Owner Ora — Owner/)
 
@@ -282,14 +229,7 @@ describe('Team (ENRL-5)', () => {
     )
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
     await screen.findByText(/Owner Ora — Owner/)
 
@@ -311,14 +251,7 @@ describe('Team (ENRL-5)', () => {
     )
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -341,14 +274,7 @@ describe('Team (ENRL-11)', () => {
     revokeMembership.mockResolvedValue({ revoked: true })
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
     await screen.findByText(/TA Tam — Instructor/)
 
@@ -383,14 +309,7 @@ describe('Team (ENRL-11)', () => {
     ])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={false}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={false} viewerAccountId="viewer-1" />
     )
 
     await screen.findByText(/TA Tam — Instructor/)
@@ -410,14 +329,7 @@ describe('Team (ENRL-11)', () => {
     ])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
 
     await screen.findByText(/Peer Owner — Owner/)
@@ -434,14 +346,7 @@ describe('Team (ENRL-11)', () => {
     revokeMembership.mockResolvedValue({ revoked: true })
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
     await screen.findByText(/Viewer — Owner/)
 
@@ -473,14 +378,7 @@ describe('Team (ENRL-11)', () => {
     ])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
     await screen.findByText(/Viewer — Owner/)
 
@@ -497,14 +395,7 @@ describe('Team (ENRL-11)', () => {
     ])
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
     await screen.findByText(/TA Tam — Instructor/)
 
@@ -527,14 +418,7 @@ describe('Team (ENRL-11)', () => {
     )
 
     renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
     )
     await screen.findByText(/TA Tam — Instructor/)
 
@@ -550,205 +434,88 @@ describe('Team (ENRL-11)', () => {
   })
 })
 
-// WEB-72/DATA-7 — the Danger zone, last on the screen, holding this
-// organization's own delete and nothing else. Owner-gated: a non-owner
-// never sees it at all (the server's own check refuses regardless).
-describe('Team — Danger zone (WEB-72/DATA-7)', () => {
-  it('renders the Danger zone last on the screen for an owner', async () => {
+// WEB-69: `pages/OrganizationSettings.tsx`'s own per-tab dirty tracking
+// reads this screen's own `onDirtyChange`/`onRegisterActions` — folding in
+// the nested `MembershipInvitations`' own identical pair (this file's own
+// module comment on why both halves fold into one flag).
+describe('Team — per-tab dirty tracking (WEB-69)', () => {
+  it('reports dirty once the grant email is non-blank, and clean once it is cleared', async () => {
     listMemberships.mockResolvedValue([])
+    const onDirtyChange = vi.fn()
 
     renderWithModal(
       <Team
         organizationId="org-1"
         isOwner={true}
         viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onDirtyChange={onDirtyChange}
       />
     )
     await screen.findByText('Nobody holds a role in this organization yet.')
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
 
-    const sections = screen.getAllByRole('region')
-    expect(sections.at(-1)).toHaveAccessibleName('Danger zone')
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'new@example.edu' },
+    })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: '' } })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
   })
 
-  it('offers no Danger zone at all to a non-owner', async () => {
+  it('reports dirty when the nested invitation form alone holds a pending, non-blank email', async () => {
     listMemberships.mockResolvedValue([])
-
-    renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={false}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
-    )
-    await screen.findByText('Nobody holds a role in this organization yet.')
-
-    expect(
-      screen.queryByRole('button', { name: 'Delete organization' })
-    ).not.toBeInTheDocument()
-  })
-
-  it('cancelling the confirmation sends nothing', async () => {
-    listMemberships.mockResolvedValue([])
+    const onDirtyChange = vi.fn()
 
     renderWithModal(
       <Team
         organizationId="org-1"
         isOwner={true}
         viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={vi.fn()}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+        onDirtyChange={onDirtyChange}
       />
     )
     await screen.findByText('Nobody holds a role in this organization yet.')
+    onDirtyChange.mockClear()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete organization' }))
-    const dialog = await screen.findByRole('dialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
-    expect(softDeleteOrganization).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Invite email'), {
+      target: { value: 'colleague@example.edu' },
+    })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+    // The grant form's own email is untouched — dirtiness came from the
+    // nested invitation form alone.
+    expect(screen.getByLabelText('Email')).toHaveValue('')
   })
 
-  it('typing the wrong name keeps the delete button inert and sends nothing; the exact name proceeds and moves the caller to another organization', async () => {
+  it("registered actions' discard resets both the grant form and the nested invitation form", async () => {
     listMemberships.mockResolvedValue([])
-    softDeleteOrganization.mockResolvedValue({ id: 'org-1', name: 'Org One' })
-    const navigate = vi.fn()
-    // Review finding — `refreshAccount` still names `org-1` (the one this
-    // screen is about to delete) alongside `org-2`, the same shape a stale
-    // or slow-to-propagate `/auth/me` response could have even though the
-    // real route excludes a soft-deleted organization at the query
-    // (DATA-9). `Team.tsx#handleDelete`'s own belt-and-braces filter is
-    // what this asserts: `org-2` is chosen, `org-1` — the thing just
-    // deleted — never is, regardless of what this mock returns.
-    const refreshAccount = vi.fn().mockResolvedValue({
-      id: 'account-1',
-      email: 'owner@example.edu',
-      isPlatformAdministrator: false,
-      memberships: [
-        { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
-        { organizationId: 'org-2', organizationName: 'Org Two', role: 'owner' },
-      ],
-      connectedOrganizations: [],
-    })
+    let actions:
+      import('../src/hooks/tabDirtyActions.js').TabDirtyActions | null = null
 
     renderWithModal(
       <Team
         organizationId="org-1"
         isOwner={true}
         viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={navigate}
-        refreshAccount={refreshAccount}
+        onRegisterActions={(registered) => {
+          actions = registered
+        }}
       />
     )
     await screen.findByText('Nobody holds a role in this organization yet.')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete organization' }))
-    const dialog = await screen.findByRole('dialog')
-
-    const field = within(dialog).getByLabelText('Organization name')
-    const confirmButton = within(dialog).getByRole('button', {
-      name: 'Delete organization',
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'new@example.edu' },
     })
-    expect(confirmButton).toBeDisabled()
-    fireEvent.change(field, { target: { value: 'the wrong name' } })
-    expect(confirmButton).toBeDisabled()
-    expect(softDeleteOrganization).not.toHaveBeenCalled()
-
-    fireEvent.change(field, { target: { value: 'Org One' } })
-    expect(confirmButton).not.toBeDisabled()
-    fireEvent.click(confirmButton)
-
-    await waitFor(() =>
-      expect(softDeleteOrganization).toHaveBeenCalledWith('org-1')
-    )
-    await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith({
-        kind: 'projects',
-        organizationId: 'org-2',
-      })
-    )
-  })
-
-  it('moves the caller to their own account screen when no organization is left', async () => {
-    listMemberships.mockResolvedValue([])
-    softDeleteOrganization.mockResolvedValue({ id: 'org-1', name: 'Org One' })
-    const navigate = vi.fn()
-    // Review finding — `refreshAccount` still names `org-1` (the one just
-    // deleted), the identical stale-response shape the sibling test above
-    // exercises: with nothing else in either list, the belt-and-braces
-    // filter must still land on `/account`, not on the organization this
-    // screen just deleted.
-    const refreshAccount = vi.fn().mockResolvedValue({
-      id: 'account-1',
-      email: 'owner@example.edu',
-      isPlatformAdministrator: false,
-      memberships: [
-        { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
-      ],
-      connectedOrganizations: [],
+    fireEvent.change(screen.getByLabelText('Invite email'), {
+      target: { value: 'colleague@example.edu' },
     })
 
-    renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={navigate}
-        refreshAccount={refreshAccount}
-      />
-    )
-    await screen.findByText('Nobody holds a role in this organization yet.')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete organization' }))
-    const dialog = await screen.findByRole('dialog')
-    fireEvent.change(within(dialog).getByLabelText('Organization name'), {
-      target: { value: 'Org One' },
+    expect(actions).not.toBeNull()
+    actions!.discard()
+    await waitFor(() => {
+      expect(screen.getByLabelText('Email')).toHaveValue('')
+      expect(screen.getByLabelText('Invite email')).toHaveValue('')
     })
-    fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Delete organization' })
-    )
-
-    await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith({ kind: 'account' })
-    )
-  })
-
-  it('a failed delete is reported and the caller stays put', async () => {
-    listMemberships.mockResolvedValue([])
-    softDeleteOrganization.mockRejectedValue(
-      new ApiError(403, { error: 'not_authorized' })
-    )
-    const navigate = vi.fn()
-
-    renderWithModal(
-      <Team
-        organizationId="org-1"
-        isOwner={true}
-        viewerAccountId="viewer-1"
-        organizationName="Org One"
-        navigate={navigate}
-        refreshAccount={vi.fn().mockResolvedValue(undefined)}
-      />
-    )
-    await screen.findByText('Nobody holds a role in this organization yet.')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete organization' }))
-    const dialog = await screen.findByRole('dialog')
-    fireEvent.change(within(dialog).getByLabelText('Organization name'), {
-      target: { value: 'Org One' },
-    })
-    fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Delete organization' })
-    )
-
-    expect(await screen.findByRole('alert')).toBeInTheDocument()
-    expect(navigate).not.toHaveBeenCalled()
   })
 })

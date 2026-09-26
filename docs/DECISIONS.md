@@ -14146,33 +14146,50 @@ window to be restored in by the moment it is exactly due; every `listXDeletedBef
 (`organizations.ts`, `accounts.ts`, `people.ts`, `conversations.ts`, `courses.ts`, `projects.ts`) makes the
 identical choice for the identical reason, and each says so in its own doc comment now rather than only this one.
 
-## D-143 — `apps/web`: WEB-69 — one settings screen, a fifth tab for the Danger zone, the Discord eager-fetch exception kept, and per-tab dirtiness
+## D-143 — `apps/web`: WEB-69 — one settings screen, a General tab (name and Danger zone), a lazy Discord fetch, and per-tab dirtiness
 
-Four judgment calls this slice's own brief left to the implementer, plus one it settled and asked to be recorded
-here rather than revisited.
+This entry covers the whole of WEB-69 as it landed, including a rework round that reversed two of the first
+round's own decisions after the user reviewed it. It is edited in place, not appended to, because this branch is
+the only place either round ever existed — nothing here was ever on `master`.
 
-**Danger zone becomes a fifth tab, last in the bar, rather than staying at the bottom of `components/Team.tsx`.**
-D-140 already flagged this as the likely outcome once WEB-69 shipped ("this Danger zone likely moves to whichever
-tab ... that consolidation gives an organization's own settings") — this slice makes that move. `components/DangerZone.tsx`
-is `Team.tsx`'s former delete section, moved verbatim (the typed-name gate, the fallback navigation afterward, and
-resolving the *fresh* account through `refreshAccount` are all unchanged), now its own component and its own tab.
-Owner-only, exactly as before: `pages/OrganizationSettings.tsx` omits the tab button entirely for a non-owner
-(withheld outright, the same discipline every owner-only control in this app already holds itself to), and
-`pages/Shell.tsx` corrects the address away from `/o/:id/settings/danger` with a `replace` for a non-owner who
-opens it directly (a bookmark, a link a peer shared before stepping down) — the same "address corrected with
-replace" shape WEB-32/WEB-34 already use for a screen an account cannot reach at all, one tab narrower.
+**General replaces the fifth tab this slice first tried (Danger zone, on its own), and sits first in the bar,
+not last.** The first round gave WEB-72/DATA-7's delete-organization control its own tab, last, on the reasoning
+that a destructive control belongs at the end. The user's own final decision instead adds a General tab for the
+organization's own name (reusing WEB-57's existing `organizations.rename` — `components/GeneralSettings.tsx`, a
+second surface for the identical capability `components/OrganizationList.tsx`'s own kebab-driven `prompt()`
+already offers from the Account page, left exactly where it is) and moves the Danger zone to the *bottom* of that
+tab instead of giving it one of its own. First in the bar, and the default tab a bare `/settings` opens on,
+because the organization's own name is the more natural thing to land on than any of the four SPEC tabs — the
+same "General first" default WEB-35 already gives a course's own settings. Every tab, General included, now
+renders for every caller regardless of role: a role decides what a tab's own contents show (the name field
+read-only, no Danger zone) rather than whether the tab exists — the owner-only *tab*, and the address-correction
+effect `pages/Shell.tsx` needed to redirect a non-owner away from it, both went with it. Considered for General
+and left out, each for a stated reason: Usage's spending cap (already its own tab, COST-3/COST-4's own text
+names it there specifically) and Discord/Team/Jobs likewise (each already a tab with a real audience of its
+own); "Leave organization" (per-account, not per-organization — it names which *account* stays a member, not a
+property of the organization itself, and the brief for this round said explicitly not to move it); nothing else
+this app exposes is organization-level and not already one of the other four tabs — grepped for every action
+with `descriptor: { resource: 'organization', ... }` (`packages/actions/src/actions/*.ts`) to check, rather than
+guessing: cost-ledger (Usage), jobs (Jobs), discord-servers (Discord), membership-invitations/memberships (Team),
+organizations (rename and soft-delete, both now on General), projects (per-project, not a setting of the
+organization itself). Nothing was invented.
 
-**The Discord tab is the one deliberate exception to "a tab's contents load when it is first opened."**
-`pages/Shell.tsx` already fetches `discordServers.list` on mount and on every organization switch (TEN-8's own
-eager read — `discordBindingState`/`justInstalled` fallback), specifically so the install button never flashes
-"Install" while a real binding is still loading, before this slice's own Discord tab is even visited. Moving that
-fetch into `pages/OrganizationSettings.tsx` and gating it on the Discord tab's own `visitedTabs` entry would
-either duplicate the request (a race between two independent fetches) or require deleting it from `Shell.tsx`
-outright and accepting a moment where the settings screen mounts before the fetch has resolved — for no
-behavioural gain, and at the cost of `tests/shell.test.tsx`'s own TEN-8 coverage, which this slice keeps rather
-than rewrites. `Shell.tsx` threads the result through as a plain prop (`discord`, `OrganizationSettingsProps`);
-`OrganizationSettings.tsx` renders it, unconditionally mounted the moment its own tab has ever been visited, the
-same as every other tab, but fetches nothing itself.
+**The Discord tab now fetches lazily, on its own first visit, like every other tab — the first round's own
+"deliberate exception" did not survive review.** `pages/Shell.tsx` used to fetch `discordServers.list` eagerly,
+on mount and on every organization switch, on the reasoning that duplicating or deleting the tested TEN-8 fix was
+worse than one exception to "a tab's contents load when first opened." The user's own final decision removes
+that exception: `components/DiscordSettings.tsx` is the Discord tab's own component now, carrying every piece of
+`Shell.tsx`'s former state and logic verbatim (`discordBindingState`, the `justInstalled` fallback, `removedServerIds`,
+the `discordFetchId` race guard) but fetching from its own mount effect, which `pages/OrganizationSettings.tsx`'s
+`visitedTabs` only ever runs once the Discord tab is actually opened. Switching organization needs no extra logic
+of its own to stay correct: `pages/OrganizationSettings.tsx` is already mounted with `key={activeOrganizationId}`
+by `pages/Shell.tsx` (unchanged by either round), so switching organizations remounts the whole screen from
+scratch — `DiscordSettings` unmounts outright (its own `stale` closure flag, the same idiom every fetch in this
+app already uses, absorbs a response that lands after that), and a fresh instance, for the new organization, only
+starts fetching if and when its own tab is opened again. This is recorded as the "simplest correct option" the
+brief for this round asked to be picked, over adding a second mechanism (an id-keyed cache, or a fetch scoped to
+"this tab, this organization" independent of mount/unmount) that would duplicate what the remount already gives
+for free.
 
 **No shared three-answer tab-guard helper extracted between `pages/CourseEditor.tsx` and this screen**, even
 though the brief allowed one. The two screens' own "leaving" guards are not actually the same shape:
@@ -14186,21 +14203,25 @@ call site this slice adds; `pages/OrganizationSettings.tsx` registers its own gu
 (a few lines) rather than taking that hook's own registration half along with it. `hooks/tabDirtyActions.ts` *is*
 shared — a plain interface (`save`/`isSaving`/`discard`), the identical shape
 `components/CourseInstructions.tsx#CourseInstructionsActions` already gives `CourseEditor` for its own one nested
-section — since three tabs on this screen (`pages/Usage.tsx`, `components/Team.tsx`, `components/MembershipInvitations.tsx`)
-all need the exact same shape, unlike `CourseEditor`, which has only ever needed one.
+section — since three tabs on this screen (`components/GeneralSettings.tsx`, `pages/Usage.tsx`, `components/Team.tsx`/
+`components/MembershipInvitations.tsx`) all need the exact same shape, unlike `CourseEditor`, which has only ever
+needed one.
 
-**"Dirty" for each of this screen's two dirty-able tabs**, spelled out since the brief asked for the rule to be
-recorded rather than left implicit: Usage is dirty when its own spending-cap input text differs from the last
-value it was seeded with (a fresh load, or the value a save/clear just confirmed) — not from a parsed comparison,
-so a syntactically-different but numerically-equal edit (`"5.00"` typed over a seeded `"5"`) still counts, the
-same "a value comparison, not a parse-equal one" reasoning `hooks/useFormDirty.ts` already applies to
-`pages/CourseEditor.tsx`'s own form. Team is dirty when its own grant-form email is non-blank (trimmed), *or* the
-nested `components/MembershipInvitations.tsx`'s own invite-form email is — two independent halves folded into
-one flag the same way `pages/CourseEditor.tsx` already folds `CourseInstructions`' own dirtiness into its one
-`isDirty`. Discord, Jobs and Danger zone never call `onDirtyChange` at all: none of the three holds a pending
-edit anywhere on the tab itself (the Danger zone's own typed-name gate lives inside `useModal().prompt`'s own
-dialog, which is not part of this screen's own tree at all while closed — verified directly, not assumed, since
-the brief asked this to be checked).
+**"Dirty" for each of this screen's three dirty-able tabs**, spelled out since the brief asked for the rule to be
+recorded rather than left implicit: General is dirty when its own name input, trimmed, disagrees with the
+organization's own current name (`organizationName`, the prop `pages/Shell.tsx` already resolves from
+`account.memberships` — nothing new fetched to seed it). Usage is dirty when its own spending-cap input text
+differs from the last value it was seeded with (a fresh load, or the value a save/clear just confirmed) — not
+from a parsed comparison, so a syntactically-different but numerically-equal edit (`"5.00"` typed over a seeded
+`"5"`) still counts, the same "a value comparison, not a parse-equal one" reasoning `hooks/useFormDirty.ts`
+already applies to `pages/CourseEditor.tsx`'s own form. Team is dirty when its own grant-form email is non-blank
+(trimmed), *or* the nested `components/MembershipInvitations.tsx`'s own invite-form email is — two independent
+halves folded into one flag the same way `pages/CourseEditor.tsx` already folds `CourseInstructions`' own
+dirtiness into its one `isDirty`. Discord and Jobs never call `onDirtyChange` at all: neither holds a pending
+edit anywhere on its own tab. The Danger zone, now embedded at the bottom of General rather than a tab of its
+own, still never contributes to General's own dirty flag either — its typed-name gate lives inside
+`useModal().prompt`'s own dialog, which is not part of this screen's own tree at all while closed (verified
+directly, not assumed, both rounds).
 
 **Saving a dirty Team tab through the tab-switch prompt runs the same confirmation the section's own button
 would.** `handleGrant`/`MembershipInvitations#handleInvite` each confirm the consequence before sending
@@ -14210,3 +14231,10 @@ dialogs never overlap (`useModal()` only ever shows one at a time, queuing a sec
 `ModalProvider.tsx`'s own module comment), and skipping the grant/invite confirmation on this one path would mean
 the exact same write sometimes asks and sometimes does not, depending on which control triggered it — a worse
 inconsistency than one extra click.
+
+**The dirty tab's own "•" label suffix is kept, though the second round did not need to add it.** The first
+round added a small `•` beside a dirty tab's own label (`pages/OrganizationSettings.tsx`'s own `tabDirty[id] && ' •'`)
+as a cheap, optional affordance — nothing in either round of the brief asked for it, and nothing requires it.
+Left in place rather than removed, since it costs nothing and a reader mid-edit on one tab can see, without
+switching, that another tab still holds unsaved work; recorded here only so its presence reads as a decision
+rather than an oversight.

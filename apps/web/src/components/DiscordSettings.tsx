@@ -1,37 +1,29 @@
 /**
- * TEN-8/WEB-4/TEN-9 (WEB-69 rework round 2): the Organization settings
- * screen's own Discord tab — which servers this organization is actually
- * connected to (`discordServers.list`), Remove for each, and Install for
- * another.
+ * TEN-8/WEB-4/TEN-9 (WEB-69, D-143): the Organization settings screen's own
+ * Discord tab — which servers this organization is actually connected to
+ * (`discordServers.list`), Remove for each, and Install for another.
  *
- * **Moved out of `pages/Shell.tsx` in this rework round.** The first round
- * of WEB-69 kept this fetch eager, in `Shell.tsx`, on the grounds that
- * duplicating or deleting the tested TEN-8 fix was worse than one
- * deliberate exception to "a tab's own contents load only once first
- * opened." The user's own final decision reverses that: this tab now
- * fetches exactly the way every other tab already does — on mount of
- * *this* component, which `pages/OrganizationSettings.tsx`'s own
- * `visitedTabs` only ever mounts once the Discord tab has actually been
- * opened. Every piece of state and every comment below is carried over
- * verbatim from `Shell.tsx`'s own former implementation; only where it
- * lives, and what triggers the fetch, changed.
+ * **Fetches on its own mount, in this file, not eagerly from `pages/Shell.tsx`**
+ * — the same "a tab's own contents load only once first opened" rule every
+ * other tab on `pages/OrganizationSettings.tsx` holds itself to, since
+ * that screen's own `visitedTabs` only ever mounts this component once the
+ * Discord tab has actually been opened.
  *
  * **Why an organization switch needs no extra "abort the stale fetch"
- * logic here, unlike the old `Shell.tsx` implementation's own
- * `discordFetchId` race guard for that specific case:**
- * `pages/OrganizationSettings.tsx` is mounted with `key={activeOrganizationId}`
- * by `pages/Shell.tsx` — switching organizations remounts the whole
- * settings screen from scratch, which unmounts this component outright
- * (aborting its own in-flight fetch through the same `stale` closure
- * flag every other fetch in this app already uses) rather than asking it
- * to reconcile a response against a *new* organization. A fresh `Discord`
- * tab, for the new organization, only starts fetching if and when that
- * tab is opened again — `docs/DECISIONS.md` records this as the "simplest
- * correct option" the brief for this round asked to be picked. The
- * `discordFetchId` ref below still guards the one race that *can* still
- * happen within a single mount: a same-session `discordServers.remove`
- * invalidating an already in-flight `discordServers.list` for the same
- * organization (its own comment, below).
+ * logic here:** `pages/OrganizationSettings.tsx` is mounted with
+ * `key={activeOrganizationId}` by `pages/Shell.tsx` — switching
+ * organizations remounts the whole settings screen from scratch, which
+ * unmounts this component outright (aborting its own in-flight fetch
+ * through the same `stale` closure flag every other fetch in this app
+ * already uses) rather than asking it to reconcile a response against a
+ * *new* organization. A fresh `Discord` tab, for the new organization,
+ * only starts fetching if and when that tab is opened again —
+ * `docs/DECISIONS.md` (D-143) records this as the simplest correct option.
+ * The `discordFetchId` ref below still guards the one race that *can*
+ * still happen within a single mount: a same-session
+ * `discordServers.remove` invalidating an already in-flight
+ * `discordServers.list` for the same organization (its own comment,
+ * below).
  */
 
 import { useEffect, useRef, useState } from 'react'

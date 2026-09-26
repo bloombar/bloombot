@@ -68,11 +68,10 @@
  * itself, or holds any of its own state for it — `components/DiscordSettings.tsx`
  * does both now, on its own mount, which `pages/OrganizationSettings.tsx`'s
  * own `visitedTabs` only triggers once the Discord tab is actually opened
- * (rework round 2 — the first round kept this fetch eager, here, as a
- * deliberate exception; `docs/DECISIONS.md` records why that exception was
- * removed). `justInstalled` itself still passes through this shell
- * unchanged, straight to `OrganizationSettings`, which threads it on to
- * `DiscordSettings` — the one place left that actually reads it.
+ * (`docs/DECISIONS.md`, D-143). `justInstalled` itself still passes
+ * through this shell unchanged, straight to `OrganizationSettings`, which
+ * threads it on to `DiscordSettings` — the one place left that actually
+ * reads it.
  *
  * COST-3/COST-4: a fifth tab, Usage (`pages/Usage.tsx`) — an audit found
  * neither an instructor's own read of their courses' spend nor a way to

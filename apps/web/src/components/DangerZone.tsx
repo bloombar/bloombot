@@ -92,9 +92,8 @@ export function DangerZone({
       // rather than deleting). Resolves the *fresh* account, not this
       // component's own stale props, the same "resolve afterward, not from
       // what was already in hand" discipline that function's own module
-      // comment gives (code review round 2, must-fix 1): a membership
-      // preferred over a connected-only relationship, `/account` when
-      // neither is left.
+      // comment gives: a membership preferred over a connected-only
+      // relationship, `/account` when neither is left.
       const freshAccount = await refreshAccount()
       // Belt and braces (review finding) — `organizationId` (the one this
       // screen just deleted) is excluded here regardless of what

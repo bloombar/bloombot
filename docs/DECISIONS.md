@@ -14145,3 +14145,68 @@ run — is a considered choice, pinned by a test, not an off-by-one.** It has al
 window to be restored in by the moment it is exactly due; every `listXDeletedBefore` function
 (`organizations.ts`, `accounts.ts`, `people.ts`, `conversations.ts`, `courses.ts`, `projects.ts`) makes the
 identical choice for the identical reason, and each says so in its own doc comment now rather than only this one.
+
+## D-143 — `apps/web`: WEB-69 — one settings screen, a fifth tab for the Danger zone, the Discord eager-fetch exception kept, and per-tab dirtiness
+
+Four judgment calls this slice's own brief left to the implementer, plus one it settled and asked to be recorded
+here rather than revisited.
+
+**Danger zone becomes a fifth tab, last in the bar, rather than staying at the bottom of `components/Team.tsx`.**
+D-140 already flagged this as the likely outcome once WEB-69 shipped ("this Danger zone likely moves to whichever
+tab ... that consolidation gives an organization's own settings") — this slice makes that move. `components/DangerZone.tsx`
+is `Team.tsx`'s former delete section, moved verbatim (the typed-name gate, the fallback navigation afterward, and
+resolving the *fresh* account through `refreshAccount` are all unchanged), now its own component and its own tab.
+Owner-only, exactly as before: `pages/OrganizationSettings.tsx` omits the tab button entirely for a non-owner
+(withheld outright, the same discipline every owner-only control in this app already holds itself to), and
+`pages/Shell.tsx` corrects the address away from `/o/:id/settings/danger` with a `replace` for a non-owner who
+opens it directly (a bookmark, a link a peer shared before stepping down) — the same "address corrected with
+replace" shape WEB-32/WEB-34 already use for a screen an account cannot reach at all, one tab narrower.
+
+**The Discord tab is the one deliberate exception to "a tab's contents load when it is first opened."**
+`pages/Shell.tsx` already fetches `discordServers.list` on mount and on every organization switch (TEN-8's own
+eager read — `discordBindingState`/`justInstalled` fallback), specifically so the install button never flashes
+"Install" while a real binding is still loading, before this slice's own Discord tab is even visited. Moving that
+fetch into `pages/OrganizationSettings.tsx` and gating it on the Discord tab's own `visitedTabs` entry would
+either duplicate the request (a race between two independent fetches) or require deleting it from `Shell.tsx`
+outright and accepting a moment where the settings screen mounts before the fetch has resolved — for no
+behavioural gain, and at the cost of `tests/shell.test.tsx`'s own TEN-8 coverage, which this slice keeps rather
+than rewrites. `Shell.tsx` threads the result through as a plain prop (`discord`, `OrganizationSettingsProps`);
+`OrganizationSettings.tsx` renders it, unconditionally mounted the moment its own tab has ever been visited, the
+same as every other tab, but fetches nothing itself.
+
+**No shared three-answer tab-guard helper extracted between `pages/CourseEditor.tsx` and this screen**, even
+though the brief allowed one. The two screens' own "leaving" guards are not actually the same shape:
+`CourseEditor`'s own navigation-guard registration (`useUnsavedChangesGuard`) asks the ordinary two-answer
+"discard, or keep editing" when a dirty course is left by an outside navigation, and only its *own* tab switch
+(`goToTabGuarded`) asks the three-answer question — but WEB-69's own text asks the three-answer question for
+*both* moves on this screen (a tab switch, and leaving the screen altogether). Extracting one helper that both
+screens call would have to parameterise the answer count per caller anyway, which is not a clear win for the one
+call site this slice adds; `pages/OrganizationSettings.tsx` registers its own guard directly with
+`hooks/navigation-guard.tsx`, and reproduces `hooks/useUnsavedChangesGuard.ts`'s own `beforeunload` half verbatim
+(a few lines) rather than taking that hook's own registration half along with it. `hooks/tabDirtyActions.ts` *is*
+shared — a plain interface (`save`/`isSaving`/`discard`), the identical shape
+`components/CourseInstructions.tsx#CourseInstructionsActions` already gives `CourseEditor` for its own one nested
+section — since three tabs on this screen (`pages/Usage.tsx`, `components/Team.tsx`, `components/MembershipInvitations.tsx`)
+all need the exact same shape, unlike `CourseEditor`, which has only ever needed one.
+
+**"Dirty" for each of this screen's two dirty-able tabs**, spelled out since the brief asked for the rule to be
+recorded rather than left implicit: Usage is dirty when its own spending-cap input text differs from the last
+value it was seeded with (a fresh load, or the value a save/clear just confirmed) — not from a parsed comparison,
+so a syntactically-different but numerically-equal edit (`"5.00"` typed over a seeded `"5"`) still counts, the
+same "a value comparison, not a parse-equal one" reasoning `hooks/useFormDirty.ts` already applies to
+`pages/CourseEditor.tsx`'s own form. Team is dirty when its own grant-form email is non-blank (trimmed), *or* the
+nested `components/MembershipInvitations.tsx`'s own invite-form email is — two independent halves folded into
+one flag the same way `pages/CourseEditor.tsx` already folds `CourseInstructions`' own dirtiness into its one
+`isDirty`. Discord, Jobs and Danger zone never call `onDirtyChange` at all: none of the three holds a pending
+edit anywhere on the tab itself (the Danger zone's own typed-name gate lives inside `useModal().prompt`'s own
+dialog, which is not part of this screen's own tree at all while closed — verified directly, not assumed, since
+the brief asked this to be checked).
+
+**Saving a dirty Team tab through the tab-switch prompt runs the same confirmation the section's own button
+would.** `handleGrant`/`MembershipInvitations#handleInvite` each confirm the consequence before sending
+(ENRL-5/ENRL-10's own text, unchanged) — calling either from `goToTabGuarded`'s own "Save changes" therefore opens
+a *second* dialog, sequentially, after the first one closes. This is accepted rather than routed around: the two
+dialogs never overlap (`useModal()` only ever shows one at a time, queuing a second request behind the first —
+`ModalProvider.tsx`'s own module comment), and skipping the grant/invite confirmation on this one path would mean
+the exact same write sometimes asks and sometimes does not, depending on which control triggered it — a worse
+inconsistency than one extra click.

@@ -14238,3 +14238,15 @@ as a cheap, optional affordance — nothing in either round of the brief asked f
 Left in place rather than removed, since it costs nothing and a reader mid-edit on one tab can see, without
 switching, that another tab still holds unsaved work; recorded here only so its presence reads as a decision
 rather than an oversight.
+
+**Leaving the screen altogether saves or discards every dirty tab, not only the one on screen — a third round
+fix, not a first-round oversight this entry already covered.** A pop between two settings tabs (Back/Forward)
+never asks (`isSameOrganizationSettingsScreen`'s own comment, unchanged by either earlier round), so a tab could
+sit dirty, hidden, while a different, clean tab was the one actually showing when the screen was left. The first
+two rounds' own guard acted on `activeTabRef.current` alone, so leaving from that clean tab silently lost the
+hidden one's edit (Save), or, for Discord/Jobs on screen (no save action of their own), could never leave at
+all. `saveAllDirtyTabs`/`discardAllDirtyTabs` (`pages/OrganizationSettings.tsx`) now read every tab's own dirty
+flag through a ref (`tabDirtyRef`, mirroring `activeTabRef` for the identical staleness reason), stopping at
+the first tab whose own save refuses and switching to it so the refusal is visible — a tab switch itself
+(`goToTabGuarded`) is unaffected, since every other tab stays mounted and untouched behind a switch, unlike a
+leave.

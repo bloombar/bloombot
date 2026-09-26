@@ -533,3 +533,12 @@ a scheduled sweep that permanently removes what the window releases, puts a Dang
 a single entity, and lets a person delete their own history in a course.
 
 **In scope:** DATA-7, DATA-8, DATA-9, TEN-10, WEB-72, WEB-73, WEB-74, PROJ-11
+
+## Phase 45 — Reading usage, and finding your way around it
+
+Usage could only be read as one organization-wide lump for all time, its per-surface breakdown was a single
+run-on sentence, and nothing on the organization's usage led to a course's own. This phase adds person,
+surface and date filters to both usage screens, lists surfaces one per line, links each course to its own
+usage, and tidies two pieces of navigation: the MCP drawer entry's name, and the legal pages' missing chrome.
+
+**In scope:** WEB-75, WEB-76, WEB-77, WEB-78, WEB-79

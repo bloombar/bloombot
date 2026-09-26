@@ -4955,3 +4955,63 @@
   phase: 44
   status: Done
   review: false
+- id: WEB-75
+  title: The MCP entry is named for what it does
+  full: The navigation drawer's MCP entry is labelled Connect to other AI tools.
+    "MCP" names a protocol most instructors have never heard of; the entry's job
+    is connecting Bloombot to the AI assistants they already use. Only the
+    drawer label changes — the screen's address and what it does stay as they
+    are.
+  section: §50 Reading Usage, and Finding Your Way Around It
+  family: WEB
+  phase: 45
+  status: Backlog
+  review: false
+- id: WEB-76
+  title: The legal pages carry the site's header and footer
+  full: The privacy policy and the terms render inside the same header and footer
+    the rest of the site shows, rather than as a bare page with no way back.
+    They stay reachable signed out; a signed-out reader sees the public header,
+    and a signed-in reader is not shown a sign-in prompt as if they were not.
+  section: §50 Reading Usage, and Finding Your Way Around It
+  family: WEB
+  phase: 45
+  status: Backlog
+  review: false
+- id: WEB-77
+  title: A course's usage can be narrowed by person, surface and date
+  full: "A course's Usage tab carries the same filters its Transcripts tab does: a
+    person (anyone with usage recorded in that course), a surface (Discord, web,
+    MCP, or any), and a date range. The spend, call count and per-surface
+    breakdown shown reflect the filters applied. The per-surface breakdown is a
+    list, one surface per line, so the surfaces can be compared at a glance
+    instead of read out of a single run-on sentence."
+  section: §50 Reading Usage, and Finding Your Way Around It
+  family: WEB
+  phase: 45
+  status: Backlog
+  review: false
+- id: WEB-78
+  title: An organization's usage can be narrowed by person, surface and date
+  full: The Usage tab of an organization's settings carries the same filters, with
+    the person filter listing everyone with usage recorded anywhere in the
+    organization, across every project and course. The organization total, its
+    per-surface breakdown and every course's figures reflect the filters, and
+    every per-surface breakdown is a list, one surface per line. The spending
+    cap's state — no cap, room left, reached — is always judged against the
+    organization's whole spend, never a filtered part of it, because that is
+    what the cap enforces.
+  section: §50 Reading Usage, and Finding Your Way Around It
+  family: WEB
+  phase: 45
+  status: Backlog
+  review: false
+- id: WEB-79
+  title: A course in the organization's usage opens that course's usage
+  full: Each course named under Usage by course in an organization's settings
+    links to that course's own settings, opened at its Usage tab.
+  section: §50 Reading Usage, and Finding Your Way Around It
+  family: WEB
+  phase: 45
+  status: Backlog
+  review: false

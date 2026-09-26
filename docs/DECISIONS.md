@@ -14249,4 +14249,13 @@ all. `saveAllDirtyTabs`/`discardAllDirtyTabs` (`pages/OrganizationSettings.tsx`)
 flag through a ref (`tabDirtyRef`, mirroring `activeTabRef` for the identical staleness reason), stopping at
 the first tab whose own save refuses and switching to it so the refusal is visible — a tab switch itself
 (`goToTabGuarded`) is unaffected, since every other tab stays mounted and untouched behind a switch, unlike a
-leave.
+leave. `saveAllDirtyTabs` also skips a dirty tab whose own save is already in flight (`isTabSaving`) rather than
+calling it again — a hidden tab's save can still be running when a leave finds it dirty (its own baseline has
+not moved yet), and the leave-guard's own upfront check only ever looked at the *active* tab, so a second call
+on top of the first would have double-submitted the same edit (Usage's own spending cap, say).
+
+**Known limitation, deferred:** if a Team/Usage-style tab's own list refresh fails, `components/Team.tsx` and
+`components/MembershipInvitations.tsx` each swap to an error view (`loadError`) that removes the form from the
+tree entirely, but nothing clears whatever a person had already typed into `Team.tsx`'s own grant-form email
+first — the tab can still read as dirty with no field visible to explain why, and a leave-save through
+`saveAllDirtyTabs` would submit that stale value. Left unfixed here; it needs its own slice.

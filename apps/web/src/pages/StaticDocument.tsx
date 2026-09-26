@@ -16,6 +16,14 @@
  * `CHAT_MARKDOWN_SCHEMA` is the allowlist this app already trusts, and giving
  * one Markdown surface a different, laxer policy is how the strict one stops
  * being the rule.
+ *
+ * WEB-76 — carries the header bar and drawer `components/PublicChrome.tsx`
+ * renders. `signedIn`/`navigate` default to "signed out"/"do nothing":
+ * `apps/web/prerender-plugin.ts` renders this component with neither (no
+ * session to check at build time), and `App.tsx` passes both, `signedIn`
+ * starting `false` until the real session resolves. No hydration mismatch
+ * either way — `main.tsx` mounts with `createRoot`, not `hydrateRoot`, so
+ * the prerendered markup is discarded on mount regardless.
  */
 
 import ReactMarkdown, { type Components } from 'react-markdown'
@@ -24,6 +32,8 @@ import rehypeSanitize from 'rehype-sanitize'
 
 import { CHAT_MARKDOWN_SCHEMA } from '../markdown-schema.js'
 import type { StaticDocument as StaticDocumentContent } from '../content/document.js'
+import type { Route } from '../routing/route.js'
+import { PublicChrome } from '../components/PublicChrome.js'
 
 /**
  * Tailwind has no default styling for bare `<h2>`/`<ul>`/`<blockquote>`, so a
@@ -68,27 +78,37 @@ export interface StaticDocumentProps {
   document: StaticDocumentContent
   /** Rendered as a testid suffix, so a test can name the page it asserts on. */
   testId: string
+  /** This file's own module comment on the default and why it is safe. */
+  signedIn?: boolean
+  navigate?: (route: Route) => void
 }
 
-export function StaticDocument({ document, testId }: StaticDocumentProps) {
+export function StaticDocument({
+  document,
+  testId,
+  signedIn = false,
+  navigate = () => {},
+}: StaticDocumentProps) {
   return (
-    <div className="mx-auto max-w-3xl p-6" data-testid={testId}>
-      <h1 className="text-page-title font-semibold text-neutral-900">
-        {document.title}
-      </h1>
-      <p className="mt-1 text-sm text-neutral-600">{document.summary}</p>
-      <p className="mt-1 text-xs text-neutral-500">
-        Last updated {document.updated}
-      </p>
-      <div className="mt-6">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[[rehypeSanitize, CHAT_MARKDOWN_SCHEMA]]}
-          components={MARKDOWN_COMPONENTS}
-        >
-          {document.body}
-        </ReactMarkdown>
+    <PublicChrome signedIn={signedIn} navigate={navigate}>
+      <div data-testid={testId}>
+        <h1 className="text-page-title font-semibold text-neutral-900">
+          {document.title}
+        </h1>
+        <p className="mt-1 text-sm text-neutral-600">{document.summary}</p>
+        <p className="mt-1 text-xs text-neutral-500">
+          Last updated {document.updated}
+        </p>
+        <div className="mt-6">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[[rehypeSanitize, CHAT_MARKDOWN_SCHEMA]]}
+            components={MARKDOWN_COMPONENTS}
+          >
+            {document.body}
+          </ReactMarkdown>
+        </div>
       </div>
-    </div>
+    </PublicChrome>
   )
 }

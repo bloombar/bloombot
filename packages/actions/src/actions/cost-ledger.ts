@@ -36,6 +36,18 @@ type Organization = ReturnType<typeof organizations.getOrganizationById>
 const organizationUsageInputSchema = z.object({
   /** `YYYY-MM-DD` — which day's usage counters `studentsNearLimit` is read against (`@bloombot/db`'s own `usage.ts` module comment: the day boundary is always supplied by the caller, never read from a clock in here). */
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'day must be YYYY-MM-DD'),
+  // WEB-77/WEB-78 — optional filters, passed straight through to
+  // `@bloombot/db`'s own `costLedger.getOrganizationUsageSummary` (see that
+  // function's own `OrganizationUsageFilters` doc comment for how they
+  // combine). `surface` is narrower than the ledger's own `CostLedgerSurface`
+  // column — the same "only a value a real caller can assert" narrowing
+  // `NewCostLedgerEntry.surface`'s own comment gives, since `'unknown'` is a
+  // historical backfill bucket, not something a filter should offer.
+  personId: z.string().optional(),
+  surface: z.enum(['discord', 'web', 'mcp']).optional(),
+  /** Epoch milliseconds, the same unit `cost_ledger_entries.created_at` is stored in. */
+  from: z.number().int().nonnegative().optional(),
+  to: z.number().int().nonnegative().optional(),
 })
 type OrganizationUsageInput = z.infer<typeof organizationUsageInputSchema>
 
@@ -46,10 +58,14 @@ export interface OrganizationUsageReport {
   totalCostMicros: number
   /** The portion of `totalCostMicros` that came from an estimate rather than a measurement (`@bloombot/db`'s own `costLedger.getOrganizationUsageSummary`, finding 2 of the COST-1 rework) — see its own comment for why an instructor's read needs to say this at all. */
   totalEstimatedCostMicros: number
+  /** WEB-78 — the organization's own whole-organization spend, unaffected by any filter in the input above; read separately from `@bloombot/db`'s own `getOrganizationSpentMicros`, not narrowed the way `totalCostMicros` above can be. */
+  unfilteredTotalCostMicros: number
   courses: costLedger.CourseUsageSummary[]
   studentsNearLimit: usage.UsageNearLimit[]
   /** COST-7 — the organization's own totals above, broken down by surface across every course; each course in `courses` carries its own breakdown the same way. */
   bySurface: costLedger.CostBySurface[]
+  /** WEB-77 — every person with usage in the organization, unfiltered — read separately from `@bloombot/db`'s own `listOrganizationUsagePeople` (round 2, must-fix 8: kept out of the summary itself so callers that need neither this nor `unfilteredTotalCostMicros` — `apps/api/src/routes/admin.ts`, `apps/worker/src/handlers/transcripts.ts` — never pay for either query). */
+  people: costLedger.OrganizationUsagePerson[]
 }
 
 /**
@@ -78,20 +94,38 @@ export const organizationUsageAction: Action<
       organizations.getOrganizationById(context.organizationId, context.db),
   },
   execute: ({ organizationId, input, db }) => {
-    const summary = costLedger.getOrganizationUsageSummary(organizationId, db)
+    // WEB-77/WEB-78 — `studentsNearLimit` is deliberately not filtered by
+    // any of these: it is unaffected by filters per this file's own
+    // module comment on scope (out of scope: `studentsNearLimit`).
+    const summary = costLedger.getOrganizationUsageSummary(organizationId, db, {
+      ...(input.personId !== undefined ? { personId: input.personId } : {}),
+      ...(input.surface !== undefined ? { surface: input.surface } : {}),
+      ...(input.from !== undefined ? { from: input.from } : {}),
+      ...(input.to !== undefined ? { to: input.to } : {}),
+    })
     const studentsNearLimit = usage.listUsageNearLimit(
       organizationId,
       input.day,
       db
     )
+    // Round 2, must-fix 8 — computed here, not inside the summary itself,
+    // so this action's own two extra reads never reach a caller (the admin
+    // console, the transcript-export worker) that has no use for either.
+    const unfilteredTotalCostMicros = costLedger.getOrganizationSpentMicros(
+      organizationId,
+      db
+    )
+    const people = costLedger.listOrganizationUsagePeople(organizationId, db)
     return {
       organizationId: summary.organizationId,
       spendingCapMicros: summary.spendingCapMicros,
       totalCostMicros: summary.totalCostMicros,
       totalEstimatedCostMicros: summary.totalEstimatedCostMicros,
+      unfilteredTotalCostMicros,
       courses: summary.courses,
       studentsNearLimit,
       bySurface: summary.bySurface,
+      people,
     }
   },
 }

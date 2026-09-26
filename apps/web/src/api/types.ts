@@ -1104,6 +1104,8 @@ export interface CostBySurface {
 export interface CourseUsageSummary {
   courseId: string
   courseTitle: string
+  /** WEB-79 — what `pages/Usage.tsx` links a course's own title to its settings' Usage tab with. */
+  projectId: string
   costMicros: number
   /** The portion of `costMicros` that came from an estimate rather than a measurement (COST-6) — see `pages/Usage.tsx`'s own module comment for what this changes about how a total is shown. */
   estimatedCostMicros: number
@@ -1115,19 +1117,32 @@ export interface CourseUsageSummary {
 /**
  * COST-4 — one (course, person) pair whose count for a given day has
  * reached a course's own near-limit threshold. Mirrors `@bloombot/db`'s own
- * `usage.UsageNearLimit` by hand. `personDisplayName`, not the student's own
- * email — the same "no genuine need to disambiguate by it" reasoning
- * `api/types.ts#CourseEnrolment`'s own doc comment already gives for the
- * identical case; `components/CoursePeople.tsx`'s own `label` fallback
- * (`displayName ?? personId`) is what `pages/Usage.tsx` uses for this too.
+ * `usage.UsageNearLimit` by hand. `personDisplayName`/`personFirstName`/
+ * `personLastName`, never the student's own email — the same "no genuine
+ * need to disambiguate by it" reasoning `api/types.ts#CourseEnrolment`'s
+ * own doc comment already gives for the identical case;
+ * `components/usageFormat.ts#studentLabel` is the shared fallback
+ * (`pages/Usage.tsx`/`components/CourseUsage.tsx` both use it) that needs
+ * all three fields, not `personDisplayName` alone (round 2, must-fix 5).
  */
 export interface UsageNearLimit {
   courseId: string
   courseTitle: string
   personId: string
   personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
   count: number
   maxRequestsPerDay: number
+}
+
+/** WEB-77 — one person with usage in the organization, and the courses they have usage in. Mirrors `@bloombot/db`'s own `costLedger.OrganizationUsagePerson` by hand — same no-email rule as `UsageNearLimit` above. */
+export interface OrganizationUsagePerson {
+  personId: string
+  personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
+  courseIds: string[]
 }
 
 /** COST-4 — `costLedger.organizationUsage`'s own report: every course's usage in the caller's organization, its cap (if any), and which students are approaching a course's own daily limit. Mirrors `@bloombot/actions`' own `OrganizationUsageReport` by hand. */
@@ -1136,10 +1151,14 @@ export interface OrganizationUsageReport {
   spendingCapMicros: number | null
   totalCostMicros: number
   totalEstimatedCostMicros: number
+  /** WEB-78 — the organization's own whole-organization spend, unaffected by any filter passed to `fetchOrganizationUsage` — what the spending-cap banner's own "spent"/"reached" judgement must always compare against. */
+  unfilteredTotalCostMicros: number
   courses: CourseUsageSummary[]
   studentsNearLimit: UsageNearLimit[]
   /** COST-7 — the organization's own totals above, broken down by surface across every course. */
   bySurface: CostBySurface[]
+  /** WEB-77 — every person with usage in the organization, unfiltered. */
+  people: OrganizationUsagePerson[]
 }
 
 /** COST-3 — `costLedger.setSpendingCap`'s own return: what is now stored, after the call. Mirrors `@bloombot/actions`' own `SetSpendingCapResult` by hand. */

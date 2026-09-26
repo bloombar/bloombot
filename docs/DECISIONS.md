@@ -14259,3 +14259,174 @@ on top of the first would have double-submitted the same edit (Usage's own spend
 tree entirely, but nothing clears whatever a person had already typed into `Team.tsx`'s own grant-form email
 first — the tab can still read as dirty with no field visible to explain why, and a leave-save through
 `saveAllDirtyTabs` would submit that stale value. Left unfixed here; it needs its own slice.
+
+## D-144 — `apps/web`: WEB-75..79 — a plain drawer rename, the signed-out chrome reused for signed-in too, server-side usage filters, and the cap's own unfiltered total
+
+**WEB-75.** The drawer's MCP entry becomes "Connect to other AI tools" — the route/key (`'mcp'`) and the `Mcp.tsx`
+page's own `<h1>MCP</h1>` heading are unchanged; only the nav item's own label moved. The brief named the drawer
+label alone, and nothing else in the screen (the heading, the page's own copy) claimed to be in scope.
+
+**WEB-76 (round 1, superseded below).** `/privacy` and `/terms` first reused `components/SignInHeader.tsx` (a
+centred, menu-less hero) above the document and `components/SiteFooter.tsx` below it, reasoning that
+`SignInHeader` was already correct for both a signed-out and a signed-in reader since it carries no sign-in
+control of its own to withhold. The coordinator's own review round corrected this: a hero with no menu is not
+the same thing as "carries the site's header and footer" (SPEC's own words) — a reader landing here has no way
+back into the app at all beyond the browser's own Back button. Superseded by the entry immediately below;
+recorded here only so the reasoning that turned out wrong is not silently lost.
+
+**WEB-76 (round 2 — the actual fix).** `/privacy` and `/terms` (`pages/StaticDocument.tsx`) now render inside
+`components/PublicChrome.tsx`, a new, small caller of `components/AppShell.tsx` — the same conventional header
+bar and drawer every signed-in screen already gets (`components/SignedInChrome.tsx`), reused rather than
+hand-rolled a second time. Two things make this a *public* caller of `AppShell` rather than a second
+`SignedInChrome`:
+
+- **The header names the app, never an organization.** `AppShell`'s own `headerStart` slot — `OrganizationSwitcher`
+  for every signed-in screen — carries a plain `<span>Bloombot — AI course assistant</span>` here instead.
+  `AppShell` needed no change at all to make this possible: `headerStart`/`navGroups`/`onHome` were already
+  plain, generic slots (`AppShellProps`'s own doc comments), not organization-specific ones — a second caller
+  building an organization-less menu from them is exactly what those slots already existed to admit, contrary
+  to this entry's own first guess that `AppShell` "may need a way to take a custom header title" at all.
+- **The drawer offers exactly one item — signed out, "Log in or sign up"; signed in, "Back to Bloombot" — both
+  the identical address, `{ kind: 'home' }`.** `App.tsx`'s own `resolveHomeRoute` effect already resolves that
+  one route to whichever landing screen a caller's own session earns it the instant it renders (the sign-in
+  screen, signed out; the account's own default organization, signed in), so there is no second address to
+  invent for "where does 'Home' go" distinct from "where does signing in happen" — they are the same place
+  today. No org/project/course/chat link is offered either way, since `PublicChrome` builds its own `navGroups`
+  from scratch rather than reusing any of `SignedInChrome`'s own organization-scoped ones.
+
+**`AppShell`'s own built-in footer is kept, unmodified** — not overridden with a separately-rendered
+`SiteFooter`, though the brief's own first framing ("Footer (SiteFooter) stays") read as asking for exactly
+that. Investigated and rejected: `AppShell`'s footer is a *fixed*, `h-footer`-sized bar, and the surrounding
+`<main>`'s own bottom padding is sized specifically to leave room for it (`AppShell.tsx`'s own `pb-[calc(...)]`)
+— substituting a plain, non-fixed `SiteFooter` in that slot would either leave a visible gap (nothing filling
+the space `<main>` still reserves) or require reworking `AppShell` itself to stop reserving it, for no material
+difference in what a reader actually gets: both link to the same two documents, and `AppShell`'s own copy adds a
+support address and the year. "The footer requirement is unaffected" is the reading this entry settled on,
+not "must be textually `SiteFooter` regardless of what already satisfies it" — flagged explicitly here in case
+the coordinator's own intent was the more literal one.
+
+**Signed-in state is decided by an ordinary prop, not a special case.** `pages/StaticDocument.tsx` takes
+`signedIn`/`navigate`, both optional. `apps/web/prerender-plugin.ts` still renders `StaticDocument` directly with
+neither — the defaults (`signedIn = false`, `navigate = () => {}`) are exactly the signed-out chrome a crawler
+with no session at all should see, so that build-time call needed no change. `App.tsx`'s own render (still
+matched *before* `session.kind === 'loading'`'s own skeleton, the same "a published document renders
+immediately" discipline this file's module comment already held) passes `signedIn={session.kind ===
+'signed-in'}` — always `false` on the very first paint, since `session` starts at `{ kind: 'loading' }`, so an
+account that turns out to be signed in briefly sees the signed-out drawer item before an ordinary re-render
+swaps it once `GET /auth/me` resolves. No hydration mismatch to reconcile either way: `main.tsx` mounts with
+`createRoot`, not `hydrateRoot` (`src/prerender/inject.ts`'s own comment), so the prerendered markup this
+default produces is discarded outright the instant the client bundle takes over, regardless of what it then
+renders — "pick the safe option" resolved to "there is no unsafe option here to avoid," once that was checked
+directly rather than assumed.
+
+**WEB-77/WEB-78 — filters are server-side, and the cap reads a second, unfiltered total.** `getOrganizationUsageSummary`
+(`@bloombot/db`) gained an optional `filters: { personId?, surface?, from?, to? }`, applied to the same grouped
+`totals` query that already produces `courses`/`bySurface` — every filter combines with `AND`, and a course
+left with no rows after filtering still appears, at zero, exactly as an *unfiltered* course with no usage always
+has. `costLedger.organizationUsage` (`@bloombot/actions`) validates the same shape with zod (`surface` narrowed
+to the three real values, `'unknown'` excluded — a filter never offers the historical backfill bucket) and
+passes it straight through; `studentsNearLimit` is explicitly untouched, per the brief's own scope.
+
+The organization's own whole-organization spend is carried as a *second* field, `unfilteredTotalCostMicros`
+(computed by the existing, always-unscoped `getOrganizationSpentMicros`), alongside the now-possibly-filtered
+`totalCostMicros`. `pages/Usage.tsx`'s own cap banner ("Cap set at… spent so far" / "Cap reached…") reads only
+the unfiltered field for its own spent/reached judgement — WEB-78's own requirement, verbatim: a filter must
+never make the cap look like it has more or less room than it actually does. This is a second field on the same
+response rather than a second request, the same "the read already carries both numbers" reasoning
+`pages/Usage.tsx`'s own pre-existing module comment already gives for deriving `capReached` locally at all.
+
+The report also carries `people: OrganizationUsagePerson[]` — every person with a ledger row in the
+organization, always unfiltered, each with a display label (`people.displayName`, never an email — the same
+source `repos/transcript-access.ts#listPeopleWithTranscript` already reads for the identical no-email rule) and
+the `courseIds` they have usage in. The organization Usage tab's own Student filter lists this whole,
+unfiltered set; the course tab's own Student filter (`components/CourseUsage.tsx`) narrows it client-side to the
+one course by `courseIds.includes(courseId)` — no second server read for that narrower list, since the
+unfiltered one already carries enough to slice it.
+
+Both filter rows (`pages/Usage.tsx`, `components/CourseUsage.tsx`) mirror `components/TranscriptBrowser.tsx`'s
+own shape exactly: a Student select, a Surface select defaulting to "Any surface", two `type="date"` inputs, and
+an explicit "Apply filters" button — nothing here fetches on a keystroke. The local-day→epoch-ms boundary
+helper (`dayStart`/`dayEnd`) used to live only inside `TranscriptBrowser.tsx`; it moved out to its own module
+(`apps/web/src/day-boundary.ts`) so both Usage screens could reuse it rather than each keeping a second copy —
+`TranscriptBrowser.tsx` now imports it too, with no change to its own behaviour.
+
+`formatBySurface` (`components/usageFormat.ts`) stays — the admin console's own pages (`pages/admin/*`) keep an
+entirely separate copy in `pages/admin/shared.tsx`, untouched, and neither was in scope. `pages/Usage.tsx` and
+`components/CourseUsage.tsx` render the new `components/BySurfaceList.tsx` instead — a `<ul>`, one `<li>` per
+surface, reusing a new `formatBySurfaceEntry` (extracted from `formatBySurface`, which now just maps and joins
+it) so the wording lives in one place for both the inline line and the list.
+
+**WEB-79.** `CourseUsageSummary` (`@bloombot/db`, `@bloombot/actions`, and `apps/web`'s own mirror in
+`api/types.ts`) gained a `projectId` field — the report otherwise had no way to build a `course-editor` route
+(`routing/route.ts`, which needs `projectId` alongside `courseId`) for a course title's own link. "Usage by
+course"'s course titles are now `components/AppLink.tsx`, opened at that course's own Usage tab
+(`tab: 'usage'`), routed through `pages/Usage.tsx`'s own new `navigate` prop — threaded from `pages/Shell.tsx`
+through `pages/OrganizationSettings.tsx` exactly the way `components/GeneralSettings.tsx` already receives it,
+already wrapped in `guardedNavigate` at that same hand-off, so `Usage.tsx` calls it directly rather than reaching
+for `useNavigationGuard()` a second time.
+
+## D-145 — `packages/db`/`packages/actions`/`apps/web`: WEB-77/WEB-78 rework round 2 — dirty-state, stale
+## responses, invalid dates, filtered totals, merged people, and a shared filter row
+
+Two reviewer rounds against `6cf10fc` found seven must-fix defects and five cheap fixes in the WEB-77/WEB-78
+filter work; this entry records the fixes that changed a boundary or a shape, not the mechanical ones (a missing
+field, a stale comment).
+
+**The cap-seeding effect used to key off `report` itself, not `report.spendingCapMicros`.** Applying a filter
+fetches a genuinely new `report` object every time (round 2, must-fix 11, below) — with the old `[report]`
+dependency, `pages/Usage.tsx`'s own cap-input-seeding effect ran on every filter apply, silently overwriting
+whatever an owner had mid-typed into the cap field (and clearing the WEB-69 dirty flag with it) even though the
+*cap itself* had not changed. Keyed off `report?.spendingCapMicros` instead — the one value that actually means
+"the seed should update."
+
+**`useOrganizationUsageReport` gained a request epoch, and dropped its own `JSON.stringify` memoization.** Two
+things, not one: (1) a stale-response guard (an older fetch resolving after a newer one must never overwrite it
+— a monotonic `requestEpochRef` int, bumped per call, checked before either `setReport`/`setLoadError` commits);
+(2) `refresh`'s own `useCallback` now depends on `filters` *by reference*, not by its serialized content. The
+`JSON.stringify` comparison it replaced was reasoned about as "an unchanged filter set is stable across a
+re-render" — true, but it also meant a caller who clicked "Apply filters" twice with the same values (or a
+`refresh()` called explicitly, e.g. after a cap save) sometimes silently skipped the fetch, which is backwards
+for a control whose whole point is "get me current data." Correctness turned out to line up with simplicity
+here: since a caller's own `appliedFilters` lives in `useState` (a stable reference across unrelated re-renders,
+changing only when that caller's own "Apply"/"Clear" handler calls `setAppliedFilters` with a fresh object), a
+plain reference-equality dependency refetches on every genuine "Apply"/"Clear" click — even one whose values
+are unchanged — while staying inert across a re-render the filters had nothing to do with.
+
+**A pre-1970 or backwards date range is now refused client-side, not server-side.** `costLedger.organizationUsage`'s
+own zod schema already refused a negative `from`/`to` (a date before 1 January 1970) — refusing it there instead
+of never sending it meant the *whole screen* re-rendered as `<ErrorMessage>`, taking the filter row that caused
+it off the page with nothing left to fix it from. `day-boundary.ts#dateRangeError` (a new, shared function) runs
+first now, inside `components/UsageFilterRow.tsx`'s own "Apply filters" handler: an inline message next to the
+field, and the request is never sent. Both screens' own load error (a genuine server-side failure, still
+possible) now renders *beneath* the filter row rather than replacing the screen either, for the same reason —
+a reader should never lose the control that could fix what went wrong.
+
+**A filtered total is now a visible line, not only an implicit change in the numbers below it.** `pages/Usage.tsx`
+and `components/CourseUsage.tsx` each render "Total: $X · N calls" — "Filtered total" once any filter is
+applied — and `components/UsageFilterRow.tsx` offers "Clear filters" (resetting every field and re-fetching
+unfiltered) plus a "Showing filtered results" note, both only while a filter is actually applied.
+
+**A merged pair's own spend is now reachable through either name.** `mergePeople` (`docs/DECISIONS.md` D-35)
+deliberately leaves `cost_ledger_entries` keyed to whichever person id was current when a call was actually
+made — filtering by the survivor alone silently dropped the loser's own, still-real spend.
+`getOrganizationUsageSummary`'s own `personId` filter now expands to `[personId, ...listMergedLoserIds(...)]`
+(one hop only: `mergePeople` refuses a survivor who is themselves already a tombstone, so a loser's own
+`mergedIntoPersonId` can never chain through a second merge). The Student filter's own list
+(`listOrganizationUsagePeople`) excludes a merged-away tombstone outright — nothing useful is filtered *by*
+selecting them, since their own spend is already reachable through the survivor.
+
+**`getOrganizationUsageSummary` no longer computes `people`/`unfilteredTotalCostMicros` at all.** Both moved to
+their own functions (`listOrganizationUsagePeople`, and the pre-existing `getOrganizationSpentMicros`), called
+only from `costLedger.organizationUsage`'s own `execute` — not from the summary itself. Two of the summary's
+other callers (`apps/api/src/routes/admin.ts`, `apps/worker/src/handlers/transcripts.ts`) read only `courses`/
+`bySurface`/the totals and had no use for either; leaving them inside the summary meant paying for two queries
+on every call from either, for a result immediately discarded.
+
+**One filter row, not two.** `components/UsageFilterRow.tsx` is what `pages/Usage.tsx` and
+`components/CourseUsage.tsx` both render now — the Student/Surface/date fields, the date validation, "Apply
+filters," "Clear filters" and the filtered note, previously duplicated by hand across both screens.
+`components/usageFormat.ts#studentLabel` gained the same first/last-name fallback `person-identity.ts#fullName`
+(newly exported, for exactly this reuse) already gives a chat heading — a display name, then first/last name,
+then the bare person id, never an email — needed because a roster-imported person can carry a first/last name
+with no `displayName` set at all, and the old `displayName ?? personId` fallback skipped straight past a name
+the platform already had.

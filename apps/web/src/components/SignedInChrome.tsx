@@ -158,7 +158,9 @@ export function SignedInChrome({
   }
   const mcpNavItem = {
     key: 'mcp',
-    label: 'MCP',
+    // WEB-75 — the drawer entry names what it does ("Connect to other AI
+    // tools") rather than the protocol acronym; the route/key stay `mcp`.
+    label: 'Connect to other AI tools',
     onClick: () => navigateToTab('mcp'),
     active: activeTab === 'mcp',
   }

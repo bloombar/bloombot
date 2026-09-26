@@ -3624,9 +3624,11 @@ Only the drawer label changes — the screen's address and what it does stay as 
 
 #### WEB-76 The legal pages carry the site's header and footer
 
-The privacy policy and the terms render inside the same header and footer the rest of the site shows, rather
-than as a bare page with no way back. They stay reachable signed out; a signed-out reader sees the public
-header, and a signed-in reader is not shown a sign-in prompt as if they were not.
+The privacy policy and the terms render inside a header bar and footer like the rest of the site, rather than
+as a bare page with no way back. They need no sign-in, so their header names the app itself — its name and a
+short description, e.g. "Bloombot — AI course assistant" — never an organization, and its menu carries only
+links that make sense without an account: signing in or signing up, the home page, the privacy policy and the
+terms. A reader who is already signed in is not offered a sign-in; their menu leads back into the app instead.
 
 #### WEB-77 A course's usage can be narrowed by person, surface and date
 

@@ -305,12 +305,24 @@ export function hasExhaustedDailyLimit(
   return count >= course.maxRequestsPerDay
 }
 
-/** One row of `listUsageNearLimit`'s own report — a person, a course, and how close today's count is to what that course allows. */
+/**
+ * One row of `listUsageNearLimit`'s own report — a person, a course, and
+ * how close today's count is to what that course allows.
+ * `personDisplayName`/`personFirstName`/`personLastName` — never an email
+ * (round 2, must-fix 5) — are what a caller's own `studentLabel`
+ * (`apps/web/src/components/usageFormat.ts`) needs for its full fallback
+ * (display name, then first/last name, then the bare id); `displayName`
+ * alone left a person with only a roster-imported first/last name (and no
+ * `displayName` set) shown by their bare id, a name the label had, in fact,
+ * already been given.
+ */
 export interface UsageNearLimit {
   courseId: string
   courseTitle: string
   personId: string
   personDisplayName: string | null
+  personFirstName: string | null
+  personLastName: string | null
   count: number
   maxRequestsPerDay: number
 }
@@ -346,6 +358,8 @@ export function listUsageNearLimit(
       courseTitle: courses.title,
       personId: usageCounters.personId,
       personDisplayName: people.displayName,
+      personFirstName: people.firstName,
+      personLastName: people.lastName,
       count: usageCounters.count,
       maxRequestsPerDay: courses.maxRequestsPerDay,
     })

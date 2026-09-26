@@ -280,6 +280,12 @@ describe('answerQuestion (COST-1/COST-2): a successful answer writes exactly one
       {
         courseId,
         courseTitle: 'Test Course',
+        // WEB-79 — `seedCourseAndPerson` does not hand back its own
+        // `projectId` (`tests/helpers/seed.ts`'s own `SeedResult`, unchanged
+        // by this slice); any string is enough to prove the field is
+        // carried through, without widening that helper's own contract
+        // just for this one assertion.
+        projectId: expect.any(String),
         // Default pricing, unconfigured (`answerQuestion`'s own
         // `NO_PRICING_CONFIGURED`): 0 micros, but still a real, attributed
         // row — proven by `callCount` below, not by `costMicros` alone.

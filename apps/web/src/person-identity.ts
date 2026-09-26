@@ -37,8 +37,18 @@ export interface PersonIdentityFields {
   personDiscordName: string | null
 }
 
-/** `firstName`/`lastName` joined, whichever exists — `undefined` when neither is known, the same "no name" signal `CoursePeople.tsx#fullName` already gives. */
-function fullName(fields: PersonIdentityFields): string | undefined {
+/**
+ * `firstName`/`lastName` joined, whichever exists — `undefined` when
+ * neither is known, the same "no name" signal `CoursePeople.tsx#fullName`
+ * already gives. Exported (round 2, must-fix 5) so
+ * `components/usageFormat.ts#studentLabel` can reuse the identical join
+ * rather than a second copy — takes only the two fields it actually reads,
+ * a `Pick` of `PersonIdentityFields` rather than the whole thing, since a
+ * usage row carries no email or Discord name to pad the parameter with.
+ */
+export function fullName(
+  fields: Pick<PersonIdentityFields, 'personFirstName' | 'personLastName'>
+): string | undefined {
   const parts = [fields.personFirstName, fields.personLastName].filter(
     (part): part is string => part !== null && part !== ''
   )

@@ -15,6 +15,8 @@ import type { OrganizationUsageReport } from '../src/api/types.js'
 import { Usage } from '../src/pages/Usage.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
+const noopNavigate = () => {}
+
 const { fetchOrganizationUsage, setSpendingCap } = vi.hoisted(() => ({
   fetchOrganizationUsage: vi.fn(),
   setSpendingCap: vi.fn(),
@@ -39,9 +41,18 @@ function report(
     spendingCapMicros: null,
     totalCostMicros: 0,
     totalEstimatedCostMicros: 0,
+    // WEB-78 — defaults to the same value `totalCostMicros` above does,
+    // since most cases below have nothing to filter; the cap tests that
+    // actually exercise the "unfiltered stays whole" distinction override
+    // this explicitly, alongside `totalCostMicros`.
+    unfilteredTotalCostMicros: overrides.totalCostMicros ?? 0,
     courses: [],
     studentsNearLimit: [],
     bySurface: [],
+    // WEB-77 — every case below has nobody to filter by; the filter-row
+    // tests (`describe('the filter row (WEB-77/WEB-78)')`) set this
+    // explicitly.
+    people: [],
     ...overrides,
   }
 }
@@ -54,7 +65,9 @@ describe('Usage (COST-3/COST-4)', () => {
   it('shows "no cap set" when the organization has never configured one', async () => {
     fetchOrganizationUsage.mockResolvedValue(report())
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
 
     expect(await screen.findByText(/No spending cap set/)).toBeInTheDocument()
   })
@@ -64,7 +77,9 @@ describe('Usage (COST-3/COST-4)', () => {
       report({ spendingCapMicros: 20_000_000, totalCostMicros: 5_000_000 })
     )
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
 
     expect(await screen.findByText(/Cap set at \$20\.00/)).toBeInTheDocument()
     expect(screen.queryByText(/No spending cap set/)).not.toBeInTheDocument()
@@ -80,7 +95,9 @@ describe('Usage (COST-3/COST-4)', () => {
       report({ spendingCapMicros: 5_000_000, totalCostMicros: 5_000_000 })
     )
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
 
     expect(await screen.findByText(/Cap reached/)).toBeInTheDocument()
     expect(screen.queryByText(/^Cap set at/)).not.toBeInTheDocument()
@@ -93,6 +110,7 @@ describe('Usage (COST-3/COST-4)', () => {
           {
             courseId: 'course-1',
             courseTitle: 'Web Design',
+            projectId: 'project-1',
             costMicros: 1_500_000,
             estimatedCostMicros: 0,
             callCount: 3,
@@ -101,6 +119,7 @@ describe('Usage (COST-3/COST-4)', () => {
           {
             courseId: 'course-2',
             courseTitle: 'Intro to Testing',
+            projectId: 'project-1',
             costMicros: 250_000,
             estimatedCostMicros: 250_000,
             callCount: 1,
@@ -110,7 +129,9 @@ describe('Usage (COST-3/COST-4)', () => {
       })
     )
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
 
     expect(await screen.findByText('Web Design')).toBeInTheDocument()
     expect(screen.getByText(/\$1\.50 · 3 calls/)).toBeInTheDocument()
@@ -130,6 +151,7 @@ describe('Usage (COST-3/COST-4)', () => {
           {
             courseId: 'course-1',
             courseTitle: 'Web Design',
+            projectId: 'project-1',
             costMicros: 1_200_000,
             estimatedCostMicros: 0,
             callCount: 4,
@@ -166,17 +188,22 @@ describe('Usage (COST-3/COST-4)', () => {
       })
     )
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
 
     await screen.findByText('Web Design')
-    // Two "By surface:" lines — one for the organization total, one for
-    // this course — both naming Discord and both reading `unknown` as
-    // prose rather than the bare word.
-    const bySurfaceLines = screen.getAllByText(/By surface:/)
-    expect(bySurfaceLines).toHaveLength(2)
-    for (const line of bySurfaceLines) {
-      expect(line).toHaveTextContent('Discord: $1.00 · 3 calls')
-      expect(line).toHaveTextContent(
+    // Two "By surface:" blocks — one for the organization total, one for
+    // this course — each a `<p>` label followed by a `<ul>` (WEB-77/78);
+    // both naming Discord and both reading `unknown` as prose rather than
+    // the bare word. `.parentElement` is what carries both the label and
+    // its own `<ul>`'s text.
+    const bySurfaceLabels = screen.getAllByText('By surface:')
+    expect(bySurfaceLabels).toHaveLength(2)
+    for (const label of bySurfaceLabels) {
+      const block = label.parentElement
+      expect(block).toHaveTextContent('Discord: $1.00 · 3 calls')
+      expect(block).toHaveTextContent(
         'recorded before surfaces were tracked: $0.20 · 1 call'
       )
     }
@@ -192,6 +219,8 @@ describe('Usage (COST-3/COST-4)', () => {
             courseTitle: 'Web Design',
             personId: 'person-42',
             personDisplayName: null,
+            personFirstName: null,
+            personLastName: null,
             count: 8,
             maxRequestsPerDay: 10,
           },
@@ -199,7 +228,9 @@ describe('Usage (COST-3/COST-4)', () => {
       })
     )
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
 
     expect(await screen.findByText('person-42')).toBeInTheDocument()
     expect(screen.getByText('8 of 10 today')).toBeInTheDocument()
@@ -208,7 +239,9 @@ describe('Usage (COST-3/COST-4)', () => {
   it('withholds the cap-setting form for a caller who is not an owner', async () => {
     fetchOrganizationUsage.mockResolvedValue(report())
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={false} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={false} navigate={noopNavigate} />
+    )
 
     await screen.findByText(/No spending cap set/)
     expect(screen.queryByLabelText('Spending cap ($)')).not.toBeInTheDocument()
@@ -224,7 +257,9 @@ describe('Usage (COST-3/COST-4)', () => {
       spendingCapMicros: 12_500_000,
     })
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
     await screen.findByText(/No spending cap set/)
 
     fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
@@ -253,7 +288,9 @@ describe('Usage (COST-3/COST-4)', () => {
       spendingCapMicros: null,
     })
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
     await screen.findByText(/Cap set at \$5\.00/)
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear cap' }))
@@ -283,7 +320,9 @@ describe('Usage (COST-3/COST-4)', () => {
       spendingCapMicros: null,
     })
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
     await screen.findByText(/Cap set at \$5\.00/)
 
     fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
@@ -299,7 +338,9 @@ describe('Usage (COST-3/COST-4)', () => {
   it('a malformed cap amount is refused client-side, next to the field, without calling setSpendingCap', async () => {
     fetchOrganizationUsage.mockResolvedValue(report())
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
     await screen.findByText(/No spending cap set/)
 
     fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
@@ -319,7 +360,9 @@ describe('Usage (COST-3/COST-4)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
     await screen.findByText(/No spending cap set/)
 
     fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
@@ -332,17 +375,349 @@ describe('Usage (COST-3/COST-4)', () => {
     )
   })
 
-  it('a failed load renders the same ErrorMessage, not the usage sections', async () => {
+  // Round 2, must-fix 3 — a load error used to replace the whole screen,
+  // taking the filter row (and any way to fix what caused the error) off
+  // the page with it. It now renders beneath the filter row instead — the
+  // row (and its "Apply filters" button) stays reachable.
+  it('a failed load renders the same ErrorMessage beneath the filter row, not in place of the whole screen', async () => {
     fetchOrganizationUsage.mockRejectedValue(
       new ApiError(500, { error: 'internal_error' })
     )
 
-    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Something went wrong. Try again.'
     )
-    expect(screen.queryByText('Usage by course')).not.toBeInTheDocument()
+    // The filter row survives the error — still reachable to fix and
+    // retry.
+    expect(
+      screen.getByRole('button', { name: 'Apply filters' })
+    ).toBeInTheDocument()
+  })
+
+  // --- WEB-77/WEB-78: the filter row ---------------------------------------
+
+  it('lists every person with usage in the organization in the Student filter, unfiltered', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        people: [
+          {
+            personId: 'person-1',
+            personDisplayName: 'Alice',
+            personFirstName: null,
+            personLastName: null,
+            courseIds: [],
+          },
+          {
+            personId: 'person-2',
+            personDisplayName: 'Bob',
+            personFirstName: null,
+            personLastName: null,
+            courseIds: [],
+          },
+        ],
+      })
+    )
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Student')).toHaveTextContent('Alice')
+    )
+    expect(screen.getByLabelText('Student')).toHaveTextContent('Bob')
+  })
+
+  it('applies the person/surface/date filters only once "Apply filters" is clicked, narrowing the fetch', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        people: [
+          {
+            personId: 'person-1',
+            personDisplayName: 'Alice',
+            personFirstName: null,
+            personLastName: null,
+            courseIds: [],
+          },
+        ],
+      })
+    )
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    await screen.findByText(/No spending cap set/)
+    // The mount-triggered read — the one call before any filter is applied.
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(screen.getByLabelText('Student'), {
+      target: { value: 'person-1' },
+    })
+    fireEvent.change(screen.getByLabelText('Surface'), {
+      target: { value: 'discord' },
+    })
+    fireEvent.change(screen.getByLabelText('From date'), {
+      target: { value: '2026-01-01' },
+    })
+    fireEvent.change(screen.getByLabelText('To date'), {
+      target: { value: '2026-01-31' },
+    })
+    // Changing the fields alone must not re-fetch.
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    await waitFor(() =>
+      expect(fetchOrganizationUsage).toHaveBeenLastCalledWith(
+        'org-1',
+        expect.any(String),
+        expect.objectContaining({ personId: 'person-1', surface: 'discord' })
+      )
+    )
+    const [, , appliedFilters] = fetchOrganizationUsage.mock.calls.at(-1)!
+    expect(appliedFilters.from).toBeLessThan(appliedFilters.to)
+  })
+
+  // Round 2, must-fix 1 — applying a filter fetches a fresh `report` with
+  // the identical, unchanged cap; the old `[report]` effect dependency
+  // reseeded `capInput` from every fresh report, silently discarding an
+  // owner's own unsaved edit (and the WEB-69 dirty flag with it).
+  it('applying a filter does not wipe an unsaved cap edit or its WEB-69 dirty flag', async () => {
+    // A fresh object per call, as a real fetch returns — a shared one would
+    // let React skip the update and hide the bug this test is about.
+    fetchOrganizationUsage.mockImplementation(() =>
+      Promise.resolve(report({ spendingCapMicros: 5_000_000 }))
+    )
+    const onDirtyChange = vi.fn()
+
+    renderWithModal(
+      <Usage
+        organizationId="org-1"
+        isOwner={true}
+        navigate={noopNavigate}
+        onDirtyChange={onDirtyChange}
+      />
+    )
+    await screen.findByText(/Cap set at \$5\.00/)
+
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '9' },
+    })
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true))
+
+    // Applying a filter fetches a *new* report (round 2, must-fix 11) —
+    // same cap, different object.
+    fireEvent.change(screen.getByLabelText('Surface'), {
+      target: { value: 'mcp' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+    await waitFor(() => expect(fetchOrganizationUsage).toHaveBeenCalledTimes(2))
+    // Wait for the second response to render, not merely to be requested.
+    await screen.findByText(/Filtered total/)
+
+    // The unsaved `9` survives, and the tab is still reported dirty.
+    expect(screen.getByLabelText('Spending cap ($)')).toHaveValue('9')
+    expect(onDirtyChange).not.toHaveBeenLastCalledWith(false)
+  })
+
+  // Round 2, must-fix 3 — a date before 1970 (a negative epoch) or a
+  // "From" after "To" used to reach the server, fail zod's `nonnegative()`
+  // check there, and replace the whole screen with an error. Caught here
+  // instead: an inline message next to the field, and no fetch at all.
+  it('refuses a "From" after "To" client-side, with an inline error, and never fetches', async () => {
+    fetchOrganizationUsage.mockResolvedValue(report())
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    await screen.findByText(/No spending cap set/)
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(screen.getByLabelText('From date'), {
+      target: { value: '2026-02-01' },
+    })
+    fireEvent.change(screen.getByLabelText('To date'), {
+      target: { value: '2026-01-01' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(await screen.findByText(/must be on or before/i)).toBeInTheDocument()
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a date before 1 January 1970 client-side, and never fetches', async () => {
+    fetchOrganizationUsage.mockResolvedValue(report())
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    await screen.findByText(/No spending cap set/)
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(screen.getByLabelText('From date'), {
+      target: { value: '1900-01-01' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(
+      await screen.findByText(/on or after 1 January 1970/i)
+    ).toBeInTheDocument()
+    expect(fetchOrganizationUsage).toHaveBeenCalledTimes(1)
+  })
+
+  // Round 2, must-fix 4 (SPEC WEB-78) — the totals below the filter row can
+  // be narrowed by a filter; this line, and "Clear filters," are what make
+  // that visible rather than leaving a reader to notice the numbers moved.
+  it('shows a filtered total distinct from the unfiltered one, and a "Clear filters" control, once a filter is applied', async () => {
+    fetchOrganizationUsage
+      .mockResolvedValueOnce(report({ totalCostMicros: 9_000_000 }))
+      .mockResolvedValueOnce(report({ totalCostMicros: 1_000_000 }))
+      .mockResolvedValueOnce(report({ totalCostMicros: 9_000_000 }))
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    expect(await screen.findByText(/Total: \$9\.00/)).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Clear filters' })
+    ).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Surface'), {
+      target: { value: 'mcp' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    expect(
+      await screen.findByText(/Filtered total: \$1\.00/)
+    ).toBeInTheDocument()
+    const clearButton = screen.getByRole('button', { name: 'Clear filters' })
+    expect(clearButton).toBeInTheDocument()
+
+    fireEvent.click(clearButton)
+    await waitFor(() => expect(fetchOrganizationUsage).toHaveBeenCalledTimes(3))
+    expect(
+      screen.queryByRole('button', { name: 'Clear filters' })
+    ).not.toBeInTheDocument()
+  })
+
+  // WEB-78 — the total's call count comes from `bySurface`, which covers
+  // every ledger row, so it agrees with `totalCostMicros` even when the
+  // spend belongs to a course that has since been deleted.
+  it("counts calls from every row, not only live courses', in the total", async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        totalCostMicros: 1_000_000,
+        courses: [],
+        bySurface: [
+          {
+            surface: 'web',
+            costMicros: 1_000_000,
+            estimatedCostMicros: 0,
+            callCount: 3,
+          },
+        ],
+      })
+    )
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    expect(
+      await screen.findByText(/Total: \$1\.00 · 3 calls/)
+    ).toBeInTheDocument()
+  })
+
+  // Round 2, must-fix 5 — `studentLabel`'s own fallback: display name,
+  // then first/last name, then the bare id — never an email, and never
+  // just the id when a real name is known through first/last alone.
+  it('falls back to a first/last name for a student with no display name set', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        studentsNearLimit: [
+          {
+            courseId: 'course-1',
+            courseTitle: 'Web Design',
+            personId: 'person-42',
+            personDisplayName: null,
+            personFirstName: 'Ada',
+            personLastName: 'Lovelace',
+            count: 8,
+            maxRequestsPerDay: 10,
+          },
+        ],
+      })
+    )
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.queryByText('person-42')).not.toBeInTheDocument()
+  })
+
+  // WEB-78 — the cap banner's own "spent so far" must read the whole
+  // organization even while the totals below it are narrowed by a filter.
+  it('the cap banner keeps reading the unfiltered total once a filter narrows the figures below it', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        spendingCapMicros: 20_000_000,
+        totalCostMicros: 1_000_000,
+        unfilteredTotalCostMicros: 15_000_000,
+      })
+    )
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+
+    expect(await screen.findByText(/Cap set at \$20\.00/)).toBeInTheDocument()
+    // The whole-organization figure, not the filtered `totalCostMicros`.
+    expect(screen.getByText(/\$15\.00 spent so far/)).toBeInTheDocument()
+    expect(screen.queryByText(/\$1\.00 spent so far/)).not.toBeInTheDocument()
+  })
+
+  // --- WEB-79: a course title links to its own settings' Usage tab --------
+
+  it('links a course title to that course’s own settings, opened at its Usage tab', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        courses: [
+          {
+            courseId: 'course-1',
+            courseTitle: 'Web Design',
+            projectId: 'project-1',
+            costMicros: 500_000,
+            estimatedCostMicros: 0,
+            callCount: 1,
+            bySurface: [],
+          },
+        ],
+      })
+    )
+    const navigate = vi.fn()
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={navigate} />
+    )
+
+    const link = await screen.findByRole('link', { name: 'Web Design' })
+    expect(link).toHaveAttribute(
+      'href',
+      '/o/org-1/projects/project-1/courses/course-1/usage'
+    )
+    fireEvent.click(link)
+    expect(navigate).toHaveBeenCalledWith({
+      kind: 'course-editor',
+      organizationId: 'org-1',
+      projectId: 'project-1',
+      courseId: 'course-1',
+      tab: 'usage',
+    })
   })
 })
 
@@ -359,6 +734,7 @@ describe('Usage — per-tab dirty tracking (WEB-69)', () => {
       <Usage
         organizationId="org-1"
         isOwner={true}
+        navigate={noopNavigate}
         onDirtyChange={onDirtyChange}
       />
     )
@@ -386,6 +762,7 @@ describe('Usage — per-tab dirty tracking (WEB-69)', () => {
       <Usage
         organizationId="org-1"
         isOwner={true}
+        navigate={noopNavigate}
         onRegisterActions={(registered) => {
           actions = registered
         }}
@@ -422,6 +799,7 @@ describe('Usage — per-tab dirty tracking (WEB-69)', () => {
       <Usage
         organizationId="org-1"
         isOwner={true}
+        navigate={noopNavigate}
         onRegisterActions={onRegisterActions}
       />
     )

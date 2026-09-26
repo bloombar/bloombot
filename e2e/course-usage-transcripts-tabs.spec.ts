@@ -144,11 +144,15 @@ test('an instructor reads a course’s own Usage and Transcripts tabs, filters b
   await expect(page.getByText('When is the deadline?')).toBeVisible()
 
   // 5. Filter by the seeded student — the same reading `transcript-access-log.spec.ts`
-  //    already proves an ADMIN-2 event, below.
-  await page
+  //    already proves an ADMIN-2 event, below. Scoped to this tab's own
+  //    panel: WEB-77 gave the Usage tab (still mounted, merely hidden) an
+  //    identically labelled "Student" filter of its own, so a bare
+  //    `getByLabel('Student')` is ambiguous between the two now.
+  const transcriptsPanel = page.getByRole('tabpanel', { name: 'Transcripts' })
+  await transcriptsPanel
     .getByLabel('Student', { exact: true })
     .selectOption({ label: studentDisplayName })
-  await page.getByRole('button', { name: 'Apply filters' }).click()
+  await transcriptsPanel.getByRole('button', { name: 'Apply filters' }).click()
   await expect(page.getByText('When is the deadline?')).toBeVisible()
 
   // Then export (ADMIN-3) — unfiltered: PPL-5 refuses an export filtered to
@@ -157,10 +161,10 @@ test('an instructor reads a course’s own Usage and Transcripts tabs, filters b
   // which this spec's directly-inserted person (this file's own module
   // comment on why) never has. No worker runs in this harness, so the
   // export is proven queued, not collected.
-  await page
+  await transcriptsPanel
     .getByLabel('Student', { exact: true })
     .selectOption({ label: 'Every student' })
-  await page.getByRole('button', { name: 'Export' }).click()
+  await transcriptsPanel.getByRole('button', { name: 'Export' }).click()
   await expect(page.getByText('Queued…')).toBeVisible()
 
   // ADMIN-2 — the filtered read above (and the export request) both

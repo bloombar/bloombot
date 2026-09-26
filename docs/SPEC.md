@@ -3613,3 +3613,37 @@ permanent path is retired in favour of the reversible one wherever the reversibl
 or project deleted from anywhere in the product is soft-deleted, and the sweep is what makes it permanent.
 What remains of PROJ-8/PROJ-9 is the preview — an administrator still sees what a deletion will take with it
 before confirming.
+
+### 50. Reading Usage, and Finding Your Way Around It
+
+#### WEB-75 The MCP entry is named for what it does
+
+The navigation drawer's **MCP** entry is labelled **Connect to other AI tools**. "MCP" names a protocol most
+instructors have never heard of; the entry's job is connecting Bloombot to the AI assistants they already use.
+Only the drawer label changes — the screen's address and what it does stay as they are.
+
+#### WEB-76 The legal pages carry the site's header and footer
+
+The privacy policy and the terms render inside the same header and footer the rest of the site shows, rather
+than as a bare page with no way back. They stay reachable signed out; a signed-out reader sees the public
+header, and a signed-in reader is not shown a sign-in prompt as if they were not.
+
+#### WEB-77 A course's usage can be narrowed by person, surface and date
+
+A course's Usage tab carries the same filters its Transcripts tab does: a person (anyone with usage recorded
+in that course), a surface (Discord, web, MCP, or any), and a date range. The spend, call count and per-surface
+breakdown shown reflect the filters applied. The per-surface breakdown is a list, one surface per line, so the
+surfaces can be compared at a glance instead of read out of a single run-on sentence.
+
+#### WEB-78 An organization's usage can be narrowed by person, surface and date
+
+The Usage tab of an organization's settings carries the same filters, with the person filter listing everyone
+with usage recorded anywhere in the organization, across every project and course. The organization total,
+its per-surface breakdown and every course's figures reflect the filters, and every per-surface breakdown is a
+list, one surface per line. The spending cap's state — no cap, room left, reached — is always judged against
+the organization's whole spend, never a filtered part of it, because that is what the cap enforces.
+
+#### WEB-79 A course in the organization's usage opens that course's usage
+
+Each course named under **Usage by course** in an organization's settings links to that course's own
+settings, opened at its Usage tab.

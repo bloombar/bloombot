@@ -253,4 +253,29 @@ test("an instructor sees their course's spend and a student approaching its dail
   )
   await expect(nearLimit).toContainText(personId)
   await expect(nearLimit).toContainText('1 of 1 today')
+
+  // 7. WEB-77/WEB-78 — a surface filter, applied server-side: the one real
+  //    call above was asked through `web` (step 4's own chat surface), so
+  //    filtering to `discord` narrows this course's own figures to zero,
+  //    and filtering to `web` brings them straight back — proof the
+  //    filter actually reaches the server rather than doing nothing.
+  await page.getByLabel('Surface').selectOption('discord')
+  await page.getByRole('button', { name: 'Apply filters' }).click()
+  await expect(usageByCourse).toContainText('$0.00 · 0 calls')
+
+  await page.getByLabel('Surface').selectOption('web')
+  await page.getByRole('button', { name: 'Apply filters' }).click()
+  await expect(usageByCourse).toContainText('1 call')
+  await expect(usageByCourse).not.toContainText('0 calls')
+
+  // 8. WEB-79 — the course title itself is a real link, opening that
+  //    course's own settings at its Usage tab rather than only naming the
+  //    course in plain text.
+  await page.getByRole('link', { name: courseTitle }).click()
+  await expect(
+    page.getByRole('tab', { name: 'Usage', selected: true })
+  ).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Usage' })).toContainText(
+    '1 call'
+  )
 })

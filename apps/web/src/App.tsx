@@ -558,15 +558,28 @@ export function App() {
     [navigate, refreshSession, joinedCourse, justInstalled]
   )
 
-  // Before every session-dependent branch below, deliberately: these two are
-  // published documents, and one that only a signed-in account can read is not
-  // published at all. They render identically whether or not anyone is signed
-  // in, and neither reads the session.
+  // Before every other session-dependent branch: a published document
+  // renders immediately, even before `session` resolves (`false` until
+  // then). `signedIn` only changes which one drawer item shows.
   if (route.kind === 'privacy') {
-    return <StaticDocument document={privacyDocument} testId="privacy-page" />
+    return (
+      <StaticDocument
+        document={privacyDocument}
+        testId="privacy-page"
+        signedIn={session.kind === 'signed-in'}
+        navigate={navigate}
+      />
+    )
   }
   if (route.kind === 'terms') {
-    return <StaticDocument document={termsDocument} testId="terms-page" />
+    return (
+      <StaticDocument
+        document={termsDocument}
+        testId="terms-page"
+        signedIn={session.kind === 'signed-in'}
+        navigate={navigate}
+      />
+    )
   }
 
   if (route.kind === 'sign-in') {

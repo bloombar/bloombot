@@ -484,6 +484,7 @@ export function OrganizationSettings({
           <Usage
             organizationId={organizationId}
             isOwner={isOwner}
+            navigate={navigate}
             onDirtyChange={registerTabDirty('usage')}
             onRegisterActions={registerTabActions('usage')}
           />

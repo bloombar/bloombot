@@ -565,7 +565,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     ).toBeInTheDocument()
     expect(fetchOrganizationUsage).toHaveBeenCalledWith(
       'org-1',
-      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      // WEB-77/WEB-78 — no filter has been applied yet, so this is called
+      // with an empty filters object, not omitted entirely.
+      {}
     )
     // org-1's own membership is 'owner' — the cap-setting form is offered.
     expect(await screen.findByLabelText('Spending cap ($)')).toBeInTheDocument()
@@ -788,7 +791,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
     it('renders for a member', () => {
       renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
-      fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Connect to other AI tools' })
+      )
       expect(screen.getByRole('heading', { name: 'MCP' })).toBeInTheDocument()
     })
 
@@ -802,8 +807,12 @@ describe('Shell (WEB-3, WEB-4)', () => {
       })
       switchOrganization('A University')
       openDrawer()
-      expect(screen.getByRole('button', { name: 'MCP' })).toBeInTheDocument()
-      fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
+      expect(
+        screen.getByRole('button', { name: 'Connect to other AI tools' })
+      ).toBeInTheDocument()
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Connect to other AI tools' })
+      )
       expect(screen.getByRole('heading', { name: 'MCP' })).toBeInTheDocument()
     })
 

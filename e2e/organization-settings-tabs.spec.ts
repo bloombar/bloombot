@@ -1,10 +1,14 @@
 /**
  * WEB-69, end to end: the organization settings screen itself — a
  * deep-linked tab survives a reload, an old (pre-WEB-69) address still
- * opens the right tab, the arrow keys move between tabs, and switching
- * tabs (or leaving the screen) while one holds an unsaved edit asks the
- * WEB-38 three-answer question, exactly the way `keyboard.spec.ts` already
- * proves the identical prompt for `pages/CourseEditor.tsx`.
+ * opens the right tab, the arrow keys move between tabs (General first,
+ * Jobs last — rework round 1's own Danger zone tab did not survive to the
+ * user's final decision, which put it at the bottom of General instead),
+ * and switching tabs (or leaving the screen) while one holds an unsaved
+ * edit asks the WEB-38 three-answer question, exactly the way
+ * `keyboard.spec.ts` already proves the identical prompt for
+ * `pages/CourseEditor.tsx`. A separate test renames the organization from
+ * General itself.
  *
  * **What is real, and what is a harness stand-in** (the same discipline
  * `spending-cap.spec.ts`'s own module comment holds itself to):
@@ -13,7 +17,7 @@
  *    `apps/api` (`routes/actions.ts`, unmodified), a real throwaway SQLite
  *    database.
  *  - Not real: nothing else this spec reaches needs a stand-in — every
- *    write it makes (a spending cap) is the genuine round trip.
+ *    write it makes (a spending cap, a rename) is the genuine round trip.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -58,13 +62,13 @@ test('a deep-linked tab survives a reload, and arrow keys move between tabs (WEB
   await page.keyboard.press('ArrowRight')
   await expect(page.getByRole('tab', { name: 'Team' })).toBeFocused()
   await page.keyboard.press('End')
-  await expect(page.getByRole('tab', { name: 'Danger zone' })).toBeFocused()
-  await expect(page.getByRole('tab', { name: 'Danger zone' })).toHaveAttribute(
+  await expect(page.getByRole('tab', { name: 'Jobs' })).toBeFocused()
+  await expect(page.getByRole('tab', { name: 'Jobs' })).toHaveAttribute(
     'aria-selected',
     'true'
   )
   await page.keyboard.press('Home')
-  await expect(page.getByRole('tab', { name: 'Discord' })).toBeFocused()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeFocused()
 })
 
 test('an old, pre-WEB-69 address still opens the tab it named, corrected to the canonical one (WEB-69)', async ({
@@ -161,5 +165,31 @@ test('a dirty spending cap asks before switching tabs — save, discard, and sta
   await expect(page.getByRole('tab', { name: 'Discord' })).toHaveAttribute(
     'aria-selected',
     'true'
+  )
+})
+
+test('renames the organization from the General tab, and the new name appears in the header (WEB-57/WEB-69)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web69-rename-${suffix}@example.edu`
+
+  await signIn(page, email)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  // General is the default tab — `navigateToOrganizationSettingsTab` skips
+  // its own tab click for exactly that reason (that helper's own doc
+  // comment).
+  await navigateToOrganizationSettingsTab(page, 'General')
+
+  await page.getByLabel('Organization name').fill('Renamed From General')
+  await page.getByRole('button', { name: 'Save' }).click()
+
+  // The header's own switcher — the same real-time proof
+  // `organizations-arrival.spec.ts`'s own WEB-57 case already gives the
+  // kebab-driven rename on the Account page — shows the new name once
+  // `refreshAccount` re-reads `GET /auth/me`.
+  await expect(page.getByTestId('organization-switcher')).toContainText(
+    'Renamed From General'
   )
 })

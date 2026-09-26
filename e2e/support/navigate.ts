@@ -47,21 +47,24 @@ export async function navigateTo(page: Page, label: string): Promise<void> {
 
 /**
  * WEB-69 — the drawer's own "Organization settings" entry, followed by a
- * click on `tab` (Discord, Team, Usage, Jobs or Danger zone) in the tablist
- * it opens on — the two-step replacement for what used to be a single
+ * click on `tab` (General, Discord, Team, Usage or Jobs) in the tablist it
+ * opens on — the two-step replacement for what used to be a single
  * `navigateTo(page, 'Discord')` (or Team/Usage/Jobs) before those four
  * became tabs on one screen rather than their own drawer entries. Skips the
- * tab click when `tab` is Discord — the first tab, and so already showing
+ * tab click when `tab` is General — the first tab, and so already showing
  * once the drawer item lands — the same way `pages/Shell.tsx`'s own
  * `ORGANIZATION_SETTINGS_TABS[0]` default works everywhere else in this
- * app.
+ * app. Rework round 1 gave the Danger zone its own tab, reachable here as
+ * `'Danger zone'`; the user's own final decision put it back at the bottom
+ * of General instead, so reaching it is `'General'`, the same as the name
+ * field above it.
  */
 export async function navigateToOrganizationSettingsTab(
   page: Page,
-  tab: 'Discord' | 'Team' | 'Usage' | 'Jobs' | 'Danger zone'
+  tab: 'General' | 'Discord' | 'Team' | 'Usage' | 'Jobs'
 ): Promise<void> {
   await navigateTo(page, 'Organization settings')
-  if (tab === 'Discord') return
+  if (tab === 'General') return
   await page.getByRole('tab', { name: tab }).click()
 }
 

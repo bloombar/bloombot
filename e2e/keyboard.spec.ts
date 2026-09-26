@@ -64,7 +64,7 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   // In-app navigation, started entirely outside the form (WEB-16's own
   // "the hamburger menu, a nav link, the home icon") — a *different*
   // screen than the one this form lives inside (WEB-69's own Organization
-  // settings screen, landing on its Discord tab), reached the same nav row
+  // settings screen), reached the same nav row
   // `course-configuration.spec.ts` already reaches from the "Projects"
   // side. Deliberately not the "Projects" tab itself: this form already
   // lives inside it (`ProjectsPanel`'s own nested view), so clicking that
@@ -105,6 +105,9 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: 'Discard changes' }).click()
   await expect(dialog).toBeHidden()
+  // General, not Discord, is the settings screen's own default tab
+  // (`docs/DECISIONS.md`'s own WEB-69 entry) — open Discord explicitly.
+  await page.getByRole('tab', { name: 'Discord' }).click()
   await expect(
     page.getByRole('button', { name: 'Install to Discord' })
   ).toBeVisible()

@@ -43,13 +43,21 @@
  * there to an organization where they are a member (`effectiveTab`'s own
  * comment below has the precise carve-out).
  *
- * WEB-29: the drawer's own two groups — Projects/Chat/Transcripts (every
- * signed-in account) and Discord/Team/Usage/Jobs (organization members
- * only, divided by a visible separator) — are `navGroups`, below, not the
- * flat `navItems` list this file used to build; `isMember` decides whether
- * the second group is offered at all, the same "withheld outright, not
- * merely disabled" reasoning this file's own module comment already gives
- * for LINK-10.
+ * WEB-29/WEB-69: the drawer's own two groups — Projects/Chat/Transcripts
+ * (every signed-in account) and, since WEB-69, one single "Organization
+ * settings" entry (organization members only, divided by a visible
+ * separator) — are `navGroups`, below, not the flat `navItems` list this
+ * file used to build; `isMember` decides whether the second group is
+ * offered at all, the same "withheld outright, not merely disabled"
+ * reasoning this file's own module comment already gives for LINK-10.
+ * Discord, Usage, Team and Jobs used to be four separate entries here, each
+ * its own screen; WEB-69 folded all four (plus a fifth, Danger zone, this
+ * slice's own decision — `docs/DECISIONS.md`) into
+ * `pages/OrganizationSettings.tsx`, one tab each, reached through this one
+ * drawer entry. The paragraphs below (TEN-8/WEB-4, COST-3/COST-4, ENRL-5,
+ * JOB-2) describe what each *tab* on that screen shows and why — unchanged
+ * by WEB-69's own move, which only changed how each is reached, not what
+ * any of them does.
  *
  * TEN-8/WEB-4: the Discord tab's own install state has two sources, not
  * one. `justInstalled` is the *immediate* signal — `App.tsx` sets it only
@@ -72,7 +80,10 @@
  * `removedServerId`, its own comment below) and a switch away from and back
  * to a different organization mid-fetch (guarded by `discordFetchId`, its
  * own comment below, for the response race; `removedServerId` again for
- * what the `'loading'` window itself renders).
+ * what the `'loading'` window itself renders). WEB-69 kept this fetch here,
+ * rather than moving it into `OrganizationSettings.tsx` itself, on purpose
+ * — that file's own module comment has why (the minimal-change exception to
+ * "a tab's own contents load only once it is first opened").
  *
  * COST-3/COST-4: a fifth tab, Usage (`pages/Usage.tsx`) — an audit found
  * neither an instructor's own read of their courses' spend nor a way to
@@ -83,7 +94,7 @@
  * decide whether it renders the cap-setting form at all — the server's own
  * check (`costLedger.setSpendingCap`, restricted to an owner) is what
  * actually enforces this; this only decides what the panel offers, the
- * same division `isMember` already draws for the other four tabs.
+ * same division `isMember` already draws for the others.
  *
  * ENRL-5: a sixth tab, Team (`components/Team.tsx`) — the same class of gap
  * again: `memberships.grant` had existed since TEN-1's own slice with no
@@ -91,7 +102,10 @@
  * instructor or a teaching assistant (`docs/ROADMAP.md`'s own audit note).
  * `isOwner` is reused here exactly as `Usage.tsx` already takes it — the
  * grant form is owner-only, the same reasoning, the same server-side
- * enforcement doing the real work.
+ * enforcement doing the real work. WEB-72/DATA-7's own Danger zone used to
+ * live at the bottom of this same screen; WEB-69 gave it its own tab
+ * instead (`components/DangerZone.tsx`) — see that file's own module
+ * comment, and `docs/DECISIONS.md`.
  *
  * JOB-2: a seventh tab, Jobs (`pages/Jobs.tsx`) — the same class of gap a
  * third time: `jobs.get` needs an id the caller already holds, and every
@@ -110,7 +124,8 @@
  * member account (LINK-10, above): `effectiveTab`'s own comment below
  * carries `'mcp'` through the identical exception it already carries
  * `'account'` through, so this tab is never withheld from exactly the
- * reader who most needs it.
+ * reader who most needs it. Unaffected by WEB-69 — it was never one of the
+ * four tabs that slice consolidated.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -121,17 +136,14 @@ import type {
   AccountSummary,
   DiscordServerBindingSummary,
 } from '../api/types.js'
-import { ErrorMessage } from '../components/ErrorMessage.js'
-import { DiscordServerRow, InstallButton } from '../components/InstallButton.js'
-import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import { SignedInChrome } from '../components/SignedInChrome.js'
-import { Team } from '../components/Team.js'
 import {
   NavigationGuardProvider,
   useNavigationGuard,
 } from '../hooks/navigation-guard.js'
 import {
   isProjectsRoute,
+  ORGANIZATION_SETTINGS_TABS,
   routeForTab,
   tabForRoute,
   type Route,
@@ -139,12 +151,11 @@ import {
 } from '../routing/route.js'
 import { Account } from './Account.js'
 import { Chat } from './Chat.js'
-import { Jobs } from './Jobs.js'
 import { Mcp } from './Mcp.js'
 import { NotFound } from './NotFound.js'
+import { OrganizationSettings } from './OrganizationSettings.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
 import { Transcripts } from './Transcripts.js'
-import { Usage } from './Usage.js'
 
 export interface ShellProps {
   account: AccountSummary
@@ -397,6 +408,29 @@ function ShellInner({
     )
   }, [effectiveTab, activeTab, activeOrganizationId, navigate])
 
+  // WEB-69/WEB-72/DATA-7 — a non-owner who opens the Danger zone's own
+  // address (a bookmark, a link a peer shared before stepping down) lands
+  // on a sensible default tab instead: the same "address corrected with
+  // replace" discipline the effect just above already holds itself to for
+  // a non-member reaching an organization-scoped tab at all, one level
+  // narrower — this is about which *tab* on a screen this account can
+  // already reach, not whether it can reach the screen. `navGroups`/the tab
+  // bar (`pages/OrganizationSettings.tsx`) already withhold the Danger zone
+  // tab outright for a non-owner; this is what corrects the address for the
+  // one way that withholding cannot: a direct visit.
+  useEffect(() => {
+    if (route.kind !== 'organization-settings') return
+    if (route.tab !== 'danger' || isOwner) return
+    navigate(
+      {
+        kind: 'organization-settings',
+        organizationId: activeOrganizationId,
+        tab: ORGANIZATION_SETTINGS_TABS[0],
+      },
+      { replace: true }
+    )
+  }, [route, isOwner, activeOrganizationId, navigate])
+
   // TEN-8: read the organization's actual Discord binding on mount and on
   // every organization switch — `isMember` guards it the same way it guards
   // `navItems` below, since a caller with no membership would only have
@@ -549,61 +583,62 @@ function ShellInner({
       activeOrganizationId={activeOrganizationId}
       isMember={isMember}
       activeTab={effectiveTab}
+      // WEB-69 — so switching organizations while sitting on the settings
+      // screen keeps the same tab (`SignedInChrome.tsx`'s own
+      // `landingForOrganizationSwitch`, this file's own module comment on
+      // why `Tab` alone can no longer say which one).
+      {...(route.kind === 'organization-settings'
+        ? { activeOrganizationSettingsTab: route.tab }
+        : {})}
       navigate={navigate}
       runAction={guardedNavigate}
       onSignedOut={onSignedOut}
     >
-      {effectiveTab === 'discord' ? (
-        <div className="flex flex-col gap-4">
-          <h1 className="text-page-title font-semibold text-neutral-900">
-            Discord
-          </h1>
-          {discordBindingState.status === 'loading' &&
-          installedServers.length === 0 ? (
-            // TEN-8: the lookup is in flight and `justInstalled` did not
-            // already answer for this organization — rendering
-            // `InstallButton` here would default to "Install," the exact
-            // bug being fixed, only momentary. WEB-45: shaped like the row
-            // this becomes once resolved (`DiscordServerRow`, below).
-            <div className="flex flex-col gap-2">
-              <SkeletonRow />
-              <LoadingStatus />
-            </div>
-          ) : discordBindingState.status === 'error' ? (
-            // TEN-8: say the lookup failed rather than silently falling
-            // back to "not installed," which would offer Install for a
-            // server that may well still be bound.
-            <ErrorMessage error={discordBindingState.error} />
-          ) : (
-            // TEN-9 — every active binding gets its own row (with its own
-            // Remove), and installing another is always offered underneath
-            // — an organization is no longer limited to the single
-            // Install/Remove pair this screen used to be.
-            <div className="flex flex-col gap-4">
-              {installedServers.length > 0 && (
-                <ul className="flex flex-col gap-2">
-                  {installedServers.map(({ serverId, serverName }) => (
-                    <li key={serverId}>
-                      <DiscordServerRow
-                        serverId={serverId}
-                        serverName={serverName}
-                        onRemove={() => void handleRemove(serverId)}
-                        removing={removingServerId === serverId}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/* WEB-68 — labels itself "Install to another Discord server"
-                  once there is already at least one to add to. */}
-              <InstallButton
-                organizationId={activeOrganizationId}
-                hasExistingServer={installedServers.length > 0}
-              />
-            </div>
-          )}
-          {error && <ErrorMessage error={error} />}
-        </div>
+      {effectiveTab === 'organization-settings' ? (
+        // WEB-69 — one screen, one tab each, in place of the four this
+        // branch used to be (Discord/Usage/Team/Jobs, plus this slice's own
+        // fifth, Danger zone). `key={activeOrganizationId}` for the same
+        // reason every other tab already carries one — a tab (and its own
+        // per-tab dirty state) selected in the previous organization must
+        // not linger once a different one is active. The Discord tab's own
+        // data is the one exception to "a tab's contents load when it is
+        // first opened" (this file's own module comment, TEN-8/WEB-4) —
+        // `discordBindingState`/`installedServers`/`handleRemove` above are
+        // threaded straight through rather than duplicated inside
+        // `OrganizationSettings` itself.
+        <OrganizationSettings
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+          tab={
+            route.kind === 'organization-settings'
+              ? route.tab
+              : ORGANIZATION_SETTINGS_TABS[0]
+          }
+          onNavigateTab={(tab) =>
+            navigate({
+              kind: 'organization-settings',
+              organizationId: activeOrganizationId,
+              tab,
+            })
+          }
+          isOwner={isOwner}
+          viewerAccountId={account.id}
+          organizationName={activeOrganizationName}
+          navigate={(nextRoute) => guardedNavigate(() => navigate(nextRoute))}
+          refreshAccount={refreshAccount}
+          discord={{
+            loading:
+              discordBindingState.status === 'loading' &&
+              installedServers.length === 0,
+            ...(discordBindingState.status === 'error'
+              ? { error: discordBindingState.error }
+              : {}),
+            installedServers,
+            ...(removingServerId !== undefined ? { removingServerId } : {}),
+            onRemove: (serverId) => void handleRemove(serverId),
+            ...(error ? { removeError: error } : {}),
+          }}
+        />
       ) : effectiveTab === 'chat' ? (
         // WEB-10: a fresh `Chat` per organization switch, the same
         // `key={activeOrganizationId}` reasoning `ProjectsPanel` below
@@ -680,48 +715,6 @@ function ShellInner({
             ? { courseId: route.courseId, personId: route.personId }
             : {})}
           navigate={navigate}
-        />
-      ) : effectiveTab === 'usage' ? (
-        // COST-3/COST-4 — the same `key={activeOrganizationId}` reasoning
-        // every other tab above already holds itself to, plus `isOwner`
-        // (this file's own module comment) so `Usage.tsx` knows whether to
-        // offer the cap-setting form at all.
-        <Usage
-          key={activeOrganizationId}
-          organizationId={activeOrganizationId}
-          isOwner={isOwner}
-        />
-      ) : effectiveTab === 'team' ? (
-        // ENRL-5 — the same `key={activeOrganizationId}` reasoning every
-        // other tab above already holds itself to, plus `isOwner` (this
-        // file's own module comment) so `Team.tsx` knows whether to offer
-        // the grant form at all. `viewerAccountId` (ENRL-11) is what lets
-        // that same screen tell the caller's own row apart from a peer's —
-        // its own module comment has why that distinction decides whether a
-        // revoke control is even offered.
-        <Team
-          key={activeOrganizationId}
-          organizationId={activeOrganizationId}
-          isOwner={isOwner}
-          viewerAccountId={account.id}
-          // WEB-72/DATA-7 — `Team.tsx`'s own Danger zone: the organization's
-          // own name for the typed-name gate, and the same `navigate`/
-          // `refreshAccount` `pages/Account.tsx`'s own organization list
-          // already threads, needed here so deleting the organization
-          // currently active can move this shell off it (`Team.tsx`'s own
-          // module comment has the full reasoning).
-          organizationName={activeOrganizationName}
-          navigate={(route) => guardedNavigate(() => navigate(route))}
-          refreshAccount={refreshAccount}
-        />
-      ) : effectiveTab === 'jobs' ? (
-        // JOB-2 — the same `key={activeOrganizationId}` reasoning every
-        // other tab above already holds itself to; no `isOwner`, unlike
-        // Usage/Team (this file's own module comment on why `jobs.list`
-        // needs none).
-        <Jobs
-          key={activeOrganizationId}
-          organizationId={activeOrganizationId}
         />
       ) : effectiveTab === 'mcp' ? (
         // WEB-47 — no `key={activeOrganizationId}`, unlike every tab

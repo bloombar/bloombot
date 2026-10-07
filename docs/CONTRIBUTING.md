@@ -1,6 +1,7 @@
-# Contributing
+# Contributor workflow
 
-How work gets from an idea to `master` in this repository. Referenced by `.claude/CLAUDE.md`,
+How work gets from an idea to `master` in this repository. For a map of the codebase and local setup, start
+with the root [CONTRIBUTING.md](../CONTRIBUTING.md). Referenced by `.claude/CLAUDE.md`,
 `docs/SPEC.md` (BOARD-3) and `scripts/board/derive.mjs`.
 
 ## The specification is the source of truth
@@ -33,9 +34,8 @@ descriptive slug when no requirement id applies.
 **Do not commit code to the default branch.** The exceptions are documentation (Markdown, anything under
 `docs/`), `env.example`, and tooling under `scripts/`, which may go straight to the default branch.
 
-`feat/PLAT-1-multi-surface-platform` was the long-lived integration branch for the platform build. That build
-has merged; `master` is the default branch and slice branches target it directly. A merge to `master` deploys
-to the droplet (`.github/workflows/ci.yml`), so a PR is a release, not just a review.
+Slice branches target `master`. A merge to `master` deploys to the droplet (`.github/workflows/ci.yml`), so a
+PR is a release, not just a review.
 
 **Check for stale branches and open PRs before starting anything** — an open PR touching your files means
 coordinate, not proceed. The `.claude/skills/stale-check/` skill has the commands.
@@ -45,10 +45,8 @@ coordinate, not proceed. The `.claude/skills/stale-check/` skill has the command
 Every PR body includes `Closes #N`, where `N` is the board issue's number — one line per requirement the PR
 satisfies — so the change and the requirement stay linked in the history.
 
-> **Move the card explicitly anyway (BOARD-4).** GitHub's closing keywords fire only for a pull request merged
-> into the **default branch**. A slice branched off `master` and merged back does fire them — but `Closes #N`
-> only ever reaches the `Done` end of the board, never `In progress` or `In review`, and any slice targeting a
-> branch other than `master` fires nothing at all. Move the card at each transition:
+> **Move the card explicitly anyway (BOARD-4).** `Closes #N` closes the issue when the PR merges into
+> `master`, but it never moves a card to `In progress` or `In review`. Move it at each transition:
 >
 > ```bash
 > npm run board:status -- "In progress" TEN-1 TEN-2   # when the slice starts
@@ -97,33 +95,23 @@ gives the SPEC and the code traceability in both directions.
 
 ## apps/web build-time configuration
 
-`apps/web` is a static Vite build with no server of its own (`vite.config.ts`'s own module
-comment), so a handful of settings are baked in at `npm run build --workspace apps/web` time
-through `import.meta.env`, from `apps/web/.env`/`apps/web/.env.production` first, falling back
-to the same `VITE_`-prefixed key in the **repository-root** `.env`/`.env.production`/
-`.env.local`/`.env.production.local` if `apps/web`'s own files do not set it (`vite.config.ts`'s
-own module comment and
-`load-root-env.ts` — WEB-47 defect: the root `.env` is where every other deployment setting
-lives, and a `VITE_` variable set only there was previously invisible to the build). This is
-read-only at build time: changing either file needs a rebuild of `apps/web` (a redeploy), not a
-process restart. `docs/DEPLOY_DROPLET.md` §4.3 has the production deployment sequence for these;
-this is the general list.
+`apps/web` is a static Vite build with no server, so these settings are baked in when it is built. Vite reads
+`apps/web/.env*` first, then falls back to the same key in the repository-root `.env*` files
+(`apps/web/load-root-env.ts`). Changing one needs a rebuild and redeploy, not a process restart.
+`docs/DEPLOY_DROPLET.md` §4.3 has the production sequence.
 
 | Variable | Read by | Default if unset |
 | --- | --- | --- |
-| `VITE_GOOGLE_CLIENT_ID` | `pages/SignIn.tsx` — the Google sign-in button. Omitted or wrong and the button silently does nothing (`docs/DEPLOY_DROPLET.md` §4.3 has the full reasoning). | none — Google sign-in is reported as "not configured" |
-| `VITE_PUBLIC_APP_URL` | `prerender-plugin.ts` — the origin `robots.txt`/`sitemap.xml` and the prerendered `/privacy`/`/terms` pages' `<link rel="canonical">` are written against. **Not** read by `pages/Mcp.tsx` (WEB-47) for the **connector** URL — it carries no information about whether the MCP server is actually exposed at that origin, and a deployment only reaches the MCP server if it has actually installed the reference config for it
-(`deploy/nginx/mcp.conf`, `docs/DEPLOY_DROPLET.md` §5.4). **Is** read for the **icon** URL, preferred over `window.location.origin` — the icon is fetched by the MCP client's own servers (e.g. ChatGPT's), not the reader's browser, so a `window.location.origin` that only the reader's own browser could resolve (a bare droplet IP, an internal hostname, `vite preview`'s local origin) is the wrong default there; falls back to `window.location.origin` only when this is unset. | `https://bloombot.wonkledge.com` |
-| `VITE_MCP_PUBLIC_URL` | `pages/Mcp.tsx` (WEB-47) — the MCP connector URL the tab renders, read as-is (trailing slash stripped). **Must equal `${PUBLIC_MCP_URL}/mcp`** (root `.env`'s `PUBLIC_MCP_URL`, `packages/config/src/env.ts` — MCP-7's own OAuth issuer/resource identifier is `new URL('/mcp', PUBLIC_MCP_URL)`, `apps/mcp/src/index.ts`): the two variables are read by two different processes at two different times (this one at `apps/web`'s build, that one at `apps/mcp`'s startup) with nothing that checks they agree, so a mismatch here is silent until a real client's connection fails against a resource identifier this value does not match. There is no derived fallback — set this only once a deployment has actually exposed the MCP server publicly (an nginx `location /mcp` block, or otherwise) and knows what `PUBLIC_MCP_URL` was set to. **Belongs in the repository-root `.env`, alongside `PUBLIC_MCP_URL`** (`deploy/nginx/README.md`) — that is what `vite.config.ts`'s root-env fallback reads (WEB-47 defect); an `apps/web/.env`/`.env.production` entry for the same key, if one exists, still overrides it. | none — the tab reports the connector as not configured rather than guessing |
+| `VITE_GOOGLE_CLIENT_ID` | `pages/SignIn.tsx` — the Google sign-in button. A wrong value makes the button silently do nothing (`docs/DEPLOY_DROPLET.md` §4.3). | none — Google sign-in is reported as "not configured" |
+| `VITE_PUBLIC_APP_URL` | `prerender-plugin.ts` — the origin for `robots.txt`, `sitemap.xml` and the canonical links on `/privacy` and `/terms`. Also `pages/Mcp.tsx`, for the connector **icon** URL only, because the MCP client's servers fetch it, not the reader's browser; falls back to `window.location.origin`. | `https://bloombot.wonkledge.com` |
+| `VITE_MCP_PUBLIC_URL` | `pages/Mcp.tsx` (WEB-47) — the MCP connector URL shown to users. **Must equal `${PUBLIC_MCP_URL}/mcp`**: `apps/mcp` derives its OAuth resource identifier from `PUBLIC_MCP_URL` at startup, and nothing checks that the two agree, so a mismatch surfaces only when a client fails to connect. Set both in the repository-root `.env`, and only once the MCP server is publicly exposed (`deploy/nginx/mcp.conf`, `docs/DEPLOY_DROPLET.md` §5.4). | none — the tab reports the connector as not configured |
 | `VITE_OPERATOR_NAME` | `content/document.ts`'s `OPERATOR` — the legal entity the privacy policy and terms name throughout. | `Bloombot` |
 | `VITE_OPERATOR_CONTACT_EMAIL` | `content/document.ts`'s `OPERATOR` — where a privacy or legal request should be sent. | `privacy@wonkledge.com` |
 | `VITE_OPERATOR_JURISDICTION` | `content/document.ts`'s `OPERATOR` — whose law governs the terms. | `New York, United States` |
 | `VITE_OPERATOR_POSTAL_ADDRESS` | `content/document.ts`'s `OPERATOR` — the Contact section's postal address line. | empty — the Contact section omits the line entirely rather than printing a placeholder |
 
-The four `VITE_OPERATOR_*` defaults are deliberately real values, not `[fill this in]`-style
-placeholders: Google's OAuth branding review rejects a privacy policy carrying a square-bracket
-placeholder as evidence it is not actually published (`content/document.ts`'s own module comment,
-`docs/DECISIONS.md` D-92).
+The `VITE_OPERATOR_*` defaults are real values rather than `[placeholders]` because Google's OAuth branding
+review rejects a privacy policy containing one (D-92).
 
 ## Agent-assisted development
 

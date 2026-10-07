@@ -19,7 +19,7 @@ e2e/        Playwright specs and the fake upstreams they run against
 scripts/    repository tooling (the project board sync, deploy)
 ```
 
-All four directories exist. The table below is the dependency graph as it actually stands; it is checked
+The table below is the dependency graph as it actually stands; it is checked
 by the lint rules and tests described under *Boundaries are enforced*, so a row that drifts fails the build
 rather than merely misleading a reader.
 
@@ -95,7 +95,7 @@ A boundary that exists only in a document is a boundary that will be crossed. Ea
 Importing a module opens no connection, reads no configuration file, constructs no client and writes no
 output (`PLAT-5`). Connections and clients come from factory functions called explicitly.
 
-The current Python system does all four, which is why its configuration cannot be reloaded, scoped per
+The deprecated Python bot does all four, which is why its configuration cannot be reloaded, scoped per
 tenant, or tested without a live database — `models/base.py` connects to SQLite as a side effect of being
 imported. Here, `CONFIG` is a proxy that validates the environment on first *access*, so importing the
 configuration package can never throw or capture an environment a test had not finished setting up.
@@ -131,7 +131,8 @@ pointing at TypeScript source rather than built output — asserting against a s
 green that hides a regression for a week.
 
 The coverage floor is enforced on the logic that matters — `packages/db/src/repos`, `packages/core`,
-`packages/openai` — rather than as a blanket percentage across the tree, and tests use throwaway databases
+`packages/actions`, `packages/auth`, `packages/jobs` and the vendor adapters (`vitest.config.ts` has the list) —
+rather than as a blanket percentage across the tree, and tests use throwaway databases
 under `tmp/`. Never `data/data.db`: it holds real students' names, emails and conversation transcripts, and
 a `PreToolUse` hook blocks writes to it.
 

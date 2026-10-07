@@ -22,7 +22,7 @@ Bloombot is run by an operator, usually someone in your department or institutio
 
 ## Student data
 
-Bloombot stores student names, email addresses and conversations so instructors can review them. The privacy policy and terms of use are linked at the bottom of every page.
+Bloombot stores only what students and instructors provide and agree to. The privacy policy and terms of use are linked at the bottom of every page.
 
 ## More information
 

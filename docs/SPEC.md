@@ -494,6 +494,21 @@ The notebook closes with a pivot table of conversation count, unique users, aver
 messages per conversation and average conversation duration, broken down by course,
 semester and topic — the single table an instructor can read to compare semesters.
 
+#### ANLY-8 Analysis reads the combined platform database
+
+Both analysis entry points — the usage-report pipeline under `analysis/` and
+`analytics.ipynb` — read the single combined platform database `data/data.db` by default,
+strictly read-only: the file is opened read-only and copied into memory, with no temporary files, so nothing in it is written or left behind. That database holds the platform's own
+messages together with the old Discord bot's history imported into it, so the analysis no longer
+needs the two separate files. Imported messages are labelled by their original Discord category,
+exactly as the legacy-schema analysis labelled them, so every ANLY-1 to ANLY-7 result for the
+legacy period is unchanged and a course lines up across terms. The older two-file input (a legacy
+database plus a platform database, deduplicated) remains available as an explicit option. The
+topic cache of ANLY-6 now lives under `tmp/analysis/` and is keyed by a conversation's own text,
+because the position-keyed `data/topic_classifications.json` is invalid for the combined data and
+is never applied to it. `analytics.ipynb` loads through the shared loader rather than querying the
+database itself, and ships without outputs.
+
 ### 10. Operations & Deployment
 
 #### OPS-1 Python environment

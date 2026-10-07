@@ -1,0 +1,3 @@
+#!/bin/sh
+# Wipe outputs from staged notebooks (ANLY-8). The working copy is untouched.
+exec node "$(dirname "$0")/../scripts/strip-notebook-outputs.mjs" --staged

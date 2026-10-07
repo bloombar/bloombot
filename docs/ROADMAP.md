@@ -540,3 +540,13 @@ surface and date filters to both usage screens, lists surfaces one per line, lin
 usage, and tidies two pieces of navigation: the MCP drawer entry's name, and the legal pages' missing chrome.
 
 **In scope:** WEB-75, WEB-76, WEB-77, WEB-78, WEB-79
+
+## Phase 46 — Analysis on the combined database
+
+The legacy Python bot's history has been merged into the platform database, so the analysis can read one file
+instead of two. This phase makes the usage-report pipeline and `analytics.ipynb` read `data/data.db` by default,
+read-only, labelling imported messages the way the legacy analysis did so no legacy-period result changes, keeps
+the two-file input as an option, and stops the analytics notebook applying its position-keyed topic cache to
+data it no longer describes.
+
+**In scope:** ANLY-8

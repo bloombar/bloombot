@@ -3,9 +3,9 @@
 How the platform is put together, and why. The requirements this satisfies are `PLAT-1`, `PLAT-2` and
 `PLAT-5` in [SPEC.md](SPEC.md) §12; the judgment calls behind it are in [DECISIONS.md](DECISIONS.md).
 
-This describes the JavaScript platform, which is merged to `master` and deploys to the droplet. The Python
-bot in the repository root is the system it replaces; the two can still run side by side on one database
-(D-9), and [CUTOVER.md](CUTOVER.md) is the procedure for retiring the Python one on a given server.
+This describes the TypeScript platform, which is on `master` and deploys to the droplet. The Python bot and
+companion tools in the repository root are deprecated legacy software; they are retained for existing
+installations and migration only. [CUTOVER.md](CUTOVER.md) covers replacing an existing installation.
 
 ## One repository, many packages
 

@@ -3,8 +3,8 @@
 How to get the platform running on your own machine and see it in a browser: sign in, install the bot into
 a Discord server, create a project, define a course, and have the bot answer.
 
-This is the **TypeScript platform**, not the Python bot. They can run side by side — see
-[Sharing a database with the Python bot](#sharing-a-database-with-the-python-bot).
+This guide is for the current TypeScript platform. The Python bot is deprecated; use the
+legacy import steps below only when moving existing data into the platform.
 
 ## What runs
 
@@ -180,14 +180,10 @@ npm run test:coverage
 
 `npm run e2e` needs a browser once: `npx playwright install chromium`.
 
-## Sharing a database with the Python bot
+## Importing data from the deprecated Python bot
 
-Both systems can read the same SQLite file during the migration: the Python bot reads `SQL_LITE_DB_PATH`,
-the platform reads `DATABASE_PATH`, and they must name the same file for that to work (D-9 records why
-there are two names). For local development, do not do this — point the platform at `tmp/` and leave the
-Python bot alone.
-
-To work with real data, take a **copy** and import it:
+Do not run the deprecated Python tools for local development. To bring existing data into
+the platform, take a **copy** of the old database and import the copy:
 
 ```bash
 cp data/data.db tmp/snapshot.db          # a copy, never the live file

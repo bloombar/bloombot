@@ -1,18 +1,14 @@
 # Bloombot — Specification
 
-Bloombot is an AI course assistant for university courses run on Discord. It has three
-parts: a Discord bot that answers student questions using a course-specific OpenAI
-prompt, a set of instructor automation scripts that build and maintain the Discord
-server (categories, channels, roles, per-student private channels), and an analytics
-notebook over the logged conversation history.
+Bloombot is a web platform for university course assistants. Instructors manage courses,
+student access, Discord connections, course materials, and conversation records. Students
+can ask course questions through Discord or the web chat.
 
-This document specifies current, implemented functionality. Requirement ids are stable
-and key the GitHub issues generated from this file — never renumber or rename one.
-
-Families used below: `CFG` configuration, `DSC` Discord client library, `SRV` server
-scaffolding, `ROST` roster ingestion and student channels, `BOT` chatbot behavior,
-`AI` OpenAI integration, `DATA` persistence, `CLI` command-line administration,
-`ANLY` analytics, `OPS` operations and deployment, `BOARD` spec and board tooling.
+This document keeps both the original Python system's requirements and the current
+platform's requirements. Sections 1–11 describe deprecated Python tools and are retained
+for history and project-board links; they are not a guide to the current product. The
+platform requirements begin in section 12. Requirement IDs are stable and key the GitHub
+issues generated from this file — never renumber or rename one.
 
 ### 1. Configuration
 

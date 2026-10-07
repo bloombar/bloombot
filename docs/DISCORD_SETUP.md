@@ -3,8 +3,7 @@
 Everything a server administrator does, in order, from an empty Discord application to a bot that
 answers a student's question. Each step says what it is for and how to tell it worked.
 
-This documents the **platform** (the TypeScript system on `master`), not the Python bot it replaces. Where
-the two differ, the difference is noted.
+This documents the current TypeScript platform, not the deprecated Python bot it replaced.
 
 **Who does what.** Steps 1 and 2 are done once per deployment, by whoever operates the platform. Steps 3
 onward are done by each instructor, per server, and need no access to the server the platform runs on.

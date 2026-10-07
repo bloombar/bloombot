@@ -1,7 +1,7 @@
 # Cutover: retiring the Python bot for the platform
 
-The procedure for switching a production course server from `response_bot.py` to the
-TypeScript platform — rehearsed against a copy first (OPS-9), the switch itself done
+Use this procedure only to move an existing installation from the deprecated `response_bot.py`
+to the TypeScript platform — rehearsed against a copy first (OPS-9), the switch itself done
 deliberately and in a fixed order (OPS-10), with credentials rotated as part of it (OPS-11)
 and a way back that does not depend on anything the cutover deletes.
 

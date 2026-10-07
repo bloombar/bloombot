@@ -11,20 +11,18 @@ A requirement id is claimed by a phase when it appears on that phase's
 `**In scope:**` line. Ranges (`BOT-1..10`) and slash-lists (`BOT-1/2/3`) both expand.
 
 A requirement claimed by **no** phase is treated as the **shipped baseline**: phase 0,
-status Done. That is deliberate — the initial SPEC documents functionality that already
-works, so the default is "already built". New program work must therefore be added to a
-phase's `**In scope:**` line in the same pull request that adds it to the SPEC; the
-manifest diff makes a miss visible.
+status Done. The first eleven SPEC sections describe the retired Python system; those
+requirements remain for board history and stable issue links, not as a description of the
+current product. New platform work must be added to a phase's `**In scope:**` line in the
+same pull request that adds it to the SPEC; the manifest diff makes a miss visible.
 
 The `### Current status` snapshot below can override a claimed requirement's status.
 
-## Phase 0 — Shipped baseline
+## Phase 0 — Legacy Python baseline (retired)
 
-Everything currently described in the SPEC: the course configuration format (`CFG`), the
-`DiscordManager` client library (`DSC`), server scaffolding (`SRV`), roster ingestion and
-per-student channels (`ROST`), the chatbot (`BOT`), the OpenAI integration (`AI`), the
-message log and data model (`DATA`), the administration CLI (`CLI`), the analytics
-notebook (`ANLY`), deployment and logging (`OPS`), and the spec/board tooling (`BOARD`).
+The original Python bot, Discord setup utilities, roster notebook, analytics notebook,
+and related operations. These tools are deprecated. The current TypeScript platform is
+described by the SPEC from section 12 onward and by the later phases below.
 
 **In scope:** claimed implicitly — every SPEC id not listed under a later phase.
 
@@ -39,11 +37,11 @@ rot as the fixes land.
 
 ### Current status
 
-- Done: every Phase 0 requirement — the shipped baseline — and every defect in this
-  phase: BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6, all shipped to `master`.
-- Outstanding: none here. Phase 2 shipped as well; the JavaScript migration, phases 3
-  onward, was built on `feat/PLAT-1-multi-surface-platform` and has since merged to
-  `master`, which is now the only branch work lands on.
+- Historical: Phase 0 and its defect fixes describe the deprecated Python system; they
+  shipped before the platform migration.
+- Done: Phase 2 shipped. The TypeScript platform replaced the Python system and is on
+  `master`, the branch where current work lands. Further platform work is tracked in the
+  phases below.
 
 ## Phase 2 — Continuous deployment
 

@@ -36,31 +36,23 @@ cp env.example .env
 
 `.env` is gitignored and a hook blocks writes to it — nothing in this repository will edit it for you.
 
-Each process loads `.env` itself at startup, the way the Python bot's entry points call `python-dotenv`
-(CFG-5). A variable already set in your shell wins over the file, so `NODE_ENV=production npm run api:dev`
-does what it says.
-
-### What you can reuse from the Python bot's `.env`
-
-| variable | reuse? |
-| --- | --- |
-| `BOT_TOKEN` | **yes** — the same bot, the same token |
-| `OPENAI_API_KEY` | **yes** — needed for the bot and the web chat to actually answer anything; leaving it unset does not stop the API or the panel from starting (WEB-10's own chat surface apologizes to every question instead) |
-| `BOT_APP_ID` | **yes** if present; otherwise the application id from the Discord developer portal |
-| `BOT_PERMISSIONS` | **yes** if present |
-| `SQL_LITE_DB_PATH` | leave as is — the Python bot still reads it |
-
-### What is new
+Each process loads `.env` at startup. A variable already set in your shell wins over the file, so
+`NODE_ENV=production npm run api:dev` does what it says. The values that matter locally:
 
 | variable | what to put in it |
 | --- | --- |
-| `DISCORD_CLIENT_SECRET` | **new.** Developer portal → your application → OAuth2 → Client Secret. The Python bot never did OAuth, so this will not exist in the old file. |
-| `PUBLIC_APP_URL` | `http://localhost:5173` locally. The API checks every non-GET request's `Origin` against it, so a mismatch here shows up as a 403 on every save. |
-| `DATABASE_PATH` | **the platform's own database.** See the warning below. |
-| `API_PORT` / `BOT_HEALTH_PORT` | `3000` / `3001` unless those are taken |
+| `DATABASE_PATH` | `./tmp/local.db`. The template's default, `./data/data.db`, is the production location — see the warning below. |
+| `PUBLIC_APP_URL` | `http://localhost:5173`. The API checks every non-GET request's `Origin` against it, so a mismatch shows up as a 403 on every save. |
+| `MAIL_FILE` | `tmp/mail.jsonl` — see [Sign in](#4-sign-in) |
 | `NODE_ENV` | `development` |
-| `MAIL_FILE` | `tmp/mail.jsonl` — see [Signing in](#4-sign-in) |
-| `GOOGLE_CLIENT_ID` | only if you want the Google sign-in button to work; the email link works without it |
+| `API_PORT` / `BOT_HEALTH_PORT` | `3000` / `3001` unless those are taken |
+| `OPENAI_API_KEY` | needed for the bot and web chat to answer; without it the API and panel still start, and the chat apologizes instead |
+| `BOT_TOKEN`, `BOT_APP_ID`, `BOT_PERMISSIONS` | from the Discord developer portal; only needed for Discord (the bot and worker are skipped without `BOT_TOKEN`) |
+| `DISCORD_CLIENT_SECRET` | developer portal → your application → OAuth2 → Client Secret; needed to install the bot from the panel |
+| `GOOGLE_CLIENT_ID` | only for the Google sign-in button; the email link works without it |
+
+Upgrading from the deprecated Python bot? Its `BOT_TOKEN`, `OPENAI_API_KEY`, `BOT_APP_ID` and
+`BOT_PERMISSIONS` carry over unchanged; `DISCORD_CLIENT_SECRET` and `DATABASE_PATH` are new.
 
 > **Do not point `DATABASE_PATH` at `data/data.db`.** That file holds real students' names, emails and
 > conversation transcripts. Use `DATABASE_PATH=./tmp/local.db` for ordinary local work. A hook blocks writes
@@ -73,22 +65,13 @@ Also add the OAuth redirect in the developer portal (OAuth2 → Redirects) so in
 http://localhost:5173/discord/callback
 ```
 
-This has to be `${PUBLIC_APP_URL}/discord/callback` **exactly**, registered verbatim, for whichever
-application `BOT_APP_ID` names — `apps/api` builds this string itself and never checks it against what is
-actually registered. A trailing slash on `PUBLIC_APP_URL` (`http://localhost:5173/`) used to produce a
-doubled slash here (`http://localhost:5173//discord/callback`), which can never match; `PUBLIC_APP_URL` is
-now normalised before this is built, but the developer portal side of the match is still yours to get
-right. `Invalid OAuth2 redirect_uri` on Discord's own consent screen means this exact URI is **not
-registered** — not that it is malformed. `apps/api` logs the resolved value once at startup (`info`) so you
-can paste it into the portal rather than reconstruct it by hand.
+It must be exactly `${PUBLIC_APP_URL}/discord/callback`, registered verbatim on the application `BOT_APP_ID`
+names. `apps/api` logs the value it uses at startup, so copy it from there. `Invalid OAuth2 redirect_uri` on
+Discord's consent screen means that exact URI is not registered.
 
-Run `npm run check:discord` to check this in one command instead of comparing strings by eye. It reports
-one of three outcomes: **verified** (the derived redirect URI is registered on the application `BOT_APP_ID`
-names — exit 0); **mismatch**, naming the specific near-miss (a stray slash, `http` vs `https`, `www.` vs
-apex, path casing) or that the URI is simply absent (exit non-zero); or **could not verify**, meaning
-Discord's API response for this application does not expose its `redirect_uris` list, so the Developer
-Portal is the only place left to check — the script still prints the exact string to paste there (exit 0;
-this is a legitimate outcome, not a failure).
+`npm run check:discord` compares the two for you. It reports **verified**, a **mismatch** naming the
+near-miss (a stray slash, `http` vs `https`, `www.`), or **could not verify** when Discord does not expose the
+registered list — in which case it prints the exact string to paste into the portal.
 
 ## 3. Start it
 
@@ -98,7 +81,7 @@ One command starts everything:
 npm run dev
 ```
 
-That runs the API, the panel, the background worker and the Discord bot together, with each process's
+That runs the API, the panel, the MCP server, the background worker and the Discord bot together, with each process's
 output prefixed by its name, and Ctrl-C stops all of them. **The bot and the worker are skipped when
 `BOT_TOKEN` is not set** — it says which, and the API and the panel still come up, so a checkout with no
 Discord credentials is still usable for sign-in and the control panel.

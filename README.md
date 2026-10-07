@@ -1,34 +1,33 @@
 # Bloombot
 
-Bloombot helps university teaching teams run AI course assistants. Instructors use a web control panel to organize courses, connect Discord servers, add course guidance and materials, manage student access, and review conversations and usage. Students can ask course questions through Discord or the web chat.
+Bloombot gives a university course its own AI teaching assistant. Students ask it questions about the course, and it answers using the guidance and materials the teaching team provides.
 
-## Current platform
+## For teaching teams
 
-The supported platform is the TypeScript application in `apps/`:
+Instructors and course staff work in a web control panel, where they can:
 
-- `apps/web` is the instructor and student control panel.
-- `apps/api` manages accounts, courses, and data for the panel.
-- `apps/bot` answers questions in Discord.
-- `apps/worker` handles background tasks such as roster imports and file processing.
-- `apps/mcp` connects supported external AI assistants to Bloombot.
-- `packages/` contains shared features used by these applications.
+- set up courses and group them into projects, such as one per semester
+- write the assistant's instructions for each course and attach course materials
+- connect a Discord server, so the assistant can answer in the course's channels
+- decide which students have access
+- read past conversations and see how much the assistant is being used
 
-The Python bot and its companion setup tools in the repository root are deprecated. They are kept for existing installations and migration only; do not use them for a new setup. The platform can import data from the legacy system.
+## For students
 
-## Guides
+Students ask questions in their course's Discord server or in the web chat. They can also connect their Bloombot account to ChatGPT or Claude and ask from there.
 
-- [Contribute to the codebase](CONTRIBUTING.md)
-- [Run Bloombot on your computer](docs/RUNNING_LOCALLY.md)
-- [Set up a Discord server](docs/DISCORD_SETUP.md)
-- [Deploy Bloombot](docs/DEPLOY_DROPLET.md)
-- [How the platform works](docs/ARCHITECTURE.md)
+## Getting started
 
-The remaining documents cover requirements, project planning, and specialist operations. The notebooks and Python files in the repository root belong to the deprecated system.
+Bloombot is run by an operator, usually someone in your department or institution. Ask them for the web address and sign in with your email address. Then follow [Setting up Bloombot in a Discord server](docs/DISCORD_SETUP.md) from step 3 onward to connect your course's server.
 
-## Running on a server with pm2
+## Student data
 
-See [Deploying to a Droplet](docs/DEPLOY_DROPLET.md) for production setup and process management.
+Bloombot stores student names, email addresses and conversations so instructors can review them. The privacy policy and terms of use are linked at the bottom of every page.
 
-## Continuous deployment
+## More information
 
-Changes merged to `master` deploy after CI succeeds. See [Deploying to a Droplet](docs/DEPLOY_DROPLET.md) for the workflow and its configuration.
+- [Contributing](CONTRIBUTING.md) — for developers working on Bloombot
+- [Deploying Bloombot](docs/DEPLOY_DROPLET.md) — for operators running their own copy
+- [Moving from the old Python bot](docs/CUTOVER.md) — for existing installations only
+
+The Python files and notebooks in the top folder belong to an earlier version of Bloombot. That version is no longer supported and is kept only so existing installations can move their data over.

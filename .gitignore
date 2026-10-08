@@ -5,6 +5,7 @@ rosters/*.csv
 
 # ignore the database and logging
 data/*.db
+data/data*
 logs/*.log
 
 # FILE-1..5 — course attachments' own bytes (notes, syllabi, schedules an

@@ -5051,7 +5051,7 @@
   section: §9 Analytics
   family: ANLY
   phase: 47
-  status: Backlog
+  status: In review
   review: false
 - id: ANLY-10
   title: Topic sets that fit the questions people actually ask
@@ -5068,5 +5068,5 @@
   section: §9 Analytics
   family: ANLY
   phase: 47
-  status: Backlog
+  status: In review
   review: false

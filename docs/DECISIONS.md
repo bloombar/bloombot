@@ -14523,3 +14523,4 @@ Every Danger zone (account, organization, course editor, project and course admi
 - **No dark mode in the app**, so there is one palette to check.
 - **The organization tab opts out of the rule** (`divider={false}`) because `GeneralSettings` already draws one above its Danger zone.
 - **Visual only.** Copy, `data-testid`s, `aria-label`s, heading levels and the confirmation flows are unchanged. `tests/danger-zone-section.test.tsx` fails if any screen reintroduces its own red box instead of the shared component.
+- **The button hugs its content** (`[&>button]:self-start`): a full-width red-outlined button became the loudest element once the box was gone. Only the button shrinks; an error message above it still spans the section.

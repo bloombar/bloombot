@@ -8,6 +8,10 @@
  * outlined destructive `Button` inside. The app has no dark mode, so there
  * is one palette to check.
  *
+ * The destructive button hugs its content (`[&>button]:self-start`) rather
+ * stretching full width, which would make it the loudest thing on screen; an
+ * error message above it still spans the full width.
+ *
  * Visual only: callers keep their own confirmation flows and test ids.
  */
 
@@ -34,8 +38,8 @@ export function DangerZoneSection({
       aria-label="Danger zone"
       className={
         divider
-          ? 'flex flex-col gap-3 border-t border-neutral-200 pt-6'
-          : 'flex flex-col gap-3'
+          ? 'flex flex-col gap-3 border-t border-neutral-200 pt-6 [&>button]:self-start'
+          : 'flex flex-col gap-3 [&>button]:self-start'
       }
     >
       <Heading className="text-section-title font-semibold text-danger-700">

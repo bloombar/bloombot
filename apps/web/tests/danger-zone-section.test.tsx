@@ -35,6 +35,20 @@ describe('DangerZoneSection', () => {
     expect(region.className).not.toMatch(/(^|\s)(border|rounded\S*)(\s|$)/)
   })
 
+  it('keeps the destructive button content-width while other children span the section', () => {
+    for (const divider of [true, false]) {
+      const { unmount } = render(
+        <DangerZoneSection title="Danger zone" divider={divider}>
+          <button>Delete</button>
+        </DangerZoneSection>
+      )
+      const region = screen.getByRole('region', { name: 'Danger zone' })
+      expect(region.className).toContain('[&>button]:self-start')
+      expect(region.className).not.toContain('items-')
+      unmount()
+    }
+  })
+
   it('puts the red accent on the heading text and honours the heading level', () => {
     render(
       <DangerZoneSection title="Danger zone" as="h3">

@@ -5019,3 +5019,20 @@
   phase: 45
   status: Done
   review: false
+- id: ANLY-8
+  title: Analysis reads the combined platform database
+  full: "Both analysis entry points — the usage-report pipeline under analysis/
+    and analytics.ipynb — read the single combined platform database
+    data/data.db by default, strictly read-only: the file is opened read-only
+    and copied into memory, with no temporary files, so nothing in it is written
+    or left behind. That database holds the platform's own messages together
+    with the old Discord bot's history imported into it, so the analysis no
+    longer needs the two separate files. Imported messages are labelled by their
+    original Discord category, exactly as the legacy-schema analysis labelled
+    them, so every ANLY-1 to ANLY-7 result for the legacy period is unchanged
+    and a course lines up across terms. The…"
+  section: §9 Analytics
+  family: ANLY
+  phase: 46
+  status: In review
+  review: false

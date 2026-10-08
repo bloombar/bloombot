@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuse a push containing a notebook with outputs (ANLY-8). Git passes the remote name
+# as $1 and the refs being pushed on stdin.
+exec node "$(dirname "$0")/../scripts/check-pushed-notebooks.mjs" "$@"

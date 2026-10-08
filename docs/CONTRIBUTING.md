@@ -75,6 +75,25 @@ and fails in CI.
 Cite requirement ids in code comments where you implement them (`// TEN-2`). It costs a few characters and
 gives the SPEC and the code traceability in both directions.
 
+## Notebook outputs never reach GitHub
+
+Notebooks may show real student data in their output cells while you work locally, but this repository is
+public, so outputs are wiped by tooling rather than by remembering to (ANLY-8):
+
+- **`.githooks/pre-commit`** rewrites the _staged_ copy of every `*.ipynb` with its outputs, execution counts
+  and run metadata removed (`scripts/strip-notebook-outputs.mjs`). The file in your working tree keeps its
+  outputs, so it will show as modified against the commit; that is expected.
+- **`.githooks/post-commit`** strips the index copy again after a commit, because `git commit <path>` re-stages
+  the working copy (outputs and all) afterwards. It only touches notebooks that differ from HEAD, so rebases and
+  cherry-picks are unaffected.
+- **`.githooks/pre-push`** refuses a push if any commit being sent contains a notebook with outputs, naming the
+  file and commit (`scripts/check-pushed-notebooks.mjs`).
+- **CI** (`npm test`) fails if any tracked notebook has outputs.
+
+The hooks live in tracked `.githooks/` and are enabled by `npm install` (its `prepare` script runs
+`git config core.hooksPath .githooks`; it does nothing outside a git checkout). If you cloned without running
+`npm install`, run `npm run prepare` once. Never `git commit --no-verify` a notebook.
+
 ## What "done" means
 
 - The checks above pass.

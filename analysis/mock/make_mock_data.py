@@ -18,18 +18,28 @@ known to handle them before the real files arrive:
 * **partial-term data**: this fall stops at the as-of date, three weeks into a
   fifteen-week term.
 
+It also writes a third file, `combined.db` (ANLY-8): one platform-schema database in
+which the whole legacy history sits as imported `legacy-message-<hash>` rows —
+original Discord category and channel in `category_ref` / `channel_ref`, filed
+under term-suffixed courses ("Introduction to Programming (Fall 2025)") whose
+titles differ from the analysis' course names — followed by this term's native
+traffic. It is built from the other two files so the three always agree.
+
 Usage:  python analysis/mock/make_mock_data.py [--out tmp/analysis]
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import random
+import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "analysis"))
@@ -136,7 +146,13 @@ ORG_ID = "org_mock"
 
 
 def ms(dt: datetime) -> int:
-    return int(dt.timestamp() * 1000)
+    """
+    Epoch ms of a naive wall-clock time, read as New York time.
+
+    Fixed to the analysis' display timezone (not the machine's) so the mock
+    databases, and the tests built on them, come out the same on any runner.
+    """
+    return int(dt.replace(tzinfo=ZoneInfo("America/New_York")).timestamp() * 1000)
 
 
 @dataclass
@@ -231,6 +247,92 @@ def build_sessions(rng: random.Random, active, courses, start: date, end: date, 
             sessions.append(session)
         day += timedelta(days=1)
     return sessions
+
+
+def imported_message_id(org_id: str, legacy_id: int) -> str:
+    """Mirror of `deterministicId('legacy-message', orgId, legacyId)` in packages/legacy-import/src/ids.ts."""
+    digest = hashlib.sha256("\0".join(["legacy-message", org_id, str(legacy_id)]).encode()).hexdigest()
+    return f"legacy-message-{digest[:32]}"
+
+
+def write_combined(legacy_path: Path, current_path: Path, combined_path: Path) -> int:
+    """
+    Build the combined platform database from the mock legacy and current files.
+
+    Native rows are the current file's messages from the Fall 2026 start on (its
+    earlier rows are the mock's stand-in for an earlier import and are replaced
+    by the faithful one below). Every legacy message becomes an imported row:
+    timestamps read as New York wall-clock time, as the real importer did, and
+    Python / Web Design history filed under "<name> (<Semester>)" courses.
+    Returns the number of imported messages.
+    """
+    from bloombot_analysis.load import semester_of
+
+    combined_path.unlink(missing_ok=True)
+    shutil.copyfile(current_path, combined_path)
+    conn = sqlite3.connect(combined_path)
+    # The platform's title for this course is not the analysis' name for it
+    # ("Introduction to Programming"): enrolments, costs and this term's native
+    # messages sit under the platform title, and must still join up with the
+    # imported history that sits in the same course.
+    conn.execute("UPDATE courses SET title = 'Intro to Computer Programming' WHERE id = 'crs_3'")
+    conn.execute("DELETE FROM messages WHERE created_at < ?", (ms(datetime.combine(FALL_2026_START, datetime.min.time())),))
+    conn.execute("DELETE FROM conversations WHERE id NOT IN (SELECT conversation_id FROM messages)")
+
+    legacy = sqlite3.connect(legacy_path)
+    rows = legacy.execute(
+        "SELECT m.id, m.created_at, m.content, m.category, m.channel, m.direction, u.discord_id "
+        "FROM messages m JOIN users u ON u.id = m.user_id ORDER BY m.id"
+    ).fetchall()
+    legacy.close()
+
+    person_of = dict(conn.execute("SELECT external_id, person_id FROM person_identities WHERE surface='discord'"))
+    course_ids = {t: f"crs_{i}" for i, (t, _, _) in enumerate(COURSES, start=1)}
+    by_prefix = {prefix: title for title, prefix, _ in COURSES}
+    legacy_courses: dict[str, str] = {}
+    conversations: dict[tuple, str] = {}
+    seq: dict[str, int] = {}
+    inserted = 0
+    for lid, created, content, category, channel, direction, discord_id in rows:
+        when = datetime.strptime(created, "%Y-%m-%d %H:%M:%S.%f")
+        base = by_prefix[category.split(" - ")[0]]
+        # Earlier Python and Web Design history is filed under a term-suffixed
+        # course; the others, and Python from 2026 on, stay in their existing
+        # course, as in production.
+        if base == "Introduction to Programming" and when.year >= 2026:
+            course_id = course_ids[base]
+        elif base in ("Introduction to Programming", "Web Design"):
+            title = f"{base} ({semester_of(when)})"
+            if title not in legacy_courses:
+                legacy_courses[title] = f"crs_legacy_{len(legacy_courses) + 1}"
+                conn.execute(
+                    "INSERT INTO courses VALUES (?,?,?,?,?,?)",
+                    (legacy_courses[title], ORG_ID, "prj_legacy", title, 0, ms(when)),
+                )
+            course_id = legacy_courses[title]
+        else:
+            course_id = course_ids[base]
+        person_id = person_of[str(discord_id)]
+        key = (person_id, course_id)
+        if key not in conversations:
+            conversations[key] = f"cnv_legacy_{len(conversations) + 1:04d}"
+            conn.execute(
+                "INSERT INTO conversations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (conversations[key], ORG_ID, course_id, person_id, "discord", None, None, None,
+                 ms(when), ms(when)),
+            )
+        conv_id = conversations[key]
+        seq[conv_id] = seq.get(conv_id, 0) + 1
+        conn.execute(
+            "INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (imported_message_id(ORG_ID, lid), ORG_ID, conv_id, person_id, course_id,
+             "from_person" if direction == "from" else "to_person", content, "discord",
+             channel, category, seq[conv_id], ms(when)),
+        )
+        inserted += 1
+    conn.commit()
+    conn.close()
+    return inserted
 
 
 def main() -> None:
@@ -485,6 +587,9 @@ def main() -> None:
     current.commit()
     current.close()
 
+    combined_path = out_dir / "combined.db"
+    imported = write_combined(legacy_path, current_path, combined_path)
+    print(f"combined → {combined_path}  ({imported:,} imported legacy messages)")
     print(f"legacy  → {legacy_path}  ({len(legacy_messages):,} messages)")
     print(f"current → {current_path}  ({len(messages):,} messages, {len(costs):,} cost rows)")
     print(f"as-of {AS_OF}  ·  {len(everyone) - 1} students  ·  {len(COURSES)} courses")

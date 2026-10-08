@@ -72,6 +72,7 @@ export const MILESTONE_TITLE = {
   43: 'Phase 43 — Acknowledging what a roster upload is',
   44: 'Phase 44 — Deleting, reversibly, then permanently',
   45: 'Phase 45 — Reading usage, and finding your way around it',
+  46: 'Phase 46 — Analysis on the combined database',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

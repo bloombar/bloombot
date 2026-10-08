@@ -24,7 +24,13 @@ databases it was given:
     content     str
     source      str   'legacy' | 'current'
 
-Two reconciliation hazards this module exists to handle:
+By default (ANLY-8) everything comes from ONE platform-schema file, `data/data.db`,
+in which `packages/legacy-import` has already merged the old bot's history
+(message ids `legacy-message-<hash>`, the original Discord category and channel
+in `category_ref` / `channel_ref`). The older two-file arrangement is still
+available as `input_mode='two-file'`.
+
+Three reconciliation hazards this module exists to handle:
 
 1. **Double-counting.** `packages/legacy-import` may already have imported some
    or all of the Discord history into the current database. The same message
@@ -34,6 +40,13 @@ Two reconciliation hazards this module exists to handle:
    a `people` row in the new one. They are joined through
    `person_identities` (`surface = 'discord'`, `external_id` = the Discord id);
    anyone who cannot be joined keeps their own key rather than being guessed at.
+3. **Labels.** An imported message sits in a platform course whose *title*
+   ("Intro to Computer Programming (Summer 2025)") need not match what the old
+   analysis called that course ("Introduction to Programming"). Imported
+   messages are therefore labelled from their original Discord category, exactly
+   as `load_legacy` labels them, so a legacy-period result is the same whichever
+   file it came from and the same course lines up across terms. Native platform
+   messages keep their course title.
 """
 
 from __future__ import annotations
@@ -67,9 +80,30 @@ def _empty_unified() -> pd.DataFrame:
     return frame
 
 
+# Prefix of every message id `packages/legacy-import` mints (ids.ts:
+# `deterministicId('legacy-message', …)`), which is how an imported message is
+# told apart from one the platform recorded itself.
+IMPORTED_PREFIX = "legacy-message-"
+
+
 def _connect(path: Path) -> sqlite3.Connection:
-    """Open a database strictly read-only, so no analysis run can ever write to it."""
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    """
+    Open a database strictly read-only and return an in-memory copy of it.
+
+    The file is opened `mode=ro` with ordinary locking, so SQLite sees any rows
+    still in a `-wal` file and never reads a half-written page, then copied into
+    memory and closed. Nothing is written to the source (SQLite may create its
+    own `-wal`/`-shm` bookkeeping files beside a WAL-mode database, which is
+    harmless) and no temporary files are made anywhere. The copy is the whole
+    database, which is small beside the memory of a machine running the analysis.
+    """
+    source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        memory = sqlite3.connect(":memory:")
+        source.backup(memory)
+    finally:
+        source.close()
+    return memory
 
 
 def to_local(epoch_ms, config: Config | None = None) -> pd.Series:
@@ -89,6 +123,36 @@ def to_local(epoch_ms, config: Config | None = None) -> pd.Series:
     )
 
 
+def _course_labels(conn: sqlite3.Connection) -> dict[str, str]:
+    """
+    One analysis label per platform course (ANLY-8), used for messages,
+    enrolments and costs alike so a join on course never splits.
+
+    A course that holds imported legacy messages is named by what the old
+    analysis called those messages' Discord categories ("Introduction to
+    Programming"), whatever the course is titled on the platform ("Intro to
+    Computer Programming"); the most common such label wins. Any other course
+    keeps its title.
+    """
+    rows = conn.execute(
+        "SELECT course_id, category_ref, COUNT(*) FROM messages "
+        "WHERE id LIKE ? AND category_ref IS NOT NULL AND category_ref <> '' "
+        "GROUP BY course_id, category_ref",
+        (IMPORTED_PREFIX + "%",),
+    ).fetchall()
+    tally: dict[str, dict[str, int]] = {}
+    for course_id, category, n in rows:
+        label = course_from_category(category)
+        tally.setdefault(course_id, {})[label] = tally.get(course_id, {}).get(label, 0) + n
+    labels = {
+        cid: sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        for cid, counts in tally.items()
+    }
+    for course_id, title in conn.execute("SELECT id, title FROM courses"):
+        labels.setdefault(course_id, title)
+    return labels
+
+
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
@@ -99,10 +163,25 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
 # ── Derived dimensions ────────────────────────────────────────────────────
 
 
+# COURSE_MAP keyed case-insensitively (ANLY-8): `PYTHON - SUMMER 2025` is the
+# same course as `Python - GLOBAL`.
+_COURSE_MAP_FOLDED = {k.casefold(): v for k, v in COURSE_MAP.items()}
+
+
+def _text(value) -> str:
+    """
+    A string, or '' for anything that is not one.
+
+    A NULL column arrives as `None` in some pandas versions and as float `NaN`
+    (which is truthy) in others, so `value or ""` is not a safe guard.
+    """
+    return value if isinstance(value, str) else ""
+
+
 def course_from_category(category: str) -> str:
     """Discord categories are '<Course> - <SECTION>'; the prefix names the course."""
-    prefix = (category or "").split(" - ")[0].strip()
-    return COURSE_MAP.get(prefix, prefix or "Unknown")
+    prefix = _text(category).split(" - ")[0].strip()
+    return _COURSE_MAP_FOLDED.get(prefix.casefold(), prefix or "Unknown")
 
 
 def channel_type_from_category(category: str) -> str:
@@ -113,7 +192,8 @@ def channel_type_from_category(category: str) -> str:
     ending GLOBAL is the whole-course space, STUDENT is a student's own private
     channel, TEAM is a project team's.
     """
-    suffix = (category or "").split(" - ")[-1].upper() if " - " in (category or "") else ""
+    category = _text(category)
+    suffix = category.split(" - ")[-1].upper() if " - " in category else ""
     if "GLOBAL" in suffix:
         return "Global"
     if "STUDENT" in suffix:
@@ -141,7 +221,7 @@ def fingerprint(person_key: str, ts, direction: str, content: str) -> str:
     so the key stays short and no message text ends up in an index.
     """
     stamp = pd.Timestamp(ts).floor("s").isoformat()
-    digest = hashlib.sha1((content or "").strip().encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(_text(content).strip().encode("utf-8")).hexdigest()[:16]
     return f"{person_key}|{stamp}|{direction}|{digest}"
 
 
@@ -210,7 +290,7 @@ def load_current(path: Path | None = None) -> pd.DataFrame:
     notebooks: a student who asked for their history to be removed stays out of
     every aggregate, and there is no code path that forgets to filter.
     """
-    path = Path(path or CONFIG.current_db)
+    path = Path(path or CONFIG.platform_db)
     if not path.exists():
         return _empty_unified()
 
@@ -228,6 +308,7 @@ def load_current(path: Path | None = None) -> pd.DataFrame:
                    m.category_ref  AS category_ref,
                    m.channel_ref   AS channel_ref,
                    m.person_id     AS person_id,
+                   m.course_id     AS course_id,
                    c.title         AS course,
                    p.display_name  AS display_name,
                    pi.external_id  AS discord_id
@@ -242,6 +323,7 @@ def load_current(path: Path | None = None) -> pd.DataFrame:
             """,
             conn,
         )
+        labels = _course_labels(conn)
     finally:
         conn.close()
 
@@ -256,7 +338,15 @@ def load_current(path: Path | None = None) -> pd.DataFrame:
     out["person_key"] = ("discord:" + raw["discord_id"].astype(str)).where(
         raw["discord_id"].notna(), "person:" + raw["person_id"].astype(str)
     )
-    out["course"] = raw["course"].fillna("Unknown")
+    # One label per course (see `_course_labels`). An imported legacy message is
+    # labelled from its own original Discord category, exactly as `load_legacy`
+    # does (ANLY-8); with no category recorded it falls back to its course's label.
+    imported = raw["message_id"].astype(str).str.startswith(IMPORTED_PREFIX)
+    course_label = raw["course_id"].map(labels).fillna(raw["course"]).fillna("Unknown")
+    has_category = raw["category_ref"].fillna("") != ""
+    out["course"] = course_label.where(
+        ~(imported & has_category), raw["category_ref"].map(course_from_category)
+    )
     out["surface"] = raw["surface"].fillna("discord")
     out["category"] = raw["category_ref"].fillna("")
     out["channel"] = raw["channel_ref"].fillna("")
@@ -277,10 +367,18 @@ def load_current(path: Path | None = None) -> pd.DataFrame:
 
 
 def merge_messages(
-    legacy: pd.DataFrame, current: pd.DataFrame, config: Config | None = None
+    legacy: pd.DataFrame,
+    current: pd.DataFrame,
+    config: Config | None = None,
+    dedupe: str = "fingerprint",
 ) -> tuple[pd.DataFrame, dict]:
     """
     Concatenate both generations, drop imported duplicates, drop excluded accounts.
+
+    `dedupe='fingerprint'` (two-file mode) matches the same message across the
+    two databases by person, second, direction and text. `dedupe='id'` (one
+    database) only drops a repeated message id: within a single database two
+    rows with different ids are two messages, even if the text is the same.
 
     Returns the merged frame and a provenance dictionary the report prints
     verbatim — how many rows came from each database and how many were dropped
@@ -307,12 +405,15 @@ def merge_messages(
     # Prefer the current database's copy of any message present in both: it is
     # the one the platform will keep writing to, and its ids are the ones an
     # instructor sees in a transcript.
-    merged["_fp"] = [
-        fingerprint(pk, ts, d, c)
-        for pk, ts, d, c in zip(
-            merged["person_key"], merged["ts"], merged["direction"], merged["content"]
-        )
-    ]
+    if dedupe == "id":
+        merged["_fp"] = merged["message_id"]
+    else:
+        merged["_fp"] = [
+            fingerprint(pk, ts, d, c)
+            for pk, ts, d, c in zip(
+                merged["person_key"], merged["ts"], merged["direction"], merged["content"]
+            )
+        ]
     merged["_pref"] = (merged["source"] == "current").astype(int)
     merged = merged.sort_values(["_pref", "ts"], ascending=[False, True])
     before = len(merged)
@@ -345,8 +446,24 @@ def merge_messages(
 
 
 def load_messages(config: Config | None = None) -> tuple[pd.DataFrame, dict]:
-    """Load both databases and merge them. The one entry point the notebooks use."""
+    """
+    Load the messages and tidy them. The one entry point the notebooks use.
+
+    Combined mode (ANLY-8, the default) reads the single platform-schema file;
+    nothing can be double-counted, so only a repeated message id is dropped (never
+    a look-alike by text), and the provenance says how many of its rows were
+    imported from the legacy bot. Two-file mode
+    loads both generations and reconciles them as before.
+    """
     config = config or CONFIG
+    if config.input_mode == "combined":
+        current = load_current(config.combined_db)
+        merged, provenance = merge_messages(_empty_unified(), current, config, dedupe="id")
+        provenance["input_mode"] = "combined"
+        provenance["imported_legacy_rows"] = int(
+            current["message_id"].str.startswith("current:" + IMPORTED_PREFIX).sum()
+        ) if len(current) else 0
+        return merged, provenance
     return merge_messages(
         load_legacy(config.legacy_db), load_current(config.current_db), config
     )
@@ -362,7 +479,7 @@ def load_enrolments(path: Path | None = None) -> pd.DataFrame:
     Only the current database has enrolments; the legacy bot had no roster at
     all, so adoption rates can only be computed for courses that exist here.
     """
-    path = Path(path or CONFIG.current_db)
+    path = Path(path or CONFIG.platform_db)
     if not path.exists():
         return pd.DataFrame(columns=["course", "person_key", "source", "created_at"])
 
@@ -373,6 +490,7 @@ def load_enrolments(path: Path | None = None) -> pd.DataFrame:
         raw = pd.read_sql_query(
             """
             SELECT c.title        AS course,
+                   e.course_id    AS course_id,
                    e.person_id    AS person_id,
                    e.source       AS source,
                    e.created_at   AS created_at_ms,
@@ -386,6 +504,7 @@ def load_enrolments(path: Path | None = None) -> pd.DataFrame:
             """,
             conn,
         )
+        labels = _course_labels(conn)
     finally:
         conn.close()
 
@@ -393,7 +512,7 @@ def load_enrolments(path: Path | None = None) -> pd.DataFrame:
         return pd.DataFrame(columns=["course", "person_key", "source", "created_at"])
 
     out = pd.DataFrame()
-    out["course"] = raw["course"]
+    out["course"] = raw["course_id"].map(labels).fillna(raw["course"])
     out["person_key"] = ("discord:" + raw["discord_id"].astype(str)).where(
         raw["discord_id"].notna(), "person:" + raw["person_id"].astype(str)
     )
@@ -404,7 +523,7 @@ def load_enrolments(path: Path | None = None) -> pd.DataFrame:
 
 def load_costs(path: Path | None = None) -> pd.DataFrame:
     """Model spend, in dollars, per surface and day. Only the current database has it."""
-    path = Path(path or CONFIG.current_db)
+    path = Path(path or CONFIG.platform_db)
     empty = pd.DataFrame(
         columns=["ts", "course", "surface", "model", "input_tokens", "output_tokens", "usd"]
     )
@@ -423,12 +542,14 @@ def load_costs(path: Path | None = None) -> pd.DataFrame:
                    l.output_tokens AS output_tokens,
                    l.cost_micros   AS cost_micros,
                    l.surface       AS surface,
+                   l.course_id     AS course_id,
                    c.title         AS course
             FROM cost_ledger_entries l
             LEFT JOIN courses c ON c.id = l.course_id
             """,
             conn,
         )
+        labels = _course_labels(conn)
     finally:
         conn.close()
 
@@ -437,7 +558,7 @@ def load_costs(path: Path | None = None) -> pd.DataFrame:
 
     out = pd.DataFrame()
     out["ts"] = to_local(raw["created_at_ms"])
-    out["course"] = raw["course"].fillna("Unknown")
+    out["course"] = raw["course_id"].map(labels).fillna(raw["course"]).fillna("Unknown")
     out["surface"] = raw["surface"].fillna("unknown")
     out["model"] = raw["model"]
     out["input_tokens"] = raw["input_tokens"].fillna(0).astype(int)

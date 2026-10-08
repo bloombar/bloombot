@@ -14430,3 +14430,87 @@ filters," "Clear filters" and the filtered note, previously duplicated by hand a
 then the bare person id, never an email — needed because a roster-imported person can carry a first/last name
 with no `displayName` set at all, and the old `displayName ?? personId` fallback skipped straight past a name
 the platform already had.
+
+
+## D-146 — `analysis/`/`analytics.ipynb`: ANLY-8 — the analysis reads one combined database, and an imported message is labelled by its original Discord category
+
+**Input.** `data/data.db` is now a platform-schema database that already holds the legacy bot's history
+(`legacy-message-<hash>` ids, original Discord category/channel in `category_ref`/`channel_ref`). Both the
+pipeline and `analytics.ipynb` read it by default (`Config.input_mode = 'combined'`). The old arrangement — a
+legacy file plus a platform file, deduplicated on a content fingerprint — is kept as `input_mode = 'two-file'`
+(`run_all.py --input two-file`, or `BLOOMBOT_ANALYSIS_INPUT=two-file`), and reproduces its previous output
+byte-for-byte (`metrics.json` differs only in its `_written_at` stamp). Paths are overridable by environment
+variable so a run never needs a code edit, and so tests and verification runs write only under `tmp/`.
+
+**Course labels.** `load_current` labelled a course from `courses.title`; `load_legacy` from the Discord category
+prefix through `COURSE_MAP`. Imported messages sit under titles such as "Intro to Computer Programming (Summer
+2025)" that match neither. Options: (a) keep titles — legacy-period results change and a course splits by term;
+(b) map titles to the analysis' names — fragile, one more table to keep in step with the importer; (c) label an
+imported message exactly as `load_legacy` would, from its category. Chosen: **(c)**. A message is "imported" when
+its id starts `legacy-message-` (the importer's `deterministicId` prefix); every other message keeps its course
+title, which is the platform's own and already agrees with `COURSE_MAP` for the courses that exist natively.
+`COURSE_MAP` matching became case-insensitive: the Summer imports' categories are upper-case (`PYTHON - SUMMER
+2025`, `WEB DESIGN - STUDENTS 01`) and would otherwise be separate, unmapped courses. This changes the label of
+those categories (from the upper-case text to "Introduction to Programming" / "Web Design") for the legacy loader
+too; it affects no data in the earlier two-file inputs.
+
+**People.** Imported people carry a `discord` row in `person_identities` holding the original Discord id, so
+`load_current`'s existing `discord:<id>` key is the key `load_legacy` produces. Verified across all 925 imported
+real messages: 0 mismatches. A person with no Discord identity keeps a `person:<id>` key, as before.
+
+**Reading the file.** `data/data.db` is in WAL mode. `_connect` opens it `mode=ro` with ordinary locking (so rows still in a `-wal` file are seen and a file changing mid-read cannot be read torn), copies it into an in-memory database with `backup()`, and closes the source: no temporary files. SQLite may create its own `-wal`/`-shm` beside a WAL-mode database; those are gitignored (`data/*.db-wal`, `data/*.db-shm`, `data/*.db-journal`). (Round 1 replaced an earlier `immutable=1` / temp-copy design; see the rework note below.)
+
+**Notebooks and the repository.** `run_all.py` used to write executed notebooks back over the committed ones. Real
+data would then land in a public repository, so write-back now happens only after `--mock` (synthetic data) or an
+explicit `--write-back` (refused when an input is under `data/`); any other run saves its executed copies under
+`<out>/notebooks/`. `analytics.ipynb` was committed with output from real data; it is now committed without
+outputs and loads through `bloombot_analysis.load`. Its conversation grouping is unchanged for Discord (user and
+channel) and keys web/assistant messages by surface and course, which have no channel.
+
+**Topic cache.** `data/topic_classifications.json` is keyed by a conversation's position in an ordering that
+changes whenever messages are added, so on the combined data it would label the wrong conversations. The notebook
+no longer reads or writes it; it uses `bloombot_analysis.topics` (cache under `tmp/analysis/`, keyed by method and
+a hash of the conversation's text) and prints a notice when the old file exists. With no `OPENAI_API_KEY` the
+notebook falls back to the keyword classifier.
+
+**Known, left alone.** `config.terms` defines Fall 2025, Spring 2026 and Fall 2026 only; Summer messages are
+labelled "Summer <year>" by `semester_of` but have no term window, so term-level comparisons do not cover them. In
+two-file mode a person soft-deleted on the platform keeps their messages from the legacy file, which knows nothing
+of deletions; the combined file excludes them with the rest of their history.
+
+**D-146 rework (round 1).**
+
+- **Outputs never reach GitHub, by tooling.** Someone working locally may legitimately have real student data in a
+  notebook's output cells; the repository is public. So the rule is enforced, not requested: a tracked
+  `.githooks/pre-commit` rewrites only the _staged_ blob of each `*.ipynb` (outputs emptied, execution counts
+  nulled, `execution`/`widgets` metadata dropped) and leaves the working copy alone; `.githooks/pre-push` refuses a
+  push whose commits contain a notebook with outputs; a node test over the index copy of every tracked notebook is
+  the CI backstop. The hooks are enabled by `npm install` via `prepare` (`git config core.hooksPath .githooks`,
+  silent and non-fatal outside a git checkout). Both scripts are Node, so no Python dependency is added. A client
+  that skips hooks (`--no-verify`, no `npm install`) is caught by the pre-push-equivalent CI test, not prevented.
+  Already-committed notebooks, including `roster_setup.ipynb` and the pipeline notebooks' mock outputs, were cleared;
+  history before this change still contains them.
+- **`run_all.py`.** `--mock` writes executed notebooks back, so it now refuses input-path flags and overrides any
+  environment input path with the synthetic files it generates; the earlier "input under `data/`" guard stays on
+  `--write-back` as a second line of defence.
+- **Reading the database.** `_connect` opens `mode=ro` with ordinary locking and copies the database into memory
+  (`backup()`), so WAL rows are seen, a changing file cannot be read torn, and no temporary file exists to leak.
+  SQLite may still create its own `-wal`/`-shm` beside a WAL-mode source; that is accepted.
+- **One database, one id.** Combined mode drops only a repeated message id, never a look-alike by text.
+- **One label per course.** `_course_labels` names a course that holds imported messages by the most common
+  `course_from_category` of those messages, and any other course by its title; messages (native), enrolments and
+  costs all use it, so a course titled "Intro to Computer Programming" is "Introduction to Programming" everywhere.
+  An imported message keeps its own category's label (the 925-message equivalence), or the course's label if it
+  recorded no category.
+- **Known limits, recorded.** The excluded-account filter matches `display_name` in combined mode but
+  `discord_username` in the legacy file; 0 rows are excluded either way today, but an instructor whose display name
+  differs from their username would be missed in combined mode. Two legacy messages (category `Banter`) were
+  deliberately not imported, so they are absent from the combined data: the only expected difference from the
+  legacy snapshot.
+
+**D-146 rework (round 2).**
+
+- **Locked environment.** All Python verification runs under the `Pipfile.lock` environment (pandas 3.0.5, as CI installs with `pipenv install --deploy`), not an ad-hoc interpreter. pandas 3 delivers a SQL NULL in a text column as float `NaN`, which is truthy, so `x or ""` is not a NULL guard; `load._text` treats any non-string as `""` and the category/content helpers use it.
+- **Hook coverage.** The pre-commit strip lists staged notebooks with `--no-renames` (a `git mv` is otherwise a rename and was skipped) and a case-insensitive pathspec; an old-format (nbformat < 4, `worksheets`) or unparseable notebook is refused rather than passed through, in the strip, the pre-push check and the CI test. A `post-commit` hook re-strips the index, because `git commit <path>` re-stages the working copy (with outputs) after committing. The pre-push check fails closed with an actionable message when the remote's commit is unknown locally, and says so when no remote-tracking refs exist and the whole history was inspected. Its advice for an already-committed notebook is `strip-notebook-outputs.mjs --index` then `git commit --amend --no-edit` (tip commit only), or squash the branch with `git reset --soft <merge-base> && git commit`; a bare `--amend` strips nothing.
+- **Known limits.** Markdown-cell `attachments` (embedded images) are authored content and survive stripping, so a pasted screenshot could still carry student data. `npm run prepare` sets `core.hooksPath` for the repository, overriding any global setting a developer has.
+

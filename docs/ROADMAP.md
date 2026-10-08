@@ -550,3 +550,12 @@ the two-file input as an option, and stops the analytics notebook applying its p
 data it no longer describes.
 
 **In scope:** ANLY-8
+
+## Phase 47 — Staff usage and topic sets that fit
+
+The analysis counted the teacher's own demonstrations, tests and announcements as student usage, and over a
+third of real sessions fell outside the nine topic labels. This phase tags every message with its sender's
+role in the course, reports staff usage separately so student figures are students only, and replaces the
+nine labels with a student topic set and a staff purpose set drawn from what people actually ask.
+
+**In scope:** ANLY-9, ANLY-10

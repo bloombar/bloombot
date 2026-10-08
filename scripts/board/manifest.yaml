@@ -5036,3 +5036,37 @@
   phase: 46
   status: Done
   review: false
+- id: ANLY-9
+  title: Staff usage reported separately from student usage
+  full: "Every message is tagged with the sender's role in its course, staff or
+    student. Staff are course owners, instructors and assistants: anyone whose
+    person record is linked to an active (not revoked) membership in the
+    course's organization, plus anyone whose handle matches the configured list,
+    which stays as a manual override. Staff use the bot for different reasons
+    (demonstrations in class, testing it, announcements, quick lookups while
+    teaching), so their messages are no longer mixed into student figures.
+    Student-facing measures (adoption, sessions, session shape, topics, quotes)
+    count students only. Staff usage is reported in its own section, which
+    states how many staff messages and…"
+  section: §9 Analytics
+  family: ANLY
+  phase: 47
+  status: Backlog
+  review: false
+- id: ANLY-10
+  title: Topic sets that fit the questions people actually ask
+  full: 'The original nine topic labels left over a third of real sessions as
+    "Other", so they are replaced by two label sets. Student sessions use:
+    Project & assignment requirements; Deadlines & schedule; Grades & grading;
+    Course policies (extensions, late work, attendance, AI use); Course
+    concepts; Quiz & exam questions; Code & debugging; Git & GitHub workflow;
+    Tools, setup & deployment; Team coordination; Discord & platform help;
+    Greetings & bot questions; Other. Staff sessions use a set of purposes:
+    Testing the bot; Demonstrating to class; Announcements; Directing students;
+    Course content & policy lookup; Course setup; Other. Both the keyword
+    classifier and the model classifier use the set that…'
+  section: §9 Analytics
+  family: ANLY
+  phase: 47
+  status: Backlog
+  review: false

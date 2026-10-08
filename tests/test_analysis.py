@@ -306,20 +306,66 @@ def test_keyword_classifier_reads_the_students_words_not_the_bots():
     assert labelled.loc[0, "topic"] == "Course concepts"
 
 
-def test_topic_cache_is_keyed_by_content_not_position(tmp_path):
-    """Re-sessionising must not silently invalidate every cached label."""
+def _fake_openai(monkeypatch, label="Deadlines & schedule"):
+    """Replace the model call with a counter, so cache behaviour is testable offline."""
+    calls = []
+
+    def fake(text, course, role="student"):
+        calls.append((text, role))
+        return label
+
+    monkeypatch.setattr(topics, "classify_openai", fake)
+    return calls
+
+
+def test_model_cache_is_keyed_by_content_not_position(tmp_path, monkeypatch):
+    """Re-sessionising must not silently invalidate every cached model label."""
     config = _config(tmp_path, None, None)
+    calls = _fake_openai(monkeypatch)
     texts = pd.DataFrame(
         {"session_id": ["s1"], "course": ["Web Design"], "text": ["Student: when is hw2 due"],
          "student_text": ["when is hw2 due"]}
     )
-    topics.classify_sessions(texts, method="keyword", config=config)
-    cache = topics.load_cache(config.topic_cache)
-    assert list(cache) == [f"v2-student:keyword:{topics.text_key('when is hw2 due')}"]
+    topics.classify_sessions(texts, method="openai", config=config)
+    (key,) = topics.load_cache(config.topic_cache)
+    assert key == (
+        f"v2-student:openai-{topics.openai_fingerprint('student')}:"
+        f"{topics.text_key('Student: when is hw2 due')}"
+    )
+    again = topics.classify_sessions(texts.assign(session_id=["s99"]), method="openai", config=config)
+    assert again.loc[0, "topic_method"] == "openai-cached" and len(calls) == 1
 
-    renumbered = texts.assign(session_id=["s99"])
-    again = topics.classify_sessions(renumbered, method="keyword", config=config)
-    assert again.loc[0, "topic_method"] == "keyword-cached"
+
+def test_keyword_labels_are_never_cached_so_a_rule_edit_takes_effect(tmp_path, monkeypatch):
+    config = _config(tmp_path, None, None)
+    texts = pd.DataFrame(
+        {"session_id": ["s1"], "course": ["Web Design"], "text": ["Student: tell me a joke"],
+         "student_text": ["tell me a joke"]}
+    )
+    assert topics.classify_sessions(texts, config=config).loc[0, "topic"] == "Other"
+    assert topics.load_cache(config.topic_cache) == {}
+    edited = {
+        "student": [("Greetings & bot questions", r"\bjoke\b"), *topics.STUDENT_RULES],
+        "staff": topics.STAFF_RULES,
+    }
+    monkeypatch.setattr(topics, "KEYWORD_RULES", edited)
+    again = topics.classify_sessions(texts, config=config)
+    assert again.loc[0, "topic"] == "Greetings & bot questions"
+    assert again.loc[0, "topic_method"] == "keyword"
+
+
+def test_a_changed_prompt_relabels_a_cached_model_session(tmp_path, monkeypatch):
+    config = _config(tmp_path, None, None)
+    calls = _fake_openai(monkeypatch)
+    texts = pd.DataFrame(
+        {"session_id": ["s1"], "course": ["Web Design"], "text": ["Student: hi"], "student_text": ["hi"]}
+    )
+    topics.classify_sessions(texts, method="openai", config=config)
+    assert topics.classify_sessions(texts, method="openai", config=config).loc[0, "topic_method"] == "openai-cached"
+    edited = {**topics.STUDENT_DESCRIPTIONS, "Other": "something else entirely"}
+    monkeypatch.setattr(topics, "STUDENT_DESCRIPTIONS", edited)
+    out = topics.classify_sessions(texts, method="openai", config=config)
+    assert out.loc[0, "topic_method"] == "openai" and len(calls) == 2
 
 
 def test_agreement_rate_ignores_unaudited_rows():
@@ -769,6 +815,17 @@ def _platform_db(tmp_path: Path, with_accounts: bool = True) -> Path:
             [("w1", "org", "owner", "web", "acc_owner"), ("w2", "org", "revoked", "web", "acc_revoked"),
              ("w3", "org", "foreign", "web", "acc_foreign")],
         )
+    # One ledger row and one enrolment per person, to test the role on both.
+    for i, person in enumerate(people):
+        conn.execute(
+            "INSERT INTO cost_ledger_entries VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (f"c_{person}", "org", "crs", person, "gpt-4.1", 100, 10, (i + 1) * 1_000_000,
+             "measured", "web", _ms(datetime(2026, 9, 3, 10, 0))),
+        )
+        conn.execute(
+            "INSERT INTO enrolments VALUES (?,?,?,?,?,0,NULL,NULL,NULL)",
+            (f"e_{person}", "org", "crs", person, "join_link"),
+        )
     conn.commit()
     conn.close()
     return path
@@ -782,6 +839,18 @@ def test_staff_join_flags_the_linked_owner_only(tmp_path):
     """An active membership in the message's org makes staff; revoked or foreign ones do not."""
     roles = _roles(load.load_current(_platform_db(tmp_path)))
     assert roles == {"owner": "staff", "revoked": "student", "foreign": "student", "plain": "student"}
+
+
+def test_cost_rows_carry_the_role_of_whoever_caused_them(tmp_path):
+    costs = load.load_costs(_platform_db(tmp_path))
+    roles = dict(zip(costs["usd"].round().astype(int), costs["role"]))
+    # The ledger rows were written in the order owner, revoked, foreign, plain ($1..$4).
+    assert roles == {1: "staff", 2: "student", 3: "student", 4: "student"}
+
+
+def test_enrolled_staff_are_left_out_of_the_adoption_denominator(tmp_path):
+    enrolments = load.load_enrolments(_platform_db(tmp_path))
+    assert len(enrolments) == 3  # the owner is enrolled too, and is not counted
 
 
 def test_roles_fall_back_to_handles_without_the_account_tables(tmp_path):
@@ -816,17 +885,34 @@ def test_a_handle_override_marks_staff_and_is_kept_in_the_frame():
     assert provenance["staff_rows"] == 1 and provenance["excluded_account_rows"] == 0
 
 
-def test_legacy_messages_of_a_staff_person_are_staff(mock_dbs):
-    """Two-file mode: a legacy row whose person_key is a staff person in the current database."""
-    config = Config(
-        input_mode="two-file", legacy_db=mock_dbs / "legacy.db", current_db=mock_dbs / "current.db",
-        topic_cache=mock_dbs / "t.json",
+def _unified_row(message_id, person_key, ts, content, source, role, handle):
+    return {
+        "message_id": message_id, "ts": pd.Timestamp(ts), "person_key": person_key,
+        "course": "Web Design", "surface": "discord", "category": "Web Design - GLOBAL",
+        "channel": "general", "channel_type": "Global", "direction": "from", "content": content,
+        "source": source, "handle": handle, "role": role,
+    }
+
+
+def test_legacy_messages_of_a_staff_person_are_staff():
+    """
+    Two-file mode: a legacy row whose person_key is a staff person in the current
+    database is staff. The legacy row is NOT a duplicate of anything current, so
+    it survives the merge and only the promotion can make it staff.
+    """
+    legacy = pd.DataFrame(
+        [
+            _unified_row("legacy:1", "discord:7", "2025-10-01 10:00", "old staff question", "legacy", "student", "owner7"),
+            _unified_row("legacy:2", "discord:8", "2025-10-01 11:00", "old student question", "legacy", "student", "stu8"),
+        ]
     )
-    merged, _ = load.load_messages(config)
-    owner_key = "discord:700999999999999999"
-    mine = merged[merged["person_key"] == owner_key]
-    assert set(mine["role"]) == {"staff"}
-    assert "legacy" in set(mine["source"]) or len(mine) > 0
+    current = pd.DataFrame(
+        [_unified_row("current:1", "discord:7", "2026-09-04 10:00", "new staff question", "current", "staff", "Owner Seven")]
+    )
+    merged, provenance = load.merge_messages(legacy, current, Config())
+    by_id = dict(zip(merged["message_id"], merged["role"]))
+    assert by_id == {"legacy:1": "staff", "legacy:2": "student", "current:1": "staff"}
+    assert provenance["duplicates_dropped"] == 0 and provenance["staff_rows"] == 2
 
 
 def test_role_survives_on_imported_legacy_messages(mock_dbs):
@@ -888,24 +974,34 @@ def test_a_session_never_mixes_roles():
 @pytest.mark.parametrize(
     "text,expected",
     [
-        ("how many extensions do we have", "Course policies"),
-        ("can we use extensions for group projects", "Course policies"),
-        ("what about this one: Which of the following is a stateless protocol?", "Quiz & exam questions"),
-        ("should we fork or branch first", "Git & GitHub workflow"),
-        ("git pull before commit?", "Git & GitHub workflow"),
-        ("does webapp count as a subsystem for the project 5 requirement", "Project & assignment requirements"),
-        ("I can't find my team chat", "Discord & platform help"),
-        ("should it be a private channel", "Discord & platform help"),
+        ("are late days or extensions available this term", "Course policies"),
+        ("do extensions apply to pair assignments", "Course policies"),
+        ("Which of the following describes an idempotent request?", "Quiz & exam questions"),
+        ("do I make a feature branch before opening a pull request", "Git & GitHub workflow"),
+        ("should I rebase before I push my commits?", "Git & GitHub workflow"),
+        ("does a mobile app count as a component for the milestone 2 requirement", "Project & assignment requirements"),
+        ("my group's channel disappeared", "Discord & platform help"),
+        ("does the channel have to be invite-only", "Discord & platform help"),
         ("hi", "Greetings & bot questions"),
         ("are you there", "Greetings & bot questions"),
-        ("atlas or docker for mongodb", "Tools, setup & deployment"),
-        ("why isn't my test working?\ndef add(a, b): return a - b", "Code & debugging"),
-        ("I still wasn't assigned a group", "Team coordination"),
-        ("when is project 1 due", "Deadlines & schedule"),
-        ("hi, when is project 1 due", "Deadlines & schedule"),
+        ("should I use a managed postgres or run it in a container", "Tools, setup & deployment"),
+        ("my unit test is not working\ndef mul(a, b): return a + b", "Code & debugging"),
+        ("nobody told me which team I'm on", "Team coordination"),
+        ("when is the third assignment due", "Deadlines & schedule"),
+        ("hi, when is the third assignment due", "Deadlines & schedule"),
         ("how is the project graded", "Grades & grading"),
         ("can you explain what a closure is", "Course concepts"),
         ("ok sounds good", "Other"),
+        # Over-matching words that once misrouted a session (ANLY-10 rework).
+        ("what should our final project be about", "Project & assignment requirements"),
+        ("can you test my understanding of loops", "Course concepts"),
+        ("what does pull mean in pandas", "Other"),
+        ("what is variable scope", "Course concepts"),
+        ("I'm stuck on the wireframe", "Project & assignment requirements"),
+        ("what's a database index", "Course concepts"),
+        ("explain what an ide is", "Course concepts"),
+        ("allowed characters in a variable name", "Other"),
+        ("I need to rest my eyes", "Other"),
     ],
 )
 def test_student_keyword_rules(text, expected):
@@ -915,15 +1011,17 @@ def test_student_keyword_rules(text, expected):
 @pytest.mark.parametrize(
     "text,expected",
     [
-        ("are you there?", "Testing the bot"),
-        ("do you know who I am?", "Testing the bot"),
-        ("can you remember this number: 4417", "Testing the bot"),
-        ("@everyone - Bloombot is available in the course channels now", "Announcements"),
-        ("please make a new channel with the correct settings for the team", "Directing students"),
-        ("define merge hell to the students", "Demonstrating to class"),
-        ("what is the policy on extensions", "Course content & policy lookup"),
-        ("when is project 1 due", "Course content & policy lookup"),
-        ("can you rename the course?", "Course setup"),
+        ("hello, can you hear me?", "Testing the bot"),
+        ("do you recognize my name?", "Testing the bot"),
+        ("remember this code word: tulip", "Testing the bot"),
+        ("is the bot working now?", "Testing the bot"),
+        ("@everyone the study bot is live in the course channels starting today", "Announcements"),
+        ("please create a new channel for the design group", "Directing students"),
+        ("describe dependency hell to everyone", "Demonstrating to class"),
+        ("what is the rule about late homework", "Course content & policy lookup"),
+        ("when is the third assignment due", "Course content & policy lookup"),
+        ("please change the course title to Intro to Python", "Course setup"),
+        ("how many students have joined", "Course setup"),
         ("ok sounds good", "Other"),
     ],
 )
@@ -961,24 +1059,19 @@ def test_sessions_are_classified_under_their_roles_set(tmp_path):
     )
     out = topics.classify_sessions(texts, method="keyword", config=config)
     assert list(out["topic"]) == ["Deadlines & schedule", "Course content & policy lookup"]
-    assert set(topics.load_cache(config.topic_cache)) == {
-        f"v2-student:keyword:{topics.text_key('when is hw2 due')}",
-        f"v2-staff:keyword:{topics.text_key('when is hw2 due')}",
-    }
 
 
-def test_a_v1_cache_entry_is_not_reused(tmp_path):
-    """Labels from the nine-label set must never be served under the new sets."""
+def test_a_v1_cache_entry_is_not_reused(tmp_path, monkeypatch):
+    """A label from the nine-label set must never be served under the new sets."""
     config = _config(tmp_path, None, None)
-    key = topics.text_key("when is hw2 due")
-    topics.save_cache({f"keyword:{key}": "Syllabus, schedule & deadlines"}, config.topic_cache)
+    calls = _fake_openai(monkeypatch, "Deadlines & schedule")
+    text = "Student: when is hw2 due"
+    topics.save_cache({f"openai:{topics.text_key(text)}": "Syllabus, schedule & deadlines"}, config.topic_cache)
     texts = pd.DataFrame(
-        {"session_id": ["s1"], "course": ["Web Design"], "text": ["Student: when is hw2 due"],
-         "student_text": ["when is hw2 due"]}
+        {"session_id": ["s1"], "course": ["Web Design"], "text": [text], "student_text": ["when is hw2 due"]}
     )
-    out = topics.classify_sessions(texts, method="keyword", config=config)
-    assert out.loc[0, "topic"] == "Deadlines & schedule"
-    assert out.loc[0, "topic_method"] == "keyword"
+    out = topics.classify_sessions(texts, method="openai", config=config)
+    assert out.loc[0, "topic"] == "Deadlines & schedule" and len(calls) == 1
 
 
 def test_staff_prompt_says_it_classifies_an_instructors_conversation(monkeypatch):
@@ -1065,4 +1158,22 @@ def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
     # Student figures are students only: the staff session count is not in them.
     assert dataset["sessions"] == staff["all_sessions"] - staff["sessions"]
     assert "quote" not in json.dumps(staff).lower()
+
+    # Every student notebook filters to students: the numbers they wrote match
+    # a student-only recount of the tidy files, and differ from an all-roles one.
+    data = pd.read_csv(out / "data" / "sessions.csv", parse_dates=["started_at"])
+    students = data[data["role"] == "student"]
+    assert len(students) < len(data)
+    assert metrics["shape"]["sessions"] == len(students)  # notebook 02
+    term = Config().term("fall_2026")
+    now = students[(students["started_at"].dt.date >= term.start) & (students["started_at"].dt.date <= term.end)]
+    assert metrics["volume"]["adoption_total_active"] == now.groupby("course")["person_key"].nunique().sum()  # 01
+    cost = metrics["cost"]
+    window = students[
+        (students["started_at"] >= pd.Timestamp(cost["window_start"]))
+        & (students["started_at"] <= pd.Timestamp(cost["window_end"]))
+    ]
+    assert cost["sessions_in_window"] == len(window)  # notebook 04
+    assert cost["staff_usd"] > 0 and abs(cost["student_usd"] + cost["staff_usd"] - cost["total_usd"]) < 1e-6
+    assert "$" in text and "all users, staff included" in text
     assert [s for s in staff["purposes"]][0]["topic"] in {p["topic"] for p in staff["purposes"]}

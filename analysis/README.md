@@ -73,8 +73,10 @@ beside it) and the repository's guard hook blocks writes to protected paths.
    The old cache at `data/topic_classifications.json` is **not** reused. It was keyed by a
    conversation's position in an ordering that no longer exists, so a hit there would attach a label
    to the wrong session; the new cache lives at `tmp/analysis/topic_classifications.json` and is
-   keyed by the session's own text and the label-set version (`v2-student` / `v2-staff`), so
-   labels from the older nine-label set are never reused. Re-classifying from scratch costs a few cents. `analytics.ipynb`
+   keyed by the session's own text, the label-set version (`v2-student` / `v2-staff`) and a hash of
+   the model, prompt and label descriptions, so labels from the older nine-label set, or a changed prompt, are
+   never reused. Only model labels are cached: keyword labels are cheap and are recomputed every run, so editing a
+   rule needs no cache clearing. Re-classifying from scratch costs a few cents. `analytics.ipynb`
    (repository root) shares this cache and the same rule.
 
 5. **Audit the topic labels.** Notebook 03 writes `tmp/analysis/out/data/topic_audit_sample.csv`.

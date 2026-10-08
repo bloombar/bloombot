@@ -368,7 +368,7 @@ Candidates below are mechanically redacted (emails, mentions, links and long num
 
 **Quiz & exam questions** · Introduction to Programming
 
-> Student: true or false: a tuple is immutable Bot: That error usually means a missing dependency. Try these three steps in order.
+> Student: true or false: a set keeps its order Bot: That error usually means a missing dependency. Try these three steps in order.
 
 **Course concepts** · Web Design
 
@@ -376,7 +376,7 @@ Candidates below are mechanically redacted (emails, mentions, links and long num
 
 **Git & GitHub workflow** · Web Design
 
-> Student: do I git pull before I commit? Bot: Here's what the course materials say about that, and where to look next. Student: should we fork or branch first Bot: The syllabus covers this: the relevant deadline and policy are below.
+> Student: should I rebase before I push my commits? Bot: Here's what the course materials say about that, and where to look next. Student: do I make a feature branch before opening a pull request Bot: The syllabus covers this: the relevant deadline and policy are below.
 
 **Team coordination** · Introduction to Programming
 
@@ -388,20 +388,20 @@ Candidates below are mechanically redacted (emails, mentions, links and long num
 
 ## S21 · What it costs to run
 
-**Takeaway:** $0.80 of model spend over the ledger window — about $0.015 per session.
+**Takeaway:** $0.68 of student model spend over the ledger window — about $0.015 per student session ($0.80 for all users, staff included).
 
-The cost ledger exists only on the current platform and only for live traffic, so this is a Fall 2026 figure over the window shown — not a yearly cost, and not extrapolated to one. Staff account for $0.12 of the total; the per-session and per-student figures count student spend only. Per student in the window: $0.03 across 27 students.
+The cost ledger exists only on the current platform and only for live traffic, so this is a Fall 2026 figure over the window shown — not a yearly cost, and not extrapolated to one. The chart, table and per-session and per-student figures are student spend only; staff account for $0.12 more, so the all-users total is $0.80. Per student in the window: $0.03 across 27 students.
 
 ![What it costs to run](figures/cost_by_course.png)
 
-*Figure: Model spend by course, 2026-09-02 → 2026-09-25 (n = 110 metered calls).*
+*Figure: Student model spend by course, 2026-09-02 → 2026-09-25 (n = 93 student metered calls).*
 
 | Course | Spend (USD) | Metered calls | Input tokens | Output tokens |
 | --- | --- | --- | --- | --- |
-| Software Engineering | 0.29 | 41 | 81789 | 16311 |
-| Web Design | 0.18 | 26 | 46232 | 11565 |
-| Introduction to Programming | 0.16 | 22 | 44735 | 9225 |
-| Agile Software Development & DevOps | 0.16 | 21 | 43958 | 8838 |
+| Software Engineering | 0.25 | 35 | 70696 | 13770 |
+| Web Design | 0.15 | 21 | 38151 | 9333 |
+| Introduction to Programming | 0.14 | 19 | 39610 | 8203 |
+| Agile Software Development & DevOps | 0.13 | 18 | 37116 | 7168 |
 
 **Speaker notes:** If asked about a per-student-per-term cost, the answer is that the term is not over.
 

@@ -47,7 +47,7 @@
       "web"
     ]
   },
-  "_written_at": "2026-10-08T16:47:49",
+  "_written_at": "2026-10-08T17:03:07",
   "volume": {
     "elapsed_days": 23,
     "adoption": [
@@ -190,8 +190,7 @@
   "topics": {
     "method": "keyword",
     "method_counts": {
-      "keyword": 225,
-      "keyword-cached": 44
+      "keyword": 269
     },
     "counts": [
       {
@@ -354,7 +353,7 @@
       {
         "topic": "Quiz & exam questions",
         "course": "Introduction to Programming",
-        "quote": "Student: true or false: a tuple is immutable Bot: That error usually means a missing dependency. Try these three steps in order."
+        "quote": "Student: true or false: a set keeps its order Bot: That error usually means a missing dependency. Try these three steps in order."
       },
       {
         "topic": "Course concepts",
@@ -364,7 +363,7 @@
       {
         "topic": "Git & GitHub workflow",
         "course": "Web Design",
-        "quote": "Student: do I git pull before I commit? Bot: Here's what the course materials say about that, and where to look next. Student: should we fork or branch first Bot: The syllabus covers this: the relevant deadline and policy are below."
+        "quote": "Student: should I rebase before I push my commits? Bot: Here's what the course materials say about that, and where to look next. Student: do I make a feature branch before opening a pull request Bot: The syllabus covers this: the relevant deadline and policy are below."
       },
       {
         "topic": "Team coordination",
@@ -379,7 +378,7 @@
       {
         "topic": "Course policies",
         "course": "Introduction to Programming",
-        "quote": "Student: how many extensions do we have Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+        "quote": "Student: are late days or extensions available this term Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
       },
       {
         "topic": "Code & debugging",
@@ -409,12 +408,12 @@
       {
         "topic": "Tools, setup & deployment",
         "course": "Introduction to Programming",
-        "quote": "Student: atlas or docker for mongodb Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+        "quote": "Student: should I use a managed postgres or run it in a container Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
       },
       {
         "topic": "Greetings & bot questions",
         "course": "Web Design",
-        "quote": "Student: what's in your profile picture Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+        "quote": "Student: what's your name Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
       }
     ],
     "figures": {
@@ -496,7 +495,8 @@
     }
   },
   "cost": {
-    "rows": 110,
+    "rows": 93,
+    "all_rows": 110,
     "window_start": "2026-09-02T15:52:00",
     "window_end": "2026-09-25T21:20:09",
     "total_usd": 0.8009400000000001,
@@ -507,36 +507,36 @@
     "usd_per_session": 0.015430409090909092,
     "usd_per_student": 0.025145851851851853,
     "models": {
-      "gpt-4.1": 110
+      "gpt-4.1": 93
     },
     "by_course": [
       {
         "course": "Software Engineering",
-        "usd": 0.294066,
-        "calls": 41,
-        "input_tokens": 81789,
-        "output_tokens": 16311
+        "usd": 0.251552,
+        "calls": 35,
+        "input_tokens": 70696,
+        "output_tokens": 13770
       },
       {
         "course": "Web Design",
-        "usd": 0.184984,
-        "calls": 26,
-        "input_tokens": 46232,
-        "output_tokens": 11565
+        "usd": 0.150966,
+        "calls": 21,
+        "input_tokens": 38151,
+        "output_tokens": 9333
       },
       {
         "course": "Introduction to Programming",
-        "usd": 0.16327,
-        "calls": 22,
-        "input_tokens": 44735,
-        "output_tokens": 9225
+        "usd": 0.144844,
+        "calls": 19,
+        "input_tokens": 39610,
+        "output_tokens": 8203
       },
       {
         "course": "Agile Software Development & DevOps",
-        "usd": 0.15862,
-        "calls": 21,
-        "input_tokens": 43958,
-        "output_tokens": 8838
+        "usd": 0.131576,
+        "calls": 18,
+        "input_tokens": 37116,
+        "output_tokens": 7168
       }
     ],
     "figure": "cost_by_course.png"

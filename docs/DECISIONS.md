@@ -14533,25 +14533,37 @@ of deletions; the combined file excludes them with the rest of their history.
   to 30 sessions per role and `agreement_rate` reports each role separately, because the two sets are different
   instruments.
 - **Topic sets and cache.** `STUDENT_TOPICS` (13) and `STAFF_TOPICS` (7), with one ordered first-match rule list each.
-  Greetings come last, so "hi, when is project 1 due" is a deadline question; `group` no longer claims every
-  mention of a group. The cache key is `<set version>:<method>:<text hash>` (`v2-student`, `v2-staff`), so a v1 entry
-  (`keyword:<hash>`) is never a hit. The key does not capture edits to the keyword rules themselves: after changing
-  a rule, clear `tmp/analysis/topic_classifications.json`. A leading `@everyone`/`@here` is no longer stripped from
-  the transcript, because it is what marks an announcement; a leading `@name` still is.
+  Greetings come last, so "hi, when is the third assignment due" is a deadline question; `group` no longer claims every
+  mention of a group; words that misrouted sessions (a bare `finals`, `test`, `pull`, `push`, `scope`, `stuck`,
+  `database`, `ide`, `allowed`, `rest`) now need their context. Keyword labels are **not cached**: they are
+  deterministic and free, so a rule edit takes effect on the next run and nothing is cleared by hand. Model labels are
+  cached under `<set version>:openai-<hash of model, prompt and label descriptions>:<text hash>` (`v2-student`,
+  `v2-staff`), so a v1 entry, or one made under a different prompt or model, is never a hit. A failed model call is
+  labelled by the keyword rules for that run only and is not cached. A leading `@everyone`/`@here` is no longer
+  stripped from the transcript, because it marks an announcement; a leading `@name` still is.
 - **Keyword result on the real data (as of 2026-10-07).** "Other" was 36% of sessions under the nine labels, roles
-  mixed; it is now 4% of 247 student sessions and 10% of 120 staff sessions. These shares come from rules tuned
-  while looking at the sessions that fell through, so they say the rules cover what was seen, not that the labels
-  are right; the hand audit is still the accuracy measure.
+  mixed; it is now a few percent of student sessions and about a tenth of staff sessions. These shares come from rules
+  tuned while looking at the sessions that fell through, so they say the rules cover what was seen, not that the labels
+  are right; the hand audit is still the accuracy measure. One owner account accounts for roughly a third of all
+  traffic.
 - **Staff section: aggregates only.** A staff group can be one person, so it reports counts of messages, sessions and
   prompts, the share of all traffic, the purpose mix and the split by interface, and nothing else: no per-person
   rows, no pseudonym, no per-course table, no quotes. The five-student cell rule cannot apply to such a group (it
   would blank everything), so this restriction stands in for it. The headcount of staff is kept in `metrics.json`
   but not printed in the report.
-- **Costs.** `load_costs` tags each ledger row with the role of the person behind it. The cost slide's per-session
-  and per-student figures divide *student* spend by *student* sessions; the total still covers everyone, and the
-  staff part is stated.
+- **Costs.** `load_costs` tags each ledger row with the role of the person behind it. The cost slide's chart, table and
+  per-session and per-student figures are *student* spend over *student* sessions; the all-users total and the staff
+  part are stated beside them.
+- **Enrolments.** `load_enrolments` leaves staff out, so an enrolled teacher does not inflate the adoption denominator.
 - **Notebook placement.** Staff are reported by a new notebook, `03b_staff_usage`, run after 03; notebooks 01, 02 and
   04 filter their inputs to students on load; 00 writes both roles to the tidy files.
 - **`analytics.ipynb`.** Minimal change: imports `STUDENT_TOPICS` as `TOPICS` and keeps only student messages.
 - **Not done.** `docs/USAGE_REPORT_PLAN.md` still says "nine-label classifier" in its measure list; it is a planning
   document and was left alone.
+- **Known limits of the role.**
+  - Role is not tied to dates. A student who later becomes a TA has their earlier history counted as staff, and a TA
+    whose membership was revoked counts as a student even for the term they taught.
+  - Staff whose Discord identity is not linked to their web account are counted as students, unless the handle
+    override catches them.
+  - In two-file mode someone matched as staff by handle only on the legacy side can end up with two roles, because
+    only a current-database staff person is promoted across.

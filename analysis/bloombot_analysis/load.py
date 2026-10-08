@@ -539,7 +539,7 @@ def load_messages(config: Config | None = None) -> tuple[pd.DataFrame, dict]:
 
 def load_enrolments(path: Path | None = None) -> pd.DataFrame:
     """
-    Active enrolments per course — the denominator for adoption.
+    Active student enrolments per course — the denominator for adoption (staff left out).
 
     Only the current database has enrolments; the legacy bot had no roster at
     all, so adoption rates can only be computed for courses that exist here.
@@ -557,6 +557,7 @@ def load_enrolments(path: Path | None = None) -> pd.DataFrame:
             SELECT c.title        AS course,
                    e.course_id    AS course_id,
                    e.person_id    AS person_id,
+                   e.organization_id AS organization_id,
                    e.source       AS source,
                    e.created_at   AS created_at_ms,
                    pi.external_id AS discord_id
@@ -570,9 +571,13 @@ def load_enrolments(path: Path | None = None) -> pd.DataFrame:
             conn,
         )
         labels = _course_labels(conn)
+        staff = _staff_pairs(conn)
     finally:
         conn.close()
 
+    # ANLY-9: enrolled staff are not students, so they are left out of the
+    # adoption denominator as well as its numerator.
+    raw = raw[[(p, o) not in staff for p, o in zip(raw["person_id"], raw["organization_id"])]]
     if raw.empty:
         return pd.DataFrame(columns=["course", "person_key", "source", "created_at"])
 

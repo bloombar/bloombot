@@ -16,9 +16,12 @@ Results are cached on disk keyed by a hash of the session's own text, so a
 re-run never re-pays for a session already classified, and so the cache
 survives re-sessionising (the old cache in `data/topic_classifications.json`
 was keyed by a positional conversation number, which silently went stale the
-moment the grouping changed). The key also names the label set and its version
-(`v2-student`, `v2-staff`), so a label made under the old nine-label set is
-never reused.
+moment the grouping changed). Only model (`openai`) labels are cached: the
+keyword rules are deterministic and free, so they are re-run every time and a
+rule edit can never leave a stale label behind. A model key names the label
+set's version (`v2-student`, `v2-staff`) and a hash of the model name, prompt and
+label descriptions, so a label made under the old nine-label set, or under a
+different prompt, is never reused.
 
 **The classifier is not ground truth.** `audit_sample()` draws a sample for
 hand-checking and `agreement_rate()` turns the hand labels into the one number
@@ -116,26 +119,26 @@ STUDENT_RULES: list[tuple[str, str]] = [
     # Pasted quiz items are long and mention anything, so their stock phrases win.
     ("Quiz & exam questions", r"\b(which of the following|select all that apply|true or false|multiple[- ]choice|answer choices?|correct answer)\b"),
     ("Discord & platform help", r"\b(discord|channels?|team chat|connect(ing|ed)? (my |an |the )?(account|discord|github)|(link|log|sign)(ing)? ?(in|into|to)? (my |the )?account|invite link|join link|notifications?|dm me|direct message)\b"),
-    ("Course policies", r"\b(extensions?|late (work|submissions?|penalt\w*|days?|policy)|attendance|absen(t|ce)|plagiari\w+|academic (integrity|honesty)|cheat\w*|polic(y|ies)|allowed|penalty|unable to attend|chat ?gpt|ai (use|tools?|policy)|use (of )?ai|make-?ups?|excused|accommodations?|withdraw|drop the course)\b"),
+    ("Course policies", r"\b(extensions?|late (work|submissions?|penalt\w*|days?|policy)|attendance|absen(t|ce)|plagiari\w+|academic (integrity|honesty)|cheat\w*|polic(y|ies)|(are we|am i|is it|is that) allowed|allowed to|penalty|unable to attend|chat ?gpt|ai (use|tools?|policy)|use (of )?ai|make-?ups?|excused|accommodations?|withdraw|drop the course)\b"),
     ("Deadlines & schedule", r"\b(due|deadlines?|when is|when are|when does|when do|what time|what day|schedule[ds]?|calendar|syllabus|next class|class time|office hours?|due date)\b"),
     ("Grades & grading", r"\b(grades?|graded|grading|rubric|gpa|curve|weighted|how many points|points? (off|deducted|possible|for)|worth|my score|feedback on)\b"),
-    ("Git & GitHub workflow", r"\b(git|github|forks?|branch(es|ing)?|commits?|push(ed|ing)?|pull( requests?)?|merge( conflicts?)?|clone|rebase|repos?|repositor(y|ies)|stash|checkout|gitignore|prs?)\b"),
-    ("Code & debugging", r"(\b(errors?|exceptions?|traceback|bugs?|debug\w*|stack ?trace|syntax|undefined|segfault|compil(e|er|ing)|runtime|stuck|(run|ran|running) (my|the) code)\b|\bdef \w+\(|```|\bconsole\.log|\bprint\(|[{};]\s*$|(isn'?t|not|doesn'?t|won'?t) (\w+ )?(working|work|run|pass|compile)\b|\btests? (fail\w*|is failing))"),
-    ("Tools, setup & deployment", r"\b(install\w*|set ?up|docker|mongo\w*|atlas|digital ?ocean|droplet|deploy\w*|heroku|aws|vercel|netlify|npm|pip|venv|node(js)?|environment|\.env|vs ?code|terminal|command line|localhost|ports?|ssh|hosting|pylint|lint\w*|yaml|continuous integration|build script|packages?|readme|database|postgres\w*|mysql|sqlite|api keys?|containers?|ide)\b"),
-    ("Project & assignment requirements", r"\b(requirements?|deliverables?|assignments?|homework|hw ?\d+|project \d+|project (requirements?|proposal|scope|ideas?|brief)|proposal|scope|sprints?|project ?\d+|vision statement|project board|subsystems?|user stor(y|ies)|wireframes?|backlog|epics?|milestones?|mock-?ups?|prototype|use cases?|labs?|exercises?|starter code|problem set|capstone|submit|submission)\b"),
+    ("Git & GitHub workflow", r"\b(git|github|forks?|branch(es|ing)?|commits?|merge( conflicts?)?|clone|rebase|repos?|repositor(y|ies)|stash|checkout|gitignore|prs?|(pull|push)(ed|ing)? (request|to (main|origin|github|the (repo|branch|remote))|from (main|origin|upstream)|changes|my (code|branch|work)))\b"),
+    ("Code & debugging", r"(\b(errors?|exceptions?|traceback|bugs?|debug\w*|stack ?trace|syntax|undefined|segfault|compil(e|er|ing)|runtime|stuck (loading|on loading|in a loop)|(run|ran|running) (my|the) code)\b|\bdef \w+\(|```|\bconsole\.log|\bprint\(|[{};]\s*$|(isn'?t|not|doesn'?t|won'?t) (\w+ )?(working|work|run|pass|compile)\b|\btests? (fail\w*|is failing))"),
+    ("Tools, setup & deployment", r"\b(install\w*|set ?up|docker|mongo\w*|atlas|digital ?ocean|droplet|deploy\w*|heroku|aws|vercel|netlify|npm|pip|venv|node(js)?|environment|\.env|vs ?code|terminal|command line|localhost|ports?|ssh|hosting|pylint|lint\w*|yaml|continuous integration|build script|packages?|readme|postgres\w*|mysql|sqlite|api keys?|containers?)\b"),
+    ("Project & assignment requirements", r"\b(requirements?|deliverables?|assignments?|homework|hw ?\d+|project \d+|final project|project (requirements?|proposal|scope|ideas?|brief)|proposal|sprints?|project ?\d+|vision statement|project board|subsystems?|user stor(y|ies)|wireframes?|backlog|epics?|milestones?|mock-?ups?|prototype|use cases?|labs?|exercises?|starter code|problem set|capstone|submit|submission)\b"),
     ("Team coordination", r"\b(teams?|team-?mates?|group (members?|number|work|leader|assign\w*)|(assigned|join|in|my|our|a|which|what|no) groups?|groups?\b(?! by)|partners?|pair(ed)? up|stand-?up|scrum master|product owner)\b"),
-    ("Quiz & exam questions", r"\b(quiz(zes)?|exams?|midterms?|finals?|test prep|study guide)\b"),
-    ("Course concepts", r"\b(explain|what is|what are|how does|how do|difference between|concepts?|lectures?|slides?|chapters?|topics?|understand|why does|defin(e|ition)|meaning of|example of|stakeholders?|agile|scrum|kanban|oop|polymorphism|inherit\w*|recursion|algorithms?|big o|apis?|rest|design patterns?|class diagram|uml|waterfall|covered|notes?)\b"),
-    ("Greetings & bot questions", r"\b(hi|hello|hey|thanks?|thank you|are you (there|a real|a bot|an ai|human|working)|who are you|your (name|profile)|good (morning|afternoon|evening)|how old are (you|u)|do you (like|have|know)|previous instructions|recipe|test(ing)?)\b"),
+    ("Quiz & exam questions", r"\b(quiz(zes)?|exams?|midterms?|final exam|finals week|test prep|study guide)\b"),
+    ("Course concepts", r"\b(explain|what is|what are|how does|how do|difference between|concepts?|lectures?|slides?|chapters?|topics?|understand(ing)?|scope|what'?s an? |why does|defin(e|ition)|meaning of|example of|stakeholders?|agile|scrum|kanban|oop|polymorphism|inherit\w*|recursion|algorithms?|big o|apis?|restful|rest api|design patterns?|class diagram|uml|waterfall|covered|notes?)\b"),
+    ("Greetings & bot questions", r"\b(hi|hello|hey|thanks?|thank you|are you (there|a real|a bot|an ai|human|working)|who are you|your (name|profile)|good (morning|afternoon|evening)|how old are (you|u)|do you (like|have|know)|previous instructions|recipe|testing|this is a test)\b"),
 ]
 
 STAFF_RULES: list[tuple[str, str]] = [
     ("Announcements", r"(@everyone|@here|\bannouncement\b|\b(is|are) (now )?available\b|\bwelcome (back |to )|\bplease (remember|note|join|check)\b|\breminder:|<@&\d+>|forms\.gle)"),
     ("Directing students", r"(<#\d+>|pinned message|see my note|\b((please )?(make|create|open) (a )?(new )?(private )?(channels?|groups?|teams?|roles?)|(tell|help|remind|show|guide|walk|assist) (the |this |that )?(students?|him|her|them|class)|help (out )?\w+ (with|find|understand|get))\b)"),
-    ("Course setup", r"\b(renam\w+|course (name|title|settings?|instructions?|materials?)|upload\w*|attachments?|enable|disable|configur\w+|settings?|system prompt|instructions for the bot|add (a )?(student|ta|assistant)|enrol\w*|roster)\b"),
+    ("Course setup", r"\b(renam\w+|course (name|title|settings?|instructions?|materials?)|upload\w*|attachments?|enable|disable|configur\w+|settings?|system prompt|instructions for the bot|add (a )?(student|ta|assistant)|enrol\w*|roster|how many (students|people)|(has|have) joined)\b"),
     ("Course content & policy lookup", r"\b(polic(y|ies)|due|deadlines?|when is|when are|syllabus|schedule|grading|extensions?|late|gradebook|grades?|points|credit|quizzes|private channels?|permissions?|what does the course|according to|rubric|requirements?|assignments?|project \d+|office hours?|attendance)\b"),
     ("Demonstrating to class", r"\b((to|for) (the )?(class|students|everyone|you all|them)|demo(nstrat\w*)?|in front of|explain|defin(e|ition)|describe|what is an?|what are|give (me )?an example|how does|what (is|does)|how (would|do) (i|you)|why (should|does|do)|is it possible)\b"),
-    ("Testing the bot", r"\b(are you (there|working|online|a bot|real)|do you (know|remember)|who (am i|are you|do you work for)|what'?s your name|can you (remember|hear)|remember (this|that|my)|test(ing)?|hello|hi|hey|ping|what model|what can you do|are you \w+|do you \w+|your (most recent|last|previous) message|you (said|told|wrote)|recipe|ignore (all )?previous)\b"),
+    ("Testing the bot", r"\b(are you (there|working|online|a bot|real)|do you (know|remember)|who (am i|are you|do you work for)|what'?s your name|can you (remember|hear)|who (built|made|created|trained) you|(is|are) (the )?(bot|bloombot|it|this) (working|up|online|down|there)|remember (this|that|my)|test(ing)?|hello|hi|hey|ping|what model|what can you do|are you \w+|do you \w+|your (most recent|last|previous) message|you (said|told|wrote)|recipe|ignore (all )?previous)\b"),
 ]
 
 KEYWORD_RULES: dict[str, list[tuple[str, str]]] = {"student": STUDENT_RULES, "staff": STAFF_RULES}
@@ -180,10 +183,8 @@ def classify_keyword(text: str, role: str = "student") -> str:
 # ── OpenAI classifier ─────────────────────────────────────────────────────
 
 
-def classify_openai(text: str, course: str, role: str = "student") -> str:
-    """One classification call. Raises if the OpenAI client or key is missing."""
-    from openai import OpenAI  # imported lazily: the keyword path needs no SDK
-
+def _system_prompt(course: str, role: str) -> str:
+    """The instruction sent to the model for one role's label set."""
     labels = topics_for(role)
     descriptions = STAFF_DESCRIPTIONS if role == "staff" else STUDENT_DESCRIPTIONS
     topic_list = "\n".join(f"- {t}: {descriptions[t]}" for t in labels)
@@ -193,17 +194,28 @@ def classify_openai(text: str, course: str, role: str = "student") -> str:
         if role == "staff"
         else f"Classify this student conversation with a course bot for the course {course!r}."
     )
+    return (
+        f"{who} Choose exactly one topic from this list:\n{topic_list}\n\n"
+        "Reply with only the topic name, nothing else."
+    )
+
+
+def openai_fingerprint(role: str) -> str:
+    """Short hash of everything that shapes a model label except the session text."""
+    material = CLASSIFICATION_MODEL + "\0" + _system_prompt("{course}", role)
+    return hashlib.sha1(material.encode("utf-8")).hexdigest()[:8]
+
+
+def classify_openai(text: str, course: str, role: str = "student") -> str:
+    """One classification call. Raises if the OpenAI client or key is missing."""
+    from openai import OpenAI  # imported lazily: the keyword path needs no SDK
+
+    labels = topics_for(role)
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     response = client.chat.completions.create(
         model=CLASSIFICATION_MODEL,
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    f"{who} Choose exactly one topic from this list:\n{topic_list}\n\n"
-                    "Reply with only the topic name, nothing else."
-                ),
-            },
+            {"role": "system", "content": _system_prompt(course, role)},
             {"role": "user", "content": text[:12000]},
         ],
         max_tokens=20,
@@ -240,25 +252,26 @@ def classify_sessions(
     roles = texts["role"] if "role" in texts else pd.Series("student", index=texts.index)
     labels, methods = [], []
     for text, student_text, course, role in zip(texts["text"], student_texts, texts["course"], roles):
-        # Key on the label set's version and the text the chosen method actually
-        # reads: the sets never collide, an old-version entry is never a hit, and
-        # a hit always corresponds to the same input the label was derived from.
-        key = f"{topic_set_key(role)}:{method}:{text_key(text if method == 'openai' else student_text)}"
-        if key in cache:
-            labels.append(cache[key])
-            methods.append(method + "-cached")
-            continue
         if method == "openai":
+            # Key on the label set's version, a hash of the model and prompt, and
+            # the session text, so a hit always means the same question put the
+            # same way to the same model.
+            key = f"{topic_set_key(role)}:openai-{openai_fingerprint(role)}:{text_key(text)}"
+            if key in cache:
+                labels.append(cache[key])
+                methods.append("openai-cached")
+                continue
             try:
                 label = classify_openai(text, course, role)
                 used = "openai"
+                cache[key] = label
             except Exception:  # noqa: BLE001 — a failed call must not lose the run
                 label = classify_keyword(student_text, role)
                 used = "keyword-fallback"
         else:
+            # Deterministic and free: never cached, so a rule edit takes effect at once.
             label = classify_keyword(student_text, role)
             used = "keyword"
-        cache[key] = label
         labels.append(label)
         methods.append(used)
 

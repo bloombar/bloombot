@@ -66,7 +66,7 @@ COURSES = [
 # written as a student would actually type them.
 PROMPTS = {
     "Project & assignment requirements": [
-        "does a webapp count as a subsystem for the project 5 requirement",
+        "does a mobile app count as a component for the milestone 2 requirement",
         "what are the user stories we need to hand in",
         "how big should the backlog be for this milestone",
         "what exactly does assignment 3 ask for",
@@ -84,8 +84,8 @@ PROMPTS = {
         "how much is the final worth of my grade",
     ],
     "Course policies": [
-        "how many extensions do we have",
-        "can we use extensions for group projects",
+        "are late days or extensions available this term",
+        "do extensions apply to pair assignments",
         "is using chatgpt allowed for the homework",
         "what happens if I miss attendance one week",
     ],
@@ -96,42 +96,42 @@ PROMPTS = {
         "I don't understand the slide about normalization",
     ],
     "Quiz & exam questions": [
-        "what about this one: Which of the following is a stateless protocol?",
-        "true or false: a tuple is immutable",
+        "Which of the following describes an idempotent request?",
+        "true or false: a set keeps its order",
         "is the quiz open book",
     ],
     "Code & debugging": [
-        "why isn't my test working? def add(a, b): return a - b",
+        "my unit test is not working: def mul(a, b): return a + b",
         "I get a traceback when I call the function with None",
         "my loop never ends and I can't find the bug",
     ],
     "Git & GitHub workflow": [
-        "should we fork or branch first",
+        "do I make a feature branch before opening a pull request",
         "git says there is a merge conflict, how do I fix it",
-        "do I git pull before I commit?",
+        "should I rebase before I push my commits?",
     ],
     "Tools, setup & deployment": [
-        "atlas or docker for mongodb",
-        "how do I deploy this to digitalocean",
+        "should I use a managed postgres or run it in a container",
+        "how do I deploy this to a cloud server",
         "how do I set up the virtual environment on a mac",
         "npm install keeps hanging on my laptop",
     ],
     "Team coordination": [
-        "I still wasn't assigned a group",
+        "nobody told me which team I'm on",
         "my teammate hasn't replied in days, what should we do",
         "how should our group split up the work",
-        "can we change team members for the final project",
+        "can we change team members after week three",
     ],
     "Discord & platform help": [
-        "I can't find my team chat",
-        "should it be a private channel",
+        "my group's channel disappeared",
+        "does the channel have to be invite-only",
         "how do I connect my account",
     ],
     "Greetings & bot questions": [
         "hi",
         "thanks!",
-        "are you a real person",
-        "what's in your profile picture",
+        "are you a bot or a person",
+        "what's your name",
     ],
     "Other": [
         "ok sounds good",
@@ -144,32 +144,32 @@ PROMPTS = {
 # class, announcements, directing it at students, lookups and course setup.
 STAFF_PROMPTS = {
     "Testing the bot": [
-        "are you there?",
-        "do you know who I am?",
-        "who do you work for?",
-        "can you remember this number: 4417",
+        "hello, can you hear me?",
+        "do you recognize my name?",
+        "who built you?",
+        "remember this code word: tulip",
     ],
     "Demonstrating to class": [
-        "can you explain what a stakeholder is to the class",
-        "define merge hell to the students",
-        "explain recursion to everyone in two sentences",
+        "explain what a sprint review is to the class",
+        "describe dependency hell to everyone",
+        "explain polymorphism to everyone in two sentences",
     ],
     "Announcements": [
-        "@everyone - Bloombot is available in the course channels now",
+        "@everyone the study bot is live in the course channels starting today",
         "@here reminder: class is moved to room 204 on Thursday",
     ],
     "Directing students": [
-        "please make a new channel with the correct settings for the team",
-        "help the student find the project 3 requirements",
+        "please create a new channel for the design group",
+        "help the student locate the sprint 2 rubric",
         "tell the students to check the syllabus",
     ],
     "Course content & policy lookup": [
-        "what is the policy on extensions",
-        "when is project 1 due",
+        "what is the rule about late homework",
+        "when is the third assignment due",
         "what are the office hours for this course",
     ],
     "Course setup": [
-        "can you rename the course?",
+        "please change the course title to Intro to Python",
         "upload the new syllabus as course material",
     ],
     "Other": [

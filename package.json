@@ -12,6 +12,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "board:derive": "node scripts/board/derive.mjs",
     "board:sync": "node scripts/board/sync.mjs",
     "board:sync:dry": "node scripts/board/sync.mjs --dry-run",

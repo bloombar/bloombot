@@ -2,9 +2,10 @@
 Every knob the usage report turns, in one place.
 
 Notebooks import `CONFIG` and never hard-code a date, a threshold or a path.
-Swapping mock data for real data is a matter of pointing `legacy_db` and
-`current_db` at the real files (see `analysis/README.md`); nothing else in the
-pipeline needs to change.
+Swapping mock data for real data is a matter of pointing the input at the real
+file (see `analysis/README.md`); nothing else in the pipeline needs to change.
+Every path can also be overridden by an environment variable (`run_all.py` sets
+them from its flags), so a run never needs a code edit to read different data.
 """
 
 from __future__ import annotations
@@ -15,6 +16,17 @@ from datetime import date, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+INPUT_MODES = ("combined", "two-file")
+
+
+def _env(name: str, default: str) -> str:
+    return os.environ.get(name) or default
+
+
+def _env_path(name: str, default: Path) -> Path:
+    value = os.environ.get(name)
+    return Path(value) if value else default
 
 
 # ── Topic labels ──────────────────────────────────────────────────────────
@@ -33,7 +45,9 @@ TOPICS: list[str] = [
 ]
 
 # Discord category prefix → readable course name, carried over from
-# `analytics.ipynb`. A prefix with no entry here passes through unchanged.
+# `analytics.ipynb`. A prefix with no entry here passes through unchanged. Matching
+# ignores case (ANLY-8): the Summer 2025/2026 categories are upper-case
+# (`PYTHON - …`), and must land on the same course as `Python - …`.
 COURSE_MAP: dict[str, str] = {
     "Software Engineering": "Software Engineering",
     "Agile Dev": "Agile Software Development & DevOps",
@@ -75,16 +89,35 @@ class Term:
 @dataclass
 class Config:
     # ── Inputs ────────────────────────────────────────────────────────────
-    # `legacy_db`: the pre-Fall-2026 peewee/SQLite database (`users`,
-    # `messages` with `category`/`channel` and `from`/`to` directions).
-    # `current_db`: the current platform database (`packages/db/src/schema.ts`).
-    # Either may be absent; the pipeline runs on whichever it is given.
-    legacy_db: Path = REPO_ROOT / "tmp" / "analysis" / "legacy.db"
-    current_db: Path = REPO_ROOT / "tmp" / "analysis" / "current.db"
-    topic_cache: Path = REPO_ROOT / "tmp" / "analysis" / "topic_classifications.json"
+    # ANLY-8. `input_mode` picks where messages come from:
+    #   'combined'  (default) one platform-schema database holding the whole
+    #               history, the old Discord bot's included (imported by
+    #               `packages/legacy-import`): `combined_db`.
+    #   'two-file'  the older arrangement, kept as an explicit option: a
+    #               pre-Fall-2026 peewee database (`legacy_db`) plus a platform
+    #               database (`current_db`), deduplicated when they overlap.
+    # Every file is opened read-only; the combined default is the real
+    # `data/data.db`, which is never written to or copied into.
+    input_mode: str = field(default_factory=lambda: _env("BLOOMBOT_ANALYSIS_INPUT", "combined"))
+    combined_db: Path = field(
+        default_factory=lambda: _env_path("BLOOMBOT_ANALYSIS_COMBINED_DB", REPO_ROOT / "data" / "data.db")
+    )
+    legacy_db: Path = field(
+        default_factory=lambda: _env_path("BLOOMBOT_ANALYSIS_LEGACY_DB", REPO_ROOT / "tmp" / "analysis" / "legacy.db")
+    )
+    current_db: Path = field(
+        default_factory=lambda: _env_path("BLOOMBOT_ANALYSIS_CURRENT_DB", REPO_ROOT / "tmp" / "analysis" / "current.db")
+    )
+    topic_cache: Path = field(
+        default_factory=lambda: _env_path(
+            "BLOOMBOT_ANALYSIS_TOPIC_CACHE", REPO_ROOT / "tmp" / "analysis" / "topic_classifications.json"
+        )
+    )
 
     # ── Outputs ───────────────────────────────────────────────────────────
-    out_dir: Path = REPO_ROOT / "tmp" / "analysis" / "out"
+    out_dir: Path = field(
+        default_factory=lambda: _env_path("BLOOMBOT_ANALYSIS_OUT_DIR", REPO_ROOT / "tmp" / "analysis" / "out")
+    )
 
     # ── Analysis parameters ───────────────────────────────────────────────
     # Minutes of silence that end a session. 30 is what `analytics.ipynb`
@@ -132,6 +165,31 @@ class Config:
     # The two terms the headline comparison is between.
     current_term: str = "fall_2026"
     comparison_term: str = "fall_2025"
+
+    def __post_init__(self) -> None:
+        if self.input_mode not in INPUT_MODES:
+            raise ValueError(
+                f"input_mode must be one of {INPUT_MODES}, got {self.input_mode!r}"
+            )
+
+    @property
+    def platform_db(self) -> Path:
+        """The platform-schema file: the one source in combined mode, the current one otherwise."""
+        return self.combined_db if self.input_mode == "combined" else self.current_db
+
+    def describe_inputs(self) -> str:
+        """One line naming the input(s), repo-relative where possible, for notebook headers."""
+
+        def show(path: Path) -> str:
+            try:
+                name = str(path.resolve().relative_to(REPO_ROOT))
+            except ValueError:
+                name = str(path)
+            return f"{name} ({'exists' if path.exists() else 'missing'})"
+
+        if self.input_mode == "combined":
+            return f"combined: {show(self.combined_db)}"
+        return f"two-file: legacy {show(self.legacy_db)}; current {show(self.current_db)}"
 
     def term(self, key: str) -> Term:
         return self.terms[key]

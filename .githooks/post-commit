@@ -1,0 +1,6 @@
+#!/bin/sh
+# After a commit, make sure the index holds no notebook outputs (ANLY-8). A partial commit
+# (`git commit <path>`) re-stages the working copy afterwards, outputs and all; this
+# strips that staged copy again. Only notebooks where the index differs from HEAD are
+# touched, so mid-rebase / cherry-pick (index == HEAD) it does nothing.
+exec node "$(dirname "$0")/../scripts/strip-notebook-outputs.mjs" --post-commit

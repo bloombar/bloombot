@@ -5,6 +5,7 @@ rosters/*.csv
 
 # ignore the database and logging
 data/*.db
+data/data*
 # SQLite's own bookkeeping files beside a WAL-mode database (a read-only open can create them).
 data/*.db-wal
 data/*.db-shm

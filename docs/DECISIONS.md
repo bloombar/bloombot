@@ -14514,3 +14514,44 @@ of deletions; the combined file excludes them with the rest of their history.
 - **Hook coverage.** The pre-commit strip lists staged notebooks with `--no-renames` (a `git mv` is otherwise a rename and was skipped) and a case-insensitive pathspec; an old-format (nbformat < 4, `worksheets`) or unparseable notebook is refused rather than passed through, in the strip, the pre-push check and the CI test. A `post-commit` hook re-strips the index, because `git commit <path>` re-stages the working copy (with outputs) after committing. The pre-push check fails closed with an actionable message when the remote's commit is unknown locally, and says so when no remote-tracking refs exist and the whole history was inspected. Its advice for an already-committed notebook is `strip-notebook-outputs.mjs --index` then `git commit --amend --no-edit` (tip commit only), or squash the branch with `git reset --soft <merge-base> && git commit`; a bare `--amend` strips nothing.
 - **Known limits.** Markdown-cell `attachments` (embedded images) are authored content and survive stripping, so a pasted screenshot could still carry student data. `npm run prepare` sets `core.hooksPath` for the repository, overriding any global setting a developer has.
 
+
+
+## D-147 — `analysis/`: ANLY-9/ANLY-10 — staff are tagged, not dropped; two topic sets; a staff section that is aggregates only
+
+- **Who is staff.** Decided on the person and organization, in the loader, before `person_key` folds a Discord id and
+  a person id together: a `person_identities` row with `surface='web'` whose `external_id` is an `accounts.id`, and
+  that account has a `memberships` row in the *message's* `organization_id` with `revoked_at IS NULL` (any role).
+  A revoked membership, or an owner of another organization, is a student. On the real database this flags exactly
+  one person, whose imported legacy messages match because the same `people` row carries both identities. Without
+  `accounts`/`memberships` (older files) the role rests on the handles alone. In two-file mode a legacy row is
+  promoted to staff when its `person_key` is a staff person in the current database; only legacy rows are promoted
+  that way, so one organization's role is never applied to another's.
+- **Config split.** `excluded_handles` is now test rigs only (`testbot`, `bloombot-test`), still dropped and counted
+  as `excluded_account_rows`. The new `staff_handles` (`instructor`) is the manual override: a match makes a message
+  staff, kept and tagged. Both stay case-insensitive substring matches, as before.
+- **One role per session.** `role` joins the session key, so a session never mixes roles. The audit sample draws up
+  to 30 sessions per role and `agreement_rate` reports each role separately, because the two sets are different
+  instruments.
+- **Topic sets and cache.** `STUDENT_TOPICS` (13) and `STAFF_TOPICS` (7), with one ordered first-match rule list each.
+  Greetings come last, so "hi, when is project 1 due" is a deadline question; `group` no longer claims every
+  mention of a group. The cache key is `<set version>:<method>:<text hash>` (`v2-student`, `v2-staff`), so a v1 entry
+  (`keyword:<hash>`) is never a hit. The key does not capture edits to the keyword rules themselves: after changing
+  a rule, clear `tmp/analysis/topic_classifications.json`. A leading `@everyone`/`@here` is no longer stripped from
+  the transcript, because it is what marks an announcement; a leading `@name` still is.
+- **Keyword result on the real data (as of 2026-10-07).** "Other" was 36% of sessions under the nine labels, roles
+  mixed; it is now 4% of 247 student sessions and 10% of 120 staff sessions. These shares come from rules tuned
+  while looking at the sessions that fell through, so they say the rules cover what was seen, not that the labels
+  are right; the hand audit is still the accuracy measure.
+- **Staff section: aggregates only.** A staff group can be one person, so it reports counts of messages, sessions and
+  prompts, the share of all traffic, the purpose mix and the split by interface, and nothing else: no per-person
+  rows, no pseudonym, no per-course table, no quotes. The five-student cell rule cannot apply to such a group (it
+  would blank everything), so this restriction stands in for it. The headcount of staff is kept in `metrics.json`
+  but not printed in the report.
+- **Costs.** `load_costs` tags each ledger row with the role of the person behind it. The cost slide's per-session
+  and per-student figures divide *student* spend by *student* sessions; the total still covers everyone, and the
+  staff part is stated.
+- **Notebook placement.** Staff are reported by a new notebook, `03b_staff_usage`, run after 03; notebooks 01, 02 and
+  04 filter their inputs to students on load; 00 writes both roles to the tidy files.
+- **`analytics.ipynb`.** Minimal change: imports `STUDENT_TOPICS` as `TOPICS` and keeps only student messages.
+- **Not done.** `docs/USAGE_REPORT_PLAN.md` still says "nine-label classifier" in its measure list; it is a planning
+  document and was left alone.

@@ -1,31 +1,33 @@
 {
   "dataset": {
-    "legacy_rows": 1410,
-    "current_rows": 1506,
-    "duplicates_dropped": 1322,
-    "excluded_account_rows": 10,
-    "rows": 1584,
+    "legacy_rows": 1508,
+    "current_rows": 1600,
+    "duplicates_dropped": 1388,
+    "excluded_account_rows": 4,
+    "staff_rows": 50,
+    "student_rows": 1666,
+    "rows": 1716,
     "first_message": "2025-09-04T22:59:00",
-    "last_message": "2026-09-24T09:10:20",
-    "sessions": 259,
+    "last_message": "2026-09-25T21:20:16",
+    "sessions": 269,
     "students": 54,
-    "prompts": 792,
+    "prompts": 833,
     "courses": [
       "Agile Software Development & DevOps",
       "Introduction to Programming",
       "Software Engineering",
       "Web Design"
     ],
-    "median_prompts": 3.0,
-    "mean_prompts": 3.057915057915058,
+    "median_prompts": 2.0,
+    "mean_prompts": 3.096654275092937,
     "iqr_prompts": [
       2.0,
       4.0
     ],
-    "median_duration": 13.75,
+    "median_duration": 12.233333333333333,
     "iqr_duration": [
-      5.291666666666666,
-      22.133333333333333
+      4.316666666666666,
+      22.05
     ],
     "as_of": "2026-09-25",
     "current_term": "Fall 2026",
@@ -45,15 +47,15 @@
       "web"
     ]
   },
-  "_written_at": "2026-09-25T12:21:36",
+  "_written_at": "2026-10-08T16:47:49",
   "volume": {
     "elapsed_days": 23,
     "adoption": [
       {
         "course": "Agile Software Development & DevOps",
         "enrolled": 21,
-        "active": 4,
-        "share": 0.19047619047619047
+        "active": 5,
+        "share": 0.23809523809523808
       },
       {
         "course": "Introduction to Programming",
@@ -64,67 +66,67 @@
       {
         "course": "Software Engineering",
         "enrolled": 34,
-        "active": 8,
-        "share": 0.23529411764705882
+        "active": 9,
+        "share": 0.2647058823529412
       },
       {
         "course": "Web Design",
         "enrolled": 23,
-        "active": 3,
-        "share": 0.13043478260869565
+        "active": 4,
+        "share": 0.17391304347826086
       }
     ],
-    "adoption_total_active": 24,
+    "adoption_total_active": 27,
     "adoption_total_enrolled": 124,
     "surface_split": [
       {
         "surface": "discord",
-        "sessions": 27,
-        "prompts": 66,
-        "students": 17,
+        "sessions": 33,
+        "prompts": 103,
+        "students": 25,
         "surface_label": "Discord"
       },
       {
-        "surface": "mcp",
-        "sessions": 8,
-        "prompts": 21,
-        "students": 8,
-        "surface_label": "Chat assistant"
+        "surface": "web",
+        "sessions": 7,
+        "prompts": 19,
+        "students": 7,
+        "surface_label": "Web"
       },
       {
-        "surface": "web",
-        "sessions": 6,
-        "prompts": 20,
-        "students": 5,
-        "surface_label": "Web"
+        "surface": "mcp",
+        "sessions": 4,
+        "prompts": 14,
+        "students": 4,
+        "surface_label": "Chat assistant"
       }
     ],
     "comparison": {
       "Fall 2025": {
-        "Sessions": 31,
-        "Students": 20,
-        "Prompts": 83
+        "Sessions": 35,
+        "Students": 23,
+        "Prompts": 101
       },
       "Fall 2026": {
-        "Sessions": 41,
-        "Students": 24,
-        "Prompts": 107
+        "Sessions": 44,
+        "Students": 27,
+        "Prompts": 136
       }
     },
     "comparison_by_surface": {
       "Fall 2025": {
-        "Discord": 31,
+        "Discord": 35,
         "Chat assistant": 0,
         "Web": 0
       },
       "Fall 2026": {
-        "Discord": 27,
-        "Chat assistant": 8,
-        "Web": 6
+        "Discord": 33,
+        "Chat assistant": 4,
+        "Web": 7
       }
     },
     "weekly_peak_week": "2026-09-07",
-    "weekly_peak_sessions": 17,
+    "weekly_peak_sessions": 16,
     "figures": {
       "adoption": "adoption_by_course.png",
       "weekly": "weekly_sessions_by_course.png",
@@ -134,51 +136,51 @@
     }
   },
   "shape": {
-    "sessions": 259,
+    "sessions": 269,
     "students": 54,
-    "prompts": 792,
+    "prompts": 833,
     "courses": 4,
-    "median_prompts": 3.0,
-    "mean_prompts": 3.057915057915058,
+    "median_prompts": 2.0,
+    "mean_prompts": 3.096654275092937,
     "iqr_prompts": [
       2.0,
       4.0
     ],
-    "median_duration": 13.75,
+    "median_duration": 12.233333333333333,
     "iqr_duration": [
-      5.291666666666666,
-      22.133333333333333
+      4.316666666666666,
+      22.05
     ],
     "returns": {
       "students": 54,
-      "returned": 38,
-      "share": 0.7037037037037037,
+      "returned": 40,
+      "share": 0.7407407407407407,
       "median_active_days": 3.0
     },
-    "after_hours_sessions": 160,
-    "total_sessions": 259,
+    "after_hours_sessions": 158,
+    "total_sessions": 269,
     "sensitivity": [
       {
         "gap_minutes": 15,
-        "sessions": 260,
-        "median_prompts": 3.0,
-        "median_duration_minutes": 13.625
+        "sessions": 269,
+        "median_prompts": 2.0,
+        "median_duration_minutes": 12.233333333333333
       },
       {
         "gap_minutes": 30,
-        "sessions": 259,
-        "median_prompts": 3.0,
-        "median_duration_minutes": 13.75
+        "sessions": 269,
+        "median_prompts": 2.0,
+        "median_duration_minutes": 12.233333333333333
       },
       {
         "gap_minutes": 60,
-        "sessions": 259,
-        "median_prompts": 3.0,
-        "median_duration_minutes": 13.75
+        "sessions": 269,
+        "median_prompts": 2.0,
+        "median_duration_minutes": 12.233333333333333
       }
     ],
-    "single_prompt_sessions": 31,
-    "long_sessions": 36,
+    "single_prompt_sessions": 40,
+    "long_sessions": 47,
     "figures": {
       "prompts": "prompts_per_session.png",
       "duration": "session_duration.png",
@@ -188,118 +190,159 @@
   "topics": {
     "method": "keyword",
     "method_counts": {
-      "keyword-cached": 259
+      "keyword": 225,
+      "keyword-cached": 44
     },
     "counts": [
       {
-        "topic": "Team projects & collaboration",
-        "sessions": 64
+        "topic": "Course concepts",
+        "sessions": 38
       },
       {
-        "topic": "Course material & content",
-        "sessions": 36
+        "topic": "Tools, setup & deployment",
+        "sessions": 35
       },
       {
-        "topic": "Assignments & homework",
-        "sessions": 32
-      },
-      {
-        "topic": "Technical setup & tools",
+        "topic": "Team coordination",
         "sessions": 29
       },
       {
-        "topic": "Resources & references",
-        "sessions": 26
+        "topic": "Code & debugging",
+        "sessions": 25
       },
       {
-        "topic": "Other",
+        "topic": "Project & assignment requirements",
         "sessions": 21
       },
       {
-        "topic": "Grades & assessment",
+        "topic": "Course policies",
+        "sessions": 21
+      },
+      {
+        "topic": "Git & GitHub workflow",
         "sessions": 20
       },
       {
-        "topic": "Professor & office hours",
-        "sessions": 17
+        "topic": "Discord & platform help",
+        "sessions": 19
       },
       {
-        "topic": "Syllabus, schedule & deadlines",
-        "sessions": 14
+        "topic": "Quiz & exam questions",
+        "sessions": 15
+      },
+      {
+        "topic": "Greetings & bot questions",
+        "sessions": 15
+      },
+      {
+        "topic": "Deadlines & schedule",
+        "sessions": 13
+      },
+      {
+        "topic": "Other",
+        "sessions": 13
+      },
+      {
+        "topic": "Grades & grading",
+        "sessions": 5
       }
     ],
-    "top_topic": "Team projects & collaboration",
-    "top_topic_sessions": 64,
-    "other_share": 0.08108108108108109,
+    "top_topic": "Course concepts",
+    "top_topic_sessions": 38,
+    "other_share": 0.048327137546468404,
     "by_course": {
       "Agile Software Development & DevOps": {
-        "Course material & content": 11.0,
-        "Assignments & homework": null,
-        "Syllabus, schedule & deadlines": null,
-        "Technical setup & tools": 10.0,
-        "Grades & assessment": null,
-        "Professor & office hours": null,
-        "Team projects & collaboration": 23.0,
-        "Resources & references": null,
+        "Project & assignment requirements": null,
+        "Deadlines & schedule": null,
+        "Grades & grading": null,
+        "Course policies": null,
+        "Course concepts": 8.0,
+        "Quiz & exam questions": null,
+        "Code & debugging": null,
+        "Git & GitHub workflow": 7.0,
+        "Tools, setup & deployment": 15.0,
+        "Team coordination": 10.0,
+        "Discord & platform help": null,
+        "Greetings & bot questions": null,
         "Other": null
       },
       "Introduction to Programming": {
-        "Course material & content": 9.0,
-        "Assignments & homework": 9.0,
-        "Syllabus, schedule & deadlines": null,
-        "Technical setup & tools": null,
-        "Grades & assessment": null,
-        "Professor & office hours": null,
-        "Team projects & collaboration": 13.0,
-        "Resources & references": null,
-        "Other": 5.0
+        "Project & assignment requirements": null,
+        "Deadlines & schedule": null,
+        "Grades & grading": null,
+        "Course policies": 7.0,
+        "Course concepts": 14.0,
+        "Quiz & exam questions": null,
+        "Code & debugging": 13.0,
+        "Git & GitHub workflow": null,
+        "Tools, setup & deployment": 10.0,
+        "Team coordination": null,
+        "Discord & platform help": null,
+        "Greetings & bot questions": null,
+        "Other": null
       },
       "Software Engineering": {
-        "Course material & content": null,
-        "Assignments & homework": 14.0,
-        "Syllabus, schedule & deadlines": null,
-        "Technical setup & tools": 11.0,
-        "Grades & assessment": null,
-        "Professor & office hours": 6.0,
-        "Team projects & collaboration": 17.0,
-        "Resources & references": null,
+        "Project & assignment requirements": 10.0,
+        "Deadlines & schedule": null,
+        "Grades & grading": null,
+        "Course policies": 6.0,
+        "Course concepts": null,
+        "Quiz & exam questions": 7.0,
+        "Code & debugging": 6.0,
+        "Git & GitHub workflow": null,
+        "Tools, setup & deployment": null,
+        "Team coordination": 10.0,
+        "Discord & platform help": null,
+        "Greetings & bot questions": null,
         "Other": null
       },
       "Web Design": {
-        "Course material & content": null,
-        "Assignments & homework": null,
-        "Syllabus, schedule & deadlines": null,
-        "Technical setup & tools": null,
-        "Grades & assessment": null,
-        "Professor & office hours": null,
-        "Team projects & collaboration": 11.0,
-        "Resources & references": null,
+        "Project & assignment requirements": null,
+        "Deadlines & schedule": null,
+        "Grades & grading": null,
+        "Course policies": null,
+        "Course concepts": null,
+        "Quiz & exam questions": null,
+        "Code & debugging": null,
+        "Git & GitHub workflow": null,
+        "Tools, setup & deployment": null,
+        "Team coordination": null,
+        "Discord & platform help": null,
+        "Greetings & bot questions": 9.0,
         "Other": null
       }
     },
-    "suppression_note": "24 of 36 cells are suppressed: fewer than 5 distinct students behind them.",
+    "suppression_note": "38 of 52 cells are suppressed: fewer than 5 distinct students behind them.",
     "by_term": {
       "Fall 2025": {
-        "Course material & content": 3,
-        "Assignments & homework": 4,
-        "Syllabus, schedule & deadlines": 1,
-        "Technical setup & tools": 4,
-        "Grades & assessment": 0,
-        "Professor & office hours": 2,
-        "Team projects & collaboration": 11,
-        "Resources & references": 2,
-        "Other": 4
+        "Project & assignment requirements": 2,
+        "Deadlines & schedule": 0,
+        "Grades & grading": 0,
+        "Course policies": 2,
+        "Course concepts": 4,
+        "Quiz & exam questions": 1,
+        "Code & debugging": 4,
+        "Git & GitHub workflow": 4,
+        "Tools, setup & deployment": 5,
+        "Team coordination": 5,
+        "Discord & platform help": 1,
+        "Greetings & bot questions": 5,
+        "Other": 2
       },
       "Fall 2026": {
-        "Course material & content": 5,
-        "Assignments & homework": 5,
-        "Syllabus, schedule & deadlines": 1,
-        "Technical setup & tools": 7,
-        "Grades & assessment": 5,
-        "Professor & office hours": 3,
-        "Team projects & collaboration": 10,
-        "Resources & references": 3,
-        "Other": 2
+        "Project & assignment requirements": 1,
+        "Deadlines & schedule": 4,
+        "Grades & grading": 1,
+        "Course policies": 2,
+        "Course concepts": 6,
+        "Quiz & exam questions": 2,
+        "Code & debugging": 5,
+        "Git & GitHub workflow": 5,
+        "Tools, setup & deployment": 6,
+        "Team coordination": 7,
+        "Discord & platform help": 3,
+        "Greetings & bot questions": 1,
+        "Other": 1
       }
     },
     "agreement": {
@@ -309,49 +352,69 @@
     },
     "quotes": [
       {
-        "topic": "Professor & office hours",
-        "course": "Web Design",
-        "quote": "Student: when are office hours this week Bot: That error usually means a missing dependency. Try these three steps in order."
+        "topic": "Quiz & exam questions",
+        "course": "Introduction to Programming",
+        "quote": "Student: true or false: a tuple is immutable Bot: That error usually means a missing dependency. Try these three steps in order."
       },
       {
-        "topic": "Technical setup & tools",
-        "course": "Agile Software Development & DevOps",
-        "quote": "Student: docker won't start on port 3000, is that normal Bot: Here's what the course materials say about that, and where to look next."
+        "topic": "Course concepts",
+        "course": "Web Design",
+        "quote": "Student: why does the lecture say to avoid global state Bot: Here's what the course materials say about that, and where to look next."
       },
       {
-        "topic": "Resources & references",
+        "topic": "Git & GitHub workflow",
         "course": "Web Design",
-        "quote": "Student: is there a tutorial you recommend for this Bot: The syllabus covers this: the relevant deadline and policy are below."
+        "quote": "Student: do I git pull before I commit? Bot: Here's what the course materials say about that, and where to look next. Student: should we fork or branch first Bot: The syllabus covers this: the relevant deadline and policy are below."
       },
       {
-        "topic": "Grades & assessment",
+        "topic": "Team coordination",
+        "course": "Introduction to Programming",
+        "quote": "Student: how should our group split up the work Bot: That error usually means a missing dependency. Try these three steps in order."
+      },
+      {
+        "topic": "Project & assignment requirements",
+        "course": "Software Engineering",
+        "quote": "Student: where is the starter code for this assignment Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+      },
+      {
+        "topic": "Course policies",
+        "course": "Introduction to Programming",
+        "quote": "Student: how many extensions do we have Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+      },
+      {
+        "topic": "Code & debugging",
+        "course": "Software Engineering",
+        "quote": "Student: I get a traceback when I call the function with None Bot: The syllabus covers this: the relevant deadline and policy are below."
+      },
+      {
+        "topic": "Discord & platform help",
         "course": "Web Design",
-        "quote": "Student: what is the rubric for the midterm Bot: Here's what the course materials say about that, and where to look next."
+        "quote": "Student: how do I connect my account Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+      },
+      {
+        "topic": "Grades & grading",
+        "course": "Software Engineering",
+        "quote": "Student: how much is the final worth of my grade Bot: That error usually means a missing dependency. Try these three steps in order."
       },
       {
         "topic": "Other",
-        "course": "Introduction to Programming",
-        "quote": "Student: are you a real person Bot: Here's what the course materials say about that, and where to look next."
-      },
-      {
-        "topic": "Assignments & homework",
-        "course": "Introduction to Programming",
-        "quote": "Student: do we have to submit the homework as a zip or a repo link Bot: Here's what the course materials say about that, and where to look next."
-      },
-      {
-        "topic": "Syllabus, schedule & deadlines",
         "course": "Web Design",
-        "quote": "Student: can I submit the homework late if I'm sick Bot: The syllabus covers this: the relevant deadline and policy are below."
+        "quote": "Student: ok sounds good Bot: The syllabus covers this: the relevant deadline and policy are below."
       },
       {
-        "topic": "Course material & content",
-        "course": "Web Design",
-        "quote": "Student: can you explain what a closure is Bot: That error usually means a missing dependency. Try these three steps in order."
-      },
-      {
-        "topic": "Team projects & collaboration",
+        "topic": "Deadlines & schedule",
         "course": "Agile Software Development & DevOps",
-        "quote": "Student: how should our group split up the sprint work Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+        "quote": "Student: what time is class on thursday Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+      },
+      {
+        "topic": "Tools, setup & deployment",
+        "course": "Introduction to Programming",
+        "quote": "Student: atlas or docker for mongodb Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+      },
+      {
+        "topic": "Greetings & bot questions",
+        "course": "Web Design",
+        "quote": "Student: what's in your profile picture Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
       }
     ],
     "figures": {
@@ -360,46 +423,120 @@
       "by_term": "topics_by_term.png"
     }
   },
+  "staff": {
+    "messages": 50,
+    "sessions": 18,
+    "prompts": 25,
+    "staff_people": 1,
+    "all_messages": 1716,
+    "all_sessions": 287,
+    "all_prompts": 858,
+    "message_share": 0.029137529137529136,
+    "session_share": 0.0627177700348432,
+    "prompt_share": 0.029137529137529136,
+    "purposes": [
+      {
+        "topic": "Testing the bot",
+        "sessions": 3
+      },
+      {
+        "topic": "Demonstrating to class",
+        "sessions": 3
+      },
+      {
+        "topic": "Announcements",
+        "sessions": 3
+      },
+      {
+        "topic": "Directing students",
+        "sessions": 3
+      },
+      {
+        "topic": "Course content & policy lookup",
+        "sessions": 3
+      },
+      {
+        "topic": "Course setup",
+        "sessions": 2
+      },
+      {
+        "topic": "Other",
+        "sessions": 1
+      }
+    ],
+    "other_share": 0.05555555555555555,
+    "by_surface": [
+      {
+        "surface": "discord",
+        "sessions": 12,
+        "prompts": 16,
+        "surface_label": "Discord"
+      },
+      {
+        "surface": "web",
+        "sessions": 4,
+        "prompts": 7,
+        "surface_label": "Web"
+      },
+      {
+        "surface": "mcp",
+        "sessions": 2,
+        "prompts": 2,
+        "surface_label": "Chat assistant"
+      }
+    ],
+    "agreement": {
+      "checked": 0,
+      "agreed": 0,
+      "rate": null
+    },
+    "figures": {
+      "purposes": "staff_purposes.png",
+      "surface": "staff_sessions_by_surface.png"
+    }
+  },
   "cost": {
-    "rows": 104,
-    "window_start": "2026-09-02T01:55:00",
-    "window_end": "2026-09-24T09:10:00",
-    "total_usd": 0.740448,
-    "sessions_in_window": 41,
-    "students_in_window": 24,
-    "usd_per_session": 0.01805970731707317,
-    "usd_per_student": 0.030852,
+    "rows": 110,
+    "window_start": "2026-09-02T15:52:00",
+    "window_end": "2026-09-25T21:20:09",
+    "total_usd": 0.8009400000000001,
+    "student_usd": 0.678938,
+    "staff_usd": 0.122002,
+    "sessions_in_window": 44,
+    "students_in_window": 27,
+    "usd_per_session": 0.015430409090909092,
+    "usd_per_student": 0.025145851851851853,
     "models": {
-      "gpt-4.1": 104
+      "gpt-4.1": 110
     },
     "by_course": [
       {
-        "course": "Introduction to Programming",
-        "usd": 0.318236,
-        "calls": 42,
-        "input_tokens": 87074,
-        "output_tokens": 18011
+        "course": "Software Engineering",
+        "usd": 0.294066,
+        "calls": 41,
+        "input_tokens": 81789,
+        "output_tokens": 16311
       },
       {
         "course": "Web Design",
-        "usd": 0.193526,
-        "calls": 28,
-        "input_tokens": 52419,
-        "output_tokens": 11086
+        "usd": 0.184984,
+        "calls": 26,
+        "input_tokens": 46232,
+        "output_tokens": 11565
       },
       {
-        "course": "Software Engineering",
-        "usd": 0.14037,
-        "calls": 20,
-        "input_tokens": 43213,
-        "output_tokens": 6743
+        "course": "Introduction to Programming",
+        "usd": 0.16327,
+        "calls": 22,
+        "input_tokens": 44735,
+        "output_tokens": 9225
       },
       {
         "course": "Agile Software Development & DevOps",
-        "usd": 0.088316,
-        "calls": 14,
-        "input_tokens": 24338,
-        "output_tokens": 4955
+        "usd": 0.15862,
+        "calls": 21,
+        "input_tokens": 43958,
+        "output_tokens": 8838
       }
     ],
     "figure": "cost_by_course.png"

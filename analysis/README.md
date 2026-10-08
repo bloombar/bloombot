@@ -7,7 +7,7 @@ slide and why, is `docs/USAGE_REPORT_PLAN.md`.
 ```
 analysis/
   bloombot_analysis/   the library: loading, merging, sessions, topics, privacy, charts, report
-  notebooks/           00 → 05, run in order
+  notebooks/           00 → 05, run in order (03b is the staff section)
   mock/                a synthetic dataset (legacy, current and combined databases) that exercises every awkward case
   examples/mock_report/ a finished report built from that mock data, for review
   run_all.py           execute the notebooks end to end
@@ -59,20 +59,31 @@ beside it) and the repository's guard hook blocks writes to protected paths.
    counts each message once and says how many duplicates it dropped. `--combined-db`, `--legacy-db`,
    `--current-db` and `--out-dir` (or the `BLOOMBOT_ANALYSIS_*` variables in `config.py`) point at other files.
 
-3. **Topic cache.**
+3. **Staff and student roles, and topic sets (ANLY-9, ANLY-10).** Every message is tagged `staff` or
+   `student`. A person is staff in a course when a web identity of theirs names an account with a
+   non-revoked membership (owner, instructor or assistant) in the message's organization; the
+   `staff_handles` list in `config.py` is a manual override on top, and `excluded_handles` is for test
+   rigs only, which are dropped. A database without `accounts`/`memberships` falls back to the handles.
+   Student sessions get one of 13 topics (`STUDENT_TOPICS`) and staff sessions one of 7 purposes
+   (`STAFF_TOPICS`), each by the keyword rules or the model prompt for that set. Student measures count
+   students only; notebook 03b reports staff on their own.
+
+4. **Topic cache.**
 
    The old cache at `data/topic_classifications.json` is **not** reused. It was keyed by a
    conversation's position in an ordering that no longer exists, so a hit there would attach a label
    to the wrong session; the new cache lives at `tmp/analysis/topic_classifications.json` and is
-   keyed by the session's own text. Re-classifying from scratch costs a few cents. `analytics.ipynb`
+   keyed by the session's own text and the label-set version (`v2-student` / `v2-staff`), so
+   labels from the older nine-label set are never reused. Re-classifying from scratch costs a few cents. `analytics.ipynb`
    (repository root) shares this cache and the same rule.
 
-4. **Audit the topic labels.** Notebook 03 writes `tmp/analysis/out/data/topic_audit_sample.csv`.
+5. **Audit the topic labels.** Notebook 03 writes `tmp/analysis/out/data/topic_audit_sample.csv`.
    Fill in its `hand_label` column, save it as `topic_audit_completed.csv` in the same folder, and
-   re-run notebooks 03 and 05. The agreement rate then appears beside every topic chart; until it
+   re-run notebooks 03, 03b and 05. The sample holds up to 30 sessions per role, with a `role` column,
+   and the rate is reported for each label set. It then appears beside every topic chart; until it
    does, the report says in as many words that no audit has been recorded.
 
-5. **Read the report, then refine it.** It is deliberately long — it is a source document, not the
+6. **Read the report, then refine it.** It is deliberately long — it is a source document, not the
    deck.
 
 ## Conventions the report depends on
@@ -90,7 +101,9 @@ validated when the slide is built, so a typo fails the run rather than reaching 
 
 - `data/data.db` is only ever opened read-only (`immutable`); every output goes under `tmp/`, and the executed notebooks of a real-data run stay there too.
 - Soft-deleted conversations and people are excluded in the loader, so no notebook can forget to.
-- Instructor and test accounts are excluded from every aggregate.
+- Test accounts are excluded from every aggregate. Staff (course owners, instructors, assistants) are kept
+  but tagged, left out of every student measure, and reported only as aggregates in their own section:
+  a staff group can be one person, so there is no per-person or per-course detail and no quotes for it.
 - Cells covering fewer than five distinct students are suppressed in published tables and charts.
 - Quotes are mechanically scrubbed and are marked as candidates: paraphrase them before they reach a
   slide.

@@ -83,14 +83,15 @@ Account creation is **gated on my approval**, deliberately. Every tenant's usage
 - **Session**: consecutive messages between one student and the bot in one course on one interface, split whenever more than **30 minutes** of silence passes. The stored conversation record is deliberately not the unit — on the web a conversation can hold a whole term.
 - **Prompt**: one student message. Bot replies are not counted, or every session would look twice as deep as it is.
 - **Active student**: at least one prompt in the period.
-- **Excluded**: instructor and test accounts (10 messages), and anything a student has asked to have deleted.
+- **Student**: every measure in this deck counts students only. Course owners, instructors and assistants (anyone with an active membership in the course's organization) are **staff**: their 50 messages are reported in their own section, not here.
+- **Excluded**: test accounts (4 messages), and anything a student has asked to have deleted.
 - All times are local (America/New_York), so 'by hour of day' means the hour the student was awake.
 
 | gap_minutes | sessions | median_prompts | median_duration_minutes |
 | --- | --- | --- | --- |
-| 15 | 260 | 3.00 | 13.62 |
-| 30 | 259 | 3.00 | 13.75 |
-| 60 | 259 | 3.00 | 13.75 |
+| 15 | 269 | 2.00 | 12.23 |
+| 30 | 269 | 2.00 | 12.23 |
+| 60 | 269 | 2.00 | 12.23 |
 
 **Speaker notes:** The table is the sensitivity check: the same headline numbers re-derived at 15, 30 and 60 minutes. If they barely move, say so in one line and move on — that is the point of showing it.
 
@@ -98,21 +99,22 @@ Account creation is **gated on my approval**, deliberately. Every tenant's usage
 
 ## S07 · Where the data comes from
 
-**Takeaway:** 1,584 messages from two databases, reconciled into one, 1,322 duplicates dropped.
+**Takeaway:** 1,666 student messages from two databases, reconciled into one, 1,388 duplicates dropped.
 
 Bloombot's history spans two data models: the Python bot's log up to Fall 2026, and the current platform's. Some of the old log was imported into the new database, so the same message can exist in both — those are matched on content and timestamp and counted once. Students are joined across the two by their Discord identity, so someone who used the bot last year and again this fall is one person, not two.
 
 |  | Count |
 | --- | --- |
-| Messages in the pre-Fall-2026 database | 1,410 |
-| Messages in the current platform database | 1,506 |
-| Dropped as already-imported duplicates | 1,322 |
-| Dropped as instructor/test accounts | 10 |
-| Messages analysed | 1,584 |
-| Sessions | 259 |
+| Messages in the pre-Fall-2026 database | 1,508 |
+| Messages in the current platform database | 1,600 |
+| Dropped as already-imported duplicates | 1,388 |
+| Dropped as test accounts | 4 |
+| Staff messages (reported separately) | 50 |
+| Student messages analysed | 1,666 |
+| Sessions | 269 |
 | Distinct students | 54 |
 | First message | 2025-09-04 |
-| Last message | 2026-09-24 |
+| Last message | 2026-09-25 |
 
 **Speaker notes:** If anyone asks whether messages are double-counted: this row-by-row table is the answer.
 
@@ -135,20 +137,20 @@ Fall 2026 runs 2026-09-02 → 2026-12-15. The data stops at 2026-09-25. Two cons
 
 ## S09 · Adoption: who used it at all
 
-**Takeaway:** 24 of 124 (19%) enrolled students used the bot at least once this term so far.
+**Takeaway:** 27 of 124 (22%) enrolled students used the bot at least once this term so far.
 
 Adoption has a denominator that means something, which a raw message count does not. Enrolment exists only from Fall 2026 — the old bot had no roster — so this cannot be computed for prior terms at all.
 
 ![Adoption: who used it at all](figures/adoption_by_course.png)
 
-*Figure: Distinct students with at least one prompt, Fall 2026 through day 23 (n = 24 students).*
+*Figure: Distinct students with at least one prompt, Fall 2026 through day 23 (n = 27 students).*
 
 | Course | Enrolled | Used the bot | Share |
 | --- | --- | --- | --- |
-| Agile Software Development & DevOps | 21 | 4 | 4 / 21 |
+| Agile Software Development & DevOps | 21 | 5 | 5 / 21 |
 | Introduction to Programming | 46 | 9 | 9 / 46 |
-| Software Engineering | 34 | 8 | 8 / 34 |
-| Web Design | 23 | 3 | 3 / 23 |
+| Software Engineering | 34 | 9 | 9 / 34 |
+| Web Design | 23 | 4 | 4 / 23 |
 
 **Speaker notes:** Expect the question 'is that good?'. There is no benchmark; say so, and give the range across courses.
 
@@ -156,13 +158,13 @@ Adoption has a denominator that means something, which a raw message count does 
 
 ## S10 · Volume over the whole period
 
-**Takeaway:** Sessions peak in the first weeks of a term and around deadlines; the busiest week in the data had 17 sessions.
+**Takeaway:** Sessions peak in the first weeks of a term and around deadlines; the busiest week in the data had 16 sessions.
 
 Points, not a trend line: with this many weeks a fitted line would assert more than the data supports. The shape — a start-of-term spike, then deadline-shaped bumps — is the most legible thing in the dataset.
 
 ![Volume over the whole period](figures/weekly_sessions_by_course.png)
 
-*Figure: Sessions per week by course, 2025-09-04 → 2026-09-24 (n = 259 sessions). The dashed rule marks the start of Fall 2026, when the web and chat-assistant interfaces launched.*
+*Figure: Sessions per week by course, 2025-09-04 → 2026-09-25 (n = 269 sessions). The dashed rule marks the start of Fall 2026, when the web and chat-assistant interfaces launched.*
 
 **Speaker notes:** Walk the audience along the line and name the weeks; the shape does the argument for you.
 
@@ -176,13 +178,13 @@ Web and the chat assistant have existed for three weeks. Their share is a fact a
 
 ![Where students talked to it](figures/sessions_by_surface.png)
 
-*Figure: Sessions by interface, Fall 2026 through day 23 (n = 41 sessions).*
+*Figure: Sessions by interface, Fall 2026 through day 23 (n = 44 sessions).*
 
 | Interface | Sessions | Prompts | Students |
 | --- | --- | --- | --- |
-| Discord | 27 | 66 | 17 |
-| Chat assistant | 8 | 21 | 8 |
-| Web | 6 | 20 | 5 |
+| Discord | 33 | 103 | 25 |
+| Web | 7 | 19 | 7 |
+| Chat assistant | 4 | 14 | 4 |
 
 **Speaker notes:** Resist reading a 'preference' into this. The honest claim is that both new doors got used at all.
 
@@ -200,9 +202,9 @@ The comparison that is *not* like-for-like is the interface split: Discord is th
 
 | Measure | Fall 2025 | Fall 2026 |
 | --- | --- | --- |
-| Sessions | 31 | 41 |
-| Students | 20 | 24 |
-| Prompts | 83 | 107 |
+| Sessions | 35 | 44 |
+| Students | 23 | 27 |
+| Prompts | 101 | 136 |
 
 **Speaker notes:** If this shows growth, the honest phrasing is 'more sessions in the same span of term', not 'usage is up X%' — three weeks is three weeks.
 
@@ -220,9 +222,9 @@ Read the Discord pair as the behavioural comparison and the other two as a launc
 
 | Interface | Fall 2025 | Fall 2026 |
 | --- | --- | --- |
-| Discord | 31 | 27 |
-| Chat assistant | 0 | 8 |
-| Web | 0 | 6 |
+| Discord | 35 | 33 |
+| Chat assistant | 0 | 4 |
+| Web | 0 | 7 |
 
 **Speaker notes:** This is the slide that prevents someone quoting a growth number that is really a feature release.
 
@@ -230,13 +232,13 @@ Read the Discord pair as the behavioural comparison and the other two as a launc
 
 ## S14 · What a typical session looks like
 
-**Takeaway:** Median 3 prompts per session (IQR 2–4); 31 of 259 (12%) sessions are a single question.
+**Takeaway:** Median 2 prompts per session (IQR 2–4); 40 of 269 (15%) sessions are a single question.
 
-Mean 3.1, median 3 — the gap is the long tail of a few deep sessions, which is why the median leads. 36 sessions ran to five prompts or more.
+Mean 3.1, median 2 — the gap is the long tail of a few deep sessions, which is why the median leads. 47 sessions ran to five prompts or more.
 
 ![What a typical session looks like](figures/prompts_per_session.png)
 
-*Figure: Distribution of student messages per session (n = 259 sessions). The median is marked.*
+*Figure: Distribution of student messages per session (n = 269 sessions). The median is marked.*
 
 **Speaker notes:** The one-question majority is the real finding here, and it argues the bot is used as a reference, not as a tutor. Say that as a reading, not as a measurement.
 
@@ -244,13 +246,13 @@ Mean 3.1, median 3 — the gap is the long tail of a few deep sessions, which is
 
 ## S15 · How long a session lasts, and when it happens
 
-**Takeaway:** Median 13.8 minutes; 160 of 259 (62%) sessions start between 18:00 and 08:00.
+**Takeaway:** Median 12.2 minutes; 158 of 269 (59%) sessions start between 18:00 and 08:00.
 
 The after-hours share is the clearest argument for an always-on assistant in the whole dataset: these are questions that would otherwise have waited for the next class or gone unasked.
 
 ![How long a session lasts, and when it happens](figures/sessions_by_hour.png)
 
-*Figure: Sessions by the hour they started, local time (n = 259 sessions).*
+*Figure: Sessions by the hour they started, local time (n = 269 sessions).*
 
 **Speaker notes:** Careful: 'would otherwise have gone unasked' is an inference. The measured part is the hour distribution.
 
@@ -258,7 +260,7 @@ The after-hours share is the clearest argument for an always-on assistant in the
 
 ## S16 · Do they come back?
 
-**Takeaway:** 38 of 54 (70%) students who used the bot used it again on another day.
+**Takeaway:** 40 of 54 (74%) students who used the bot used it again on another day.
 
 Median active days per student: 3.0. Reported as counts rather than a retention curve on purpose — a curve on a cohort this size implies a precision the data does not have.
 
@@ -268,27 +270,31 @@ Median active days per student: 3.0. Reported as counts rather than a retention 
 
 ## S17 · What students asked about
 
-**Takeaway:** The largest category is Team projects & collaboration (64 sessions); 8% of sessions fall outside the label set.
+**Takeaway:** The largest category is Course concepts (38 sessions); 5% of sessions fall outside the label set.
 
 **No hand-audit has been recorded yet** — fill in `topic_audit_completed.csv` and re-run notebook 03 before presenting these charts.
 
-A large *Other* share is itself a finding about what the nine labels miss, not a gap to hide.
+A large *Other* share is itself a finding about what the thirteen labels miss, not a gap to hide.
 
 ![What students asked about](figures/topics_overall.png)
 
-*Figure: Sessions per topic, all courses (n = 259 sessions, classified by keyword).*
+*Figure: Sessions per topic, all courses (n = 269 sessions, classified by keyword).*
 
 | Topic | Sessions |
 | --- | --- |
-| Team projects & collaboration | 64 |
-| Course material & content | 36 |
-| Assignments & homework | 32 |
-| Technical setup & tools | 29 |
-| Resources & references | 26 |
-| Other | 21 |
-| Grades & assessment | 20 |
-| Professor & office hours | 17 |
-| Syllabus, schedule & deadlines | 14 |
+| Course concepts | 38 |
+| Tools, setup & deployment | 35 |
+| Team coordination | 29 |
+| Code & debugging | 25 |
+| Project & assignment requirements | 21 |
+| Course policies | 21 |
+| Git & GitHub workflow | 20 |
+| Discord & platform help | 19 |
+| Quiz & exam questions | 15 |
+| Greetings & bot questions | 15 |
+| Deadlines & schedule | 13 |
+| Other | 13 |
+| Grades & grading | 5 |
 
 **Speaker notes:** Name the classifier and its agreement rate out loud. A topic chart from an unaudited classifier is an assertion.
 
@@ -302,19 +308,23 @@ Cells backed by fewer than five distinct students are suppressed and drawn empty
 
 ![The mix differs by course](figures/topics_by_course.png)
 
-*Figure: Sessions by topic and course. 24 of 36 cells are suppressed: fewer than 5 distinct students behind them.*
+*Figure: Sessions by topic and course. 38 of 52 cells are suppressed: fewer than 5 distinct students behind them.*
 
 | Topic | Agile Software Development & DevOps | Introduction to Programming | Software Engineering | Web Design |
 | --- | --- | --- | --- | --- |
-| Course material & content | 11.00 | 9.00 | — | — |
-| Assignments & homework | — | 9.00 | 14.00 | — |
-| Syllabus, schedule & deadlines | — | — | — | — |
-| Technical setup & tools | 10.00 | — | 11.00 | — |
-| Grades & assessment | — | — | — | — |
-| Professor & office hours | — | — | 6.00 | — |
-| Team projects & collaboration | 23.00 | 13.00 | 17.00 | 11.00 |
-| Resources & references | — | — | — | — |
-| Other | — | 5.00 | — | — |
+| Project & assignment requirements | — | — | 10.00 | — |
+| Deadlines & schedule | — | — | — | — |
+| Grades & grading | — | — | — | — |
+| Course policies | — | 7.00 | 6.00 | — |
+| Course concepts | 8.00 | 14.00 | — | — |
+| Quiz & exam questions | — | — | 7.00 | — |
+| Code & debugging | — | 13.00 | 6.00 | — |
+| Git & GitHub workflow | 7.00 | — | — | — |
+| Tools, setup & deployment | 15.00 | 10.00 | — | — |
+| Team coordination | 10.00 | — | 10.00 | — |
+| Discord & platform help | — | — | — | — |
+| Greetings & bot questions | — | — | — | 9.00 |
+| Other | — | — | — | — |
 
 **Speaker notes:** The most quotable finding in the deck. Pick the two courses with the sharpest contrast and stop there.
 
@@ -332,15 +342,19 @@ The hypothesis worth stating: a private web page invites questions a student mig
 
 | Topic | Fall 2025 | Fall 2026 |
 | --- | --- | --- |
-| Course material & content | 3 | 5 |
-| Assignments & homework | 4 | 5 |
-| Syllabus, schedule & deadlines | 1 | 1 |
-| Technical setup & tools | 4 | 7 |
-| Grades & assessment | 0 | 5 |
-| Professor & office hours | 2 | 3 |
-| Team projects & collaboration | 11 | 10 |
-| Resources & references | 2 | 3 |
-| Other | 4 | 2 |
+| Project & assignment requirements | 2 | 1 |
+| Deadlines & schedule | 0 | 4 |
+| Grades & grading | 0 | 1 |
+| Course policies | 2 | 2 |
+| Course concepts | 4 | 6 |
+| Quiz & exam questions | 1 | 2 |
+| Code & debugging | 4 | 5 |
+| Git & GitHub workflow | 4 | 5 |
+| Tools, setup & deployment | 5 | 6 |
+| Team coordination | 5 | 7 |
+| Discord & platform help | 1 | 3 |
+| Greetings & bot questions | 5 | 1 |
+| Other | 2 | 1 |
 
 **Speaker notes:** Offer it as the thing to measure next term, not as a result.
 
@@ -352,21 +366,21 @@ The hypothesis worth stating: a private web page invites questions a student mig
 
 Candidates below are mechanically redacted (emails, mentions, links and long numbers removed) and **must be paraphrased by a human before they go on a slide**.
 
-**Professor & office hours** · Web Design
+**Quiz & exam questions** · Introduction to Programming
 
-> Student: when are office hours this week Bot: That error usually means a missing dependency. Try these three steps in order.
+> Student: true or false: a tuple is immutable Bot: That error usually means a missing dependency. Try these three steps in order.
 
-**Technical setup & tools** · Agile Software Development & DevOps
+**Course concepts** · Web Design
 
-> Student: docker won't start on port 3000, is that normal Bot: Here's what the course materials say about that, and where to look next.
+> Student: why does the lecture say to avoid global state Bot: Here's what the course materials say about that, and where to look next.
 
-**Resources & references** · Web Design
+**Git & GitHub workflow** · Web Design
 
-> Student: is there a tutorial you recommend for this Bot: The syllabus covers this: the relevant deadline and policy are below.
+> Student: do I git pull before I commit? Bot: Here's what the course materials say about that, and where to look next. Student: should we fork or branch first Bot: The syllabus covers this: the relevant deadline and policy are below.
 
-**Grades & assessment** · Web Design
+**Team coordination** · Introduction to Programming
 
-> Student: what is the rubric for the midterm Bot: Here's what the course materials say about that, and where to look next.
+> Student: how should our group split up the work Bot: That error usually means a missing dependency. Try these three steps in order.
 
 **Speaker notes:** Read one aloud. Do not put a student's exact words on a screen without paraphrasing them.
 
@@ -374,35 +388,87 @@ Candidates below are mechanically redacted (emails, mentions, links and long num
 
 ## S21 · What it costs to run
 
-**Takeaway:** $0.74 of model spend over the ledger window — about $0.018 per session.
+**Takeaway:** $0.80 of model spend over the ledger window — about $0.015 per session.
 
-The cost ledger exists only on the current platform and only for live traffic, so this is a Fall 2026 figure over the window shown — not a yearly cost, and not extrapolated to one. Per student in the window: $0.03 across 24 students.
+The cost ledger exists only on the current platform and only for live traffic, so this is a Fall 2026 figure over the window shown — not a yearly cost, and not extrapolated to one. Staff account for $0.12 of the total; the per-session and per-student figures count student spend only. Per student in the window: $0.03 across 27 students.
 
 ![What it costs to run](figures/cost_by_course.png)
 
-*Figure: Model spend by course, 2026-09-02 → 2026-09-24 (n = 104 metered calls).*
+*Figure: Model spend by course, 2026-09-02 → 2026-09-25 (n = 110 metered calls).*
 
 | Course | Spend (USD) | Metered calls | Input tokens | Output tokens |
 | --- | --- | --- | --- | --- |
-| Introduction to Programming | 0.32 | 42 | 87074 | 18011 |
-| Web Design | 0.19 | 28 | 52419 | 11086 |
-| Software Engineering | 0.14 | 20 | 43213 | 6743 |
-| Agile Software Development & DevOps | 0.09 | 14 | 24338 | 4955 |
+| Software Engineering | 0.29 | 41 | 81789 | 16311 |
+| Web Design | 0.18 | 26 | 46232 | 11565 |
+| Introduction to Programming | 0.16 | 22 | 44735 | 9225 |
+| Agile Software Development & DevOps | 0.16 | 21 | 43958 | 8838 |
 
 **Speaker notes:** If asked about a per-student-per-term cost, the answer is that the term is not over.
 
 **Confidence:** measured
 
+# Part — Staff usage
+
+## S22 · Staff use it too, and it is counted separately
+
+**Takeaway:** Staff sent 25 of 858 (3%) of all prompts (18 sessions); every other figure here is students only.
+
+Staff are course owners, instructors and assistants: anyone with an active membership in the course's organization, plus any handle on a manual list. They use the bot to demonstrate it in class, to test it, to announce things and to look something up while teaching, so mixing them into student figures would overstate how much students use it. A staff group can be a single person, so this section reports totals only: no per-person or per-course detail, and no quotes.
+
+![Staff use it too, and it is counted separately](figures/staff_sessions_by_surface.png)
+
+*Figure: Staff sessions by interface, whole period (n = 18 sessions).*
+
+| Measure | Staff | All traffic | Staff share |
+| --- | --- | --- | --- |
+| Messages | 50 | 1716 | 3% |
+| Sessions | 18 | 287 | 6% |
+| Prompts | 25 | 858 | 3% |
+
+| Interface | Sessions | Prompts |
+| --- | --- | --- |
+| Discord | 12 | 16 |
+| Web | 4 | 7 |
+| Chat assistant | 2 | 2 |
+
+**Speaker notes:** Say plainly that a large share of prompts came from the teacher, and that it is the reason the student numbers elsewhere are the ones to quote.
+
+**Confidence:** measured
+
+## S23 · What staff used it for
+
+**Takeaway:** The most common purpose was Testing the bot (3 sessions).
+
+Staff sessions use their own set of purposes rather than the student topics. **No hand-audit of staff sessions has been recorded yet.**
+
+![What staff used it for](figures/staff_purposes.png)
+
+*Figure: Staff sessions per purpose (n = 18 sessions, classified by keyword).*
+
+| Purpose | Sessions |
+| --- | --- |
+| Testing the bot | 3 |
+| Demonstrating to class | 3 |
+| Announcements | 3 |
+| Directing students | 3 |
+| Course content & policy lookup | 3 |
+| Course setup | 2 |
+| Other | 1 |
+
+**Speaker notes:** Aggregates only, by design: do not name or describe an individual's sessions on a slide.
+
+**Confidence:** indicative
+
 # Part — What this suggests, and what it does not
 
-## S22 · A reading of the numbers
+## S24 · A reading of the numbers
 
 **Takeaway:** Used as an always-available reference at the edges of the day, not as a tutor.
 
 Stated as hypotheses, with the evidence attached:
 
-1. **Reference, not tutoring.** A session is short — median 3 prompts, 31 of 259 (12%) of them a single question — and the largest topic is Team projects & collaboration. That pattern fits a look-it-up habit more than a study-with-me one.
-2. **It fills the hours nobody staffs.** 160 of 259 (62%) sessions start between 18:00 and 08:00.
+1. **Reference, not tutoring.** A session is short — median 2 prompts, 40 of 269 (15%) of them a single question — and the largest topic is Course concepts. That pattern fits a look-it-up habit more than a study-with-me one.
+2. **It fills the hours nobody staffs.** 158 of 269 (59%) sessions start between 18:00 and 08:00.
 3. **Adoption is broad but shallow.** A substantial share of each roster tried it; a smaller group returns repeatedly. Whether the shallow group got what they needed or gave up is exactly what this data cannot say.
 4. **A private interface may invite different questions.** Consistent with the topic split by interface; not established by it.
 
@@ -410,7 +476,7 @@ Stated as hypotheses, with the evidence attached:
 
 **Confidence:** speculative
 
-## S23 · What this data cannot tell you
+## S25 · What this data cannot tell you
 
 **Takeaway:** No outcomes, no signal from non-users, and a term that is three weeks old.
 
@@ -424,7 +490,7 @@ Stated as hypotheses, with the evidence attached:
 
 **Confidence:** measured
 
-## S24 · What would make the next version of this talk stronger
+## S26 · What would make the next version of this talk stronger
 
 **Takeaway:** Three cheap instruments: a reply rating, a one-question exit survey, and deadline dates.
 

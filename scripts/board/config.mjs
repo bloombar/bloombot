@@ -73,6 +73,7 @@ export const MILESTONE_TITLE = {
   44: 'Phase 44 — Deleting, reversibly, then permanently',
   45: 'Phase 45 — Reading usage, and finding your way around it',
   46: 'Phase 46 — Analysis on the combined database',
+  47: 'Phase 47 — Staff usage and topic sets that fit',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

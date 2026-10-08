@@ -29,20 +29,49 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(value) if value else default
 
 
-# ── Topic labels ──────────────────────────────────────────────────────────
-# The same nine labels `analytics.ipynb` has always used, so the cached
-# classifications in `data/topic_classifications.json` stay valid.
-TOPICS: list[str] = [
-    "Course material & content",
-    "Assignments & homework",
-    "Syllabus, schedule & deadlines",
-    "Technical setup & tools",
-    "Grades & assessment",
-    "Professor & office hours",
-    "Team projects & collaboration",
-    "Resources & references",
+# ── Topic labels (ANLY-10) ────────────────────────────────────────────────
+# Two label sets, because students and staff use the bot for different things.
+# A session is classified under the set that matches its role. The version is
+# part of every cache key, so a label made under an older set (the nine-label
+# v1 set) is never reused.
+STUDENT_TOPICS: list[str] = [
+    "Project & assignment requirements",
+    "Deadlines & schedule",
+    "Grades & grading",
+    "Course policies",
+    "Course concepts",
+    "Quiz & exam questions",
+    "Code & debugging",
+    "Git & GitHub workflow",
+    "Tools, setup & deployment",
+    "Team coordination",
+    "Discord & platform help",
+    "Greetings & bot questions",
     "Other",
 ]
+
+STAFF_TOPICS: list[str] = [
+    "Testing the bot",
+    "Demonstrating to class",
+    "Announcements",
+    "Directing students",
+    "Course content & policy lookup",
+    "Course setup",
+    "Other",
+]
+
+TOPIC_SET_VERSION = "v2"
+
+
+def topics_for(role: str) -> list[str]:
+    """The label set for a role: staff get the purpose set, everyone else the student set."""
+    return STAFF_TOPICS if role == "staff" else STUDENT_TOPICS
+
+
+def topic_set_key(role: str) -> str:
+    """Versioned label-set name used in cache keys, e.g. 'v2-student'."""
+    return f"{TOPIC_SET_VERSION}-{'staff' if role == 'staff' else 'student'}"
+
 
 # Discord category prefix → readable course name, carried over from
 # `analytics.ipynb`. A prefix with no entry here passes through unchanged. Matching
@@ -137,9 +166,14 @@ class Config:
     # are suppressed in published output (§5 of the plan).
     min_cell_students: int = 5
 
-    # Accounts excluded from every aggregate: the instructor, test rigs.
-    # Matched case-insensitively against the display name or handle.
-    excluded_handles: tuple[str, ...] = ("instructor", "testbot", "bloombot-test")
+    # ANLY-9. Staff are found from the platform's memberships (an active
+    # membership in the message's organization, any role). `staff_handles` is
+    # the manual override on top of that: a display name or handle containing
+    # one of these is staff. `excluded_handles` is for test rigs only, which are
+    # dropped from every aggregate, staff section included. Both are matched
+    # case-insensitively as substrings.
+    staff_handles: tuple[str, ...] = ("instructor",)
+    excluded_handles: tuple[str, ...] = ("testbot", "bloombot-test")
 
     # ── Calendar ──────────────────────────────────────────────────────────
     # `as_of` is the cutoff every "so far this term" number is measured to,

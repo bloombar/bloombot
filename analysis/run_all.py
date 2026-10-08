@@ -34,6 +34,7 @@ NOTEBOOKS = [
     "01_volume_and_adoption.ipynb",
     "02_session_shape.ipynb",
     "03_topics.ipynb",
+    "03b_staff_usage.ipynb",
     "04_cost.ipynb",
     "05_report.ipynb",
 ]

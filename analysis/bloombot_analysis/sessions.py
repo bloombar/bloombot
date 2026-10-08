@@ -22,7 +22,9 @@ import pandas as pd
 
 from .config import CONFIG, Config, Term
 
-SESSION_KEYS = ["person_key", "course", "surface"]
+# `role` is in the key (ANLY-9) so a session always has exactly one role. In
+# practice a person has one role in a course, so it never splits a real session.
+SESSION_KEYS = ["person_key", "course", "surface", "role"]
 
 
 def sessionize(messages: pd.DataFrame, gap_minutes: int | None = None) -> pd.DataFrame:
@@ -36,11 +38,16 @@ def sessionize(messages: pd.DataFrame, gap_minutes: int | None = None) -> pd.Dat
     gap_minutes = gap_minutes if gap_minutes is not None else CONFIG.session_gap_minutes
     if messages.empty:
         out = messages.copy()
+        if "role" not in out:
+            out["role"] = pd.Series(dtype="object")
         out["session_id"] = pd.Series(dtype="object")
         return out
 
     gap = pd.Timedelta(minutes=gap_minutes)
-    frame = messages.sort_values(SESSION_KEYS + ["ts"]).copy()
+    frame = messages.copy()
+    if "role" not in frame:  # frames built before roles existed are all students
+        frame["role"] = "student"
+    frame = frame.sort_values(SESSION_KEYS + ["ts"])
     delta = frame.groupby(SESSION_KEYS, dropna=False)["ts"].diff()
     # A row with no predecessor in its group starts a session; so does one that
     # follows more than `gap` of silence.
@@ -60,7 +67,7 @@ def session_frame(messages: pd.DataFrame, gap_minutes: int | None = None) -> pd.
     if tagged.empty:
         return pd.DataFrame(
             columns=[
-                "session_id", "person_key", "course", "surface", "channel_type",
+                "session_id", "person_key", "role", "course", "surface", "channel_type",
                 "started_at", "ended_at", "messages", "prompts", "replies",
                 "duration_minutes", "date", "week", "semester",
             ]
@@ -69,6 +76,7 @@ def session_frame(messages: pd.DataFrame, gap_minutes: int | None = None) -> pd.
     grouped = tagged.groupby("session_id", sort=False)
     sessions = grouped.agg(
         person_key=("person_key", "first"),
+        role=("role", "first"),
         course=("course", "first"),
         surface=("surface", "first"),
         channel_type=("channel_type", "first"),

@@ -166,7 +166,7 @@ def test_deleted_conversations_never_load(tmp_path):
 
 
 def test_excluded_accounts_are_dropped(tmp_path):
-    """Instructor and test accounts are not student usage."""
+    """Test rigs are dropped from every aggregate (ANLY-9: only test rigs)."""
     frame = pd.DataFrame(
         {
             "message_id": ["a", "b"],
@@ -180,7 +180,7 @@ def test_excluded_accounts_are_dropped(tmp_path):
             "direction": ["from", "from"],
             "content": ["hi", "hi"],
             "source": ["current"] * 2,
-            "handle": ["student042", "instructor"],
+            "handle": ["student042", "testbot"],
         }
     )
     merged, provenance = load.merge_messages(frame.iloc[:0], frame, Config())
@@ -303,7 +303,7 @@ def test_keyword_classifier_reads_the_students_words_not_the_bots():
     )
     texts = topics.session_texts(tagged)
     labelled = topics.classify_sessions(texts, method="keyword", use_cache=False)
-    assert labelled.loc[0, "topic"] == "Course material & content"
+    assert labelled.loc[0, "topic"] == "Course concepts"
 
 
 def test_topic_cache_is_keyed_by_content_not_position(tmp_path):
@@ -315,7 +315,7 @@ def test_topic_cache_is_keyed_by_content_not_position(tmp_path):
     )
     topics.classify_sessions(texts, method="keyword", config=config)
     cache = topics.load_cache(config.topic_cache)
-    assert list(cache) == [f"keyword:{topics.text_key('when is hw2 due')}"]
+    assert list(cache) == [f"v2-student:keyword:{topics.text_key('when is hw2 due')}"]
 
     renumbered = texts.assign(session_id=["s99"])
     again = topics.classify_sessions(renumbered, method="keyword", config=config)
@@ -325,8 +325,8 @@ def test_topic_cache_is_keyed_by_content_not_position(tmp_path):
 def test_agreement_rate_ignores_unaudited_rows():
     audited = pd.DataFrame(
         {
-            "topic": ["Assignments & homework", "Other", "Other"],
-            "hand_label": ["Assignments & homework", "Course material & content", ""],
+            "topic": ["Deadlines & schedule", "Other", "Other"],
+            "hand_label": ["Deadlines & schedule", "Course concepts", ""],
         }
     )
     assert topics.agreement_rate(audited) == {"checked": 2, "agreed": 1, "rate": 0.5}
@@ -717,3 +717,352 @@ def test_mock_run_refuses_real_input_paths(flag, tmp_path):
     )
     assert run.returncode == 2
     assert "--mock uses its own synthetic databases" in run.stderr
+
+
+# ── Staff and student roles (ANLY-9) ──────────────────────────────────────
+
+
+def _platform_db(tmp_path: Path, with_accounts: bool = True) -> Path:
+    """
+    A platform database with four people in org 'org' and one message each:
+    the linked owner, a person whose membership was revoked, an owner of a
+    different organization, and a plain student.
+    """
+    path = tmp_path / "roles.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(CURRENT_DDL)
+    if not with_accounts:
+        conn.executescript("DROP TABLE accounts; DROP TABLE memberships;")
+    conn.executemany("INSERT INTO organizations VALUES (?,?,0)", [("org", "Org"), ("org2", "Org 2")])
+    conn.execute("INSERT INTO courses VALUES ('crs','org','prj','Web Design',1,0)")
+    people = {"owner": "prof", "revoked": "ta", "foreign": "visitor", "plain": "stu"}
+    for person, handle in people.items():
+        conn.execute(
+            "INSERT INTO people VALUES (?,?,?,?,?,?,?,0,NULL,NULL,NULL,NULL,0)",
+            (person, "org", handle, f"{handle}@example.edu", "F", "L", handle),
+        )
+        conn.execute(
+            "INSERT INTO person_identities VALUES (?,?,?,?,?,0)",
+            (f"d_{person}", "org", person, "discord", f"9{len(person)}{ord(person[0])}"),
+        )
+        conn.execute(
+            "INSERT INTO conversations VALUES (?,?,?,?,?,NULL,NULL,NULL,0,0)",
+            (f"cnv_{person}", "org", "crs", person, "web"),
+        )
+        conn.execute(
+            "INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,NULL,NULL,1,?)",
+            (f"m_{person}", "org", f"cnv_{person}", person, "crs", "from_person", "hello",
+             "web", _ms(datetime(2026, 9, 3, 10, 0))),
+        )
+    if with_accounts:
+        conn.executemany(
+            "INSERT INTO accounts VALUES (?,?,?)",
+            [("acc_owner", "o@x.edu", "O"), ("acc_revoked", "r@x.edu", "R"), ("acc_foreign", "f@x.edu", "F")],
+        )
+        conn.executemany(
+            "INSERT INTO memberships VALUES (?,?,?,?)",
+            [("org", "acc_owner", "owner", None), ("org", "acc_revoked", "assistant", 5),
+             ("org2", "acc_foreign", "owner", None)],
+        )
+        conn.executemany(
+            "INSERT INTO person_identities VALUES (?,?,?,?,?,0)",
+            [("w1", "org", "owner", "web", "acc_owner"), ("w2", "org", "revoked", "web", "acc_revoked"),
+             ("w3", "org", "foreign", "web", "acc_foreign")],
+        )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _roles(frame: pd.DataFrame) -> dict:
+    return dict(zip(frame["message_id"].str.replace("current:m_", "", regex=False), frame["role"]))
+
+
+def test_staff_join_flags_the_linked_owner_only(tmp_path):
+    """An active membership in the message's org makes staff; revoked or foreign ones do not."""
+    roles = _roles(load.load_current(_platform_db(tmp_path)))
+    assert roles == {"owner": "staff", "revoked": "student", "foreign": "student", "plain": "student"}
+
+
+def test_roles_fall_back_to_handles_without_the_account_tables(tmp_path):
+    """Older files have no accounts/memberships: no crash, and nobody is staff by membership."""
+    frame = load.load_current(_platform_db(tmp_path, with_accounts=False))
+    assert set(frame["role"]) == {"student"}
+    config = Config(staff_handles=("prof",), excluded_handles=())
+    merged, provenance = load.merge_messages(frame.iloc[:0], frame, config, dedupe="id")
+    assert _roles(merged)["owner"] == "staff" and provenance["staff_rows"] == 1
+
+
+def test_a_handle_override_marks_staff_and_is_kept_in_the_frame():
+    frame = pd.DataFrame(
+        {
+            "message_id": ["a", "b"],
+            "ts": pd.to_datetime(["2026-09-03 10:00", "2026-09-03 10:01"]),
+            "person_key": ["discord:1", "discord:2"],
+            "course": ["Web Design"] * 2,
+            "surface": ["web"] * 2,
+            "category": [""] * 2,
+            "channel": [""] * 2,
+            "channel_type": ["Direct"] * 2,
+            "direction": ["from", "from"],
+            "content": ["hi", "hi"],
+            "source": ["current"] * 2,
+            "handle": ["student042", "Instructor Smith"],
+            "role": ["student", "student"],
+        }
+    )
+    merged, provenance = load.merge_messages(frame.iloc[:0], frame, Config())
+    assert dict(zip(merged["person_key"], merged["role"])) == {"discord:1": "student", "discord:2": "staff"}
+    assert provenance["staff_rows"] == 1 and provenance["excluded_account_rows"] == 0
+
+
+def test_legacy_messages_of_a_staff_person_are_staff(mock_dbs):
+    """Two-file mode: a legacy row whose person_key is a staff person in the current database."""
+    config = Config(
+        input_mode="two-file", legacy_db=mock_dbs / "legacy.db", current_db=mock_dbs / "current.db",
+        topic_cache=mock_dbs / "t.json",
+    )
+    merged, _ = load.load_messages(config)
+    owner_key = "discord:700999999999999999"
+    mine = merged[merged["person_key"] == owner_key]
+    assert set(mine["role"]) == {"staff"}
+    assert "legacy" in set(mine["source"]) or len(mine) > 0
+
+
+def test_role_survives_on_imported_legacy_messages(mock_dbs):
+    """Combined mode: the owner's imported history carries the staff role, through the discord key."""
+    config = Config(input_mode="combined", combined_db=mock_dbs / "combined.db", topic_cache=mock_dbs / "t.json")
+    merged, provenance = load.load_messages(config)
+    imported = merged[merged["message_id"].str.startswith("current:" + load.IMPORTED_PREFIX)]
+    owner = imported[imported["person_key"] == "discord:700999999999999999"]
+    assert len(owner) > 0 and set(owner["role"]) == {"staff"}
+    # The same single person appears on every surface.
+    staff = merged[merged["role"] == "staff"]
+    assert staff["person_key"].nunique() == 1 and {"discord", "web", "mcp"} <= set(staff["surface"])
+    assert provenance["staff_rows"] == len(staff)
+    assert provenance["excluded_account_rows"] > 0  # the test rig
+
+
+def test_mock_lookalikes_count_as_students(mock_dbs):
+    """A revoked membership and another org's owner are students, not staff."""
+    conn = sqlite3.connect(mock_dbs / "combined.db")
+    keys = {
+        f"discord:{r[0]}"
+        for r in conn.execute(
+            "SELECT d.external_id FROM person_identities w JOIN person_identities d "
+            "ON d.person_id = w.person_id AND d.surface='discord' "
+            "WHERE w.surface='web' AND w.external_id IN ('acc_revoked','acc_other_org')"
+        )
+    }
+    assert len(keys) == 2
+    config = Config(input_mode="combined", combined_db=mock_dbs / "combined.db", topic_cache=mock_dbs / "t.json")
+    merged, _ = load.load_messages(config)
+    seen = merged[merged["person_key"].isin(keys)]
+    assert len(seen) > 0 and set(seen["role"]) == {"student"}
+
+
+def test_student_measures_exclude_staff(mock_dbs):
+    """Sessions carry one role each, and a student-only summary counts no staff person."""
+    config = Config(input_mode="combined", combined_db=mock_dbs / "combined.db", topic_cache=mock_dbs / "t.json")
+    merged, _ = load.load_messages(config)
+    frame = sessions.session_frame(merged)
+    assert set(frame["role"]) == {"staff", "student"}
+    students = frame[frame["role"] == "student"]
+    assert "discord:700999999999999999" not in set(students["person_key"])
+    summary = sessions.usage_summary(students)
+    assert summary["students"] == students["person_key"].nunique()
+    assert summary["sessions"] == len(frame) - (frame["role"] == "staff").sum()
+    # A person has one role, so no session mixes the two.
+    assert frame.groupby("person_key")["role"].nunique().max() == 1
+
+
+def test_a_session_never_mixes_roles():
+    times = pd.to_datetime(["2026-09-03 10:00", "2026-09-03 10:01"])
+    frame = _messages(times).assign(role=["staff", "student"])
+    assert sorted(sessions.session_frame(frame)["role"]) == ["staff", "student"]
+
+
+# ── Topic sets (ANLY-10) ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("how many extensions do we have", "Course policies"),
+        ("can we use extensions for group projects", "Course policies"),
+        ("what about this one: Which of the following is a stateless protocol?", "Quiz & exam questions"),
+        ("should we fork or branch first", "Git & GitHub workflow"),
+        ("git pull before commit?", "Git & GitHub workflow"),
+        ("does webapp count as a subsystem for the project 5 requirement", "Project & assignment requirements"),
+        ("I can't find my team chat", "Discord & platform help"),
+        ("should it be a private channel", "Discord & platform help"),
+        ("hi", "Greetings & bot questions"),
+        ("are you there", "Greetings & bot questions"),
+        ("atlas or docker for mongodb", "Tools, setup & deployment"),
+        ("why isn't my test working?\ndef add(a, b): return a - b", "Code & debugging"),
+        ("I still wasn't assigned a group", "Team coordination"),
+        ("when is project 1 due", "Deadlines & schedule"),
+        ("hi, when is project 1 due", "Deadlines & schedule"),
+        ("how is the project graded", "Grades & grading"),
+        ("can you explain what a closure is", "Course concepts"),
+        ("ok sounds good", "Other"),
+    ],
+)
+def test_student_keyword_rules(text, expected):
+    assert topics.classify_keyword(text, "student") == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("are you there?", "Testing the bot"),
+        ("do you know who I am?", "Testing the bot"),
+        ("can you remember this number: 4417", "Testing the bot"),
+        ("@everyone - Bloombot is available in the course channels now", "Announcements"),
+        ("please make a new channel with the correct settings for the team", "Directing students"),
+        ("define merge hell to the students", "Demonstrating to class"),
+        ("what is the policy on extensions", "Course content & policy lookup"),
+        ("when is project 1 due", "Course content & policy lookup"),
+        ("can you rename the course?", "Course setup"),
+        ("ok sounds good", "Other"),
+    ],
+)
+def test_staff_keyword_rules(text, expected):
+    assert topics.classify_keyword(text, "staff") == expected
+
+
+def test_every_rule_label_belongs_to_its_set():
+    from bloombot_analysis.config import STAFF_TOPICS, STUDENT_TOPICS
+
+    assert {t for t, _ in topics.STUDENT_RULES} <= set(STUDENT_TOPICS)
+    assert {t for t, _ in topics.STAFF_RULES} <= set(STAFF_TOPICS)
+    assert set(topics.STUDENT_DESCRIPTIONS) == set(STUDENT_TOPICS)
+    assert set(topics.STAFF_DESCRIPTIONS) == set(STAFF_TOPICS)
+
+
+def test_mock_prompts_classify_to_their_intended_topic():
+    """The mock's prompts are the examples the rules are written against."""
+    mock = _mock_module()
+    for topic, prompts in mock.PROMPTS.items():
+        for prompt in prompts:
+            assert topics.classify_keyword(prompt, "student") == topic, prompt
+    for topic, prompts in mock.STAFF_PROMPTS.items():
+        for prompt in prompts:
+            assert topics.classify_keyword(prompt, "staff") == topic, prompt
+
+
+def test_sessions_are_classified_under_their_roles_set(tmp_path):
+    config = _config(tmp_path, None, None)
+    texts = pd.DataFrame(
+        {
+            "session_id": ["s1", "s2"], "role": ["student", "staff"], "course": ["Web Design"] * 2,
+            "text": ["when is hw2 due"] * 2, "student_text": ["when is hw2 due"] * 2,
+        }
+    )
+    out = topics.classify_sessions(texts, method="keyword", config=config)
+    assert list(out["topic"]) == ["Deadlines & schedule", "Course content & policy lookup"]
+    assert set(topics.load_cache(config.topic_cache)) == {
+        f"v2-student:keyword:{topics.text_key('when is hw2 due')}",
+        f"v2-staff:keyword:{topics.text_key('when is hw2 due')}",
+    }
+
+
+def test_a_v1_cache_entry_is_not_reused(tmp_path):
+    """Labels from the nine-label set must never be served under the new sets."""
+    config = _config(tmp_path, None, None)
+    key = topics.text_key("when is hw2 due")
+    topics.save_cache({f"keyword:{key}": "Syllabus, schedule & deadlines"}, config.topic_cache)
+    texts = pd.DataFrame(
+        {"session_id": ["s1"], "course": ["Web Design"], "text": ["Student: when is hw2 due"],
+         "student_text": ["when is hw2 due"]}
+    )
+    out = topics.classify_sessions(texts, method="keyword", config=config)
+    assert out.loc[0, "topic"] == "Deadlines & schedule"
+    assert out.loc[0, "topic_method"] == "keyword"
+
+
+def test_staff_prompt_says_it_classifies_an_instructors_conversation(monkeypatch):
+    sent = {}
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.chat = type("C", (), {"completions": self})()
+
+        def create(self, **kwargs):
+            sent.update(kwargs)
+            message = type("M", (), {"content": "Announcements"})()
+            return type("R", (), {"choices": [type("Ch", (), {"message": message})()]})()
+
+    monkeypatch.setitem(sys.modules, "openai", type("Mod", (), {"OpenAI": FakeOpenAI}))
+    monkeypatch.setenv("OPENAI_API_KEY", "not-a-real-key")
+    assert topics.classify_openai("@everyone hello", "Web Design", "staff") == "Announcements"
+    system = sent["messages"][0]["content"]
+    assert "instructor" in system and "- Testing the bot:" in system and "Quiz & exam" not in system
+    topics.classify_openai("when is hw2 due", "Web Design", "student")
+    assert "- Quiz & exam questions:" in sent["messages"][0]["content"]
+
+
+def test_audit_sample_records_role_and_agreement_reports_per_role():
+    sessions_frame = pd.DataFrame(
+        {
+            "session_id": [f"s{i}" for i in range(6)],
+            "role": ["student"] * 4 + ["staff"] * 2,
+            "course": "Web Design", "topic": ["Other"] * 6, "text": "x",
+        }
+    )
+    sample = topics.audit_sample(sessions_frame, n=3)
+    assert set(sample["role"]) == {"student", "staff"} and (sample["role"] == "staff").sum() == 2
+    audited = sample.assign(hand_label="Other")
+    audited.loc[audited["role"] == "staff", "hand_label"] = "Testing the bot"
+    result = topics.agreement_rate(audited)
+    assert result["by_role"]["student"]["rate"] == 1.0 and result["by_role"]["staff"]["rate"] == 0.0
+
+
+def test_topic_tables_take_the_label_set():
+    from bloombot_analysis.config import STAFF_TOPICS
+
+    assert list(topics.topic_counts(pd.DataFrame(), STAFF_TOPICS)["topic"]) == STAFF_TOPICS
+    frame = pd.DataFrame({"course": ["a"], "topic": ["Announcements"]})
+    assert list(topics.topic_by(frame, "course", STAFF_TOPICS).columns) == STAFF_TOPICS
+
+
+# ── The report's staff section (ANLY-9) ───────────────────────────────────
+
+
+def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
+    """Run the whole notebook chain on the mock data; the report gains the staff slides."""
+    out = mock_dbs / "report-out"
+    env = {
+        **os.environ,
+        "BLOOMBOT_ANALYSIS_INPUT": "two-file",
+        "BLOOMBOT_ANALYSIS_LEGACY_DB": str(mock_dbs / "legacy.db"),
+        "BLOOMBOT_ANALYSIS_CURRENT_DB": str(mock_dbs / "current.db"),
+        "BLOOMBOT_ANALYSIS_COMBINED_DB": str(mock_dbs / "combined.db"),
+        "BLOOMBOT_ANALYSIS_TOPIC_CACHE": str(mock_dbs / "report_topics.json"),
+        "BLOOMBOT_ANALYSIS_OUT_DIR": str(out),
+        "BLOOMBOT_ANALYSIS_AS_OF": "2026-09-25",
+        "MPLBACKEND": "Agg",
+    }
+    # Execute copies of the notebooks, so the committed ones are never rewritten.
+    code = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import nbformat\nfrom nbclient import NotebookClient\n"
+        "from pathlib import Path\n"
+        "import run_all\n"
+        "for name in run_all.NOTEBOOKS:\n"
+        "    nb = nbformat.read(Path(%r) / name, as_version=4)\n"
+        "    NotebookClient(nb, timeout=300, resources={'metadata': {'path': %r}}).execute()\n"
+    ) % (str(REPO_ROOT / "analysis"), str(REPO_ROOT / "analysis" / "notebooks"), str(REPO_ROOT))
+    subprocess.run([sys.executable, "-c", code], check=True, env=env, capture_output=True)
+
+    text = (out / "USAGE_REPORT.md").read_text()
+    assert "## S22 · Staff use it too, and it is counted separately" in text
+    assert "What staff used it for" in text
+    assert "Testing the bot" in text and "Quiz & exam questions" in text
+    metrics = json.loads((out / "metrics.json").read_text())
+    staff, dataset = metrics["staff"], metrics["dataset"]
+    assert staff["messages"] > 0 and dataset["staff_rows"] == staff["messages"]
+    # Student figures are students only: the staff session count is not in them.
+    assert dataset["sessions"] == staff["all_sessions"] - staff["sessions"]
+    assert "quote" not in json.dumps(staff).lower()
+    assert [s for s in staff["purposes"]][0]["topic"] in {p["topic"] for p in staff["purposes"]}

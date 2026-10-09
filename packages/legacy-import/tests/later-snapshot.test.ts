@@ -264,6 +264,8 @@ describe('parseCliArgs --source (MIG-5)', () => {
       snapshotPath: 's.db',
       yamlPath: 'c.yml',
       source: 'b',
+      organizationId: undefined,
+      routes: [],
     })
     expect(
       parseCliArgs(['--source=b', 's.db', 'c.yml', '--i-know']).source
@@ -284,5 +286,45 @@ describe('parseCliArgs --source (MIG-5)', () => {
     expect(() => parseCliArgs(['--source', '--i-know', 's.db'])).toThrow(
       /non-empty/
     )
+  })
+})
+
+/** A one-person snapshot holding `copies` identical "hi" messages in the same second. */
+function twinsSnapshot(copies: number): LegacyFixture {
+  const f = createLegacyFixture()
+  const alice = f.insertUser({ discordId: ALICE })
+  for (let i = 0; i < copies; i += 1) f.insertMessage(message(alice, 'hi', 0))
+  f.close()
+  fixtures.push(f)
+  return f
+}
+
+describe('identical messages are counted, not collapsed (MIG-5)', () => {
+  it('A has one "hi", B has two: --source b creates one, and a re-run creates none', () => {
+    testDb = createTestPlatformDatabase()
+    fixtures = []
+    yamlFixture = writeLegacyYamlFixture(twoCourseConfig('Twins Server'))
+    run(twinsSnapshot(1).path)
+    const b = twinsSnapshot(2)
+    const first = run(b.path, 'b')
+    expect(first.messages).toMatchObject({ created: 1, matchedByContent: 1 })
+    const again = run(b.path, 'b')
+    expect(again.messages).toMatchObject({ created: 0, matched: 1 })
+    expect(allContents(again)).toEqual(['hi', 'hi'])
+  })
+
+  it('a re-run after a partial run still creates the row the crash left out', () => {
+    testDb = createTestPlatformDatabase()
+    fixtures = []
+    yamlFixture = writeLegacyYamlFixture(twoCourseConfig('Twins Server'))
+    // The crashed run got as far as appending row 1 (id 1, no label).
+    run(twinsSnapshot(1).path)
+    const full = run(twinsSnapshot(2).path)
+    expect(full.messages).toMatchObject({
+      created: 1,
+      matched: 1,
+      matchedByContent: 0,
+    })
+    expect(allContents(full)).toEqual(['hi', 'hi'])
   })
 })

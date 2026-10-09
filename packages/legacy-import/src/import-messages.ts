@@ -173,8 +173,9 @@ function loadExistingFingerprints(
   organizationId: string,
   courses: RoutableCourse[],
   db: Database
-): Map<string, number> {
+): { counts: Map<string, number>; fingerprintById: Map<string, string> } {
   const counts = new Map<string, number>()
+  const fingerprintById = new Map<string, string>()
   for (const course of courses) {
     for (const conversation of conversationsRepo.listConversationsForCourse(
       organizationId,
@@ -193,10 +194,30 @@ function loadExistingFingerprints(
           message.content
         )
         counts.set(key, (counts.get(key) ?? 0) + 1)
+        fingerprintById.set(message.id, key)
       }
     }
   }
-  return counts
+  return { counts, fingerprintById }
+}
+
+/** MIG-5 — a `--route` rule: legacy categories whose prefix (before ' - ') is `prefix` go to `courseId`. */
+export interface CategoryRoute {
+  prefix: string
+  courseId: string
+}
+
+/** MIG-5 — how to place a message into an organization this importer did not create. */
+export interface ImportMessagesOptions {
+  /** Match category names ignoring case and surrounding whitespace. */
+  looseCategories?: boolean
+  /** Explicit rules; they win over a declared category. */
+  routes?: CategoryRoute[]
+}
+
+/** The part of a category name before ' - ' (the whole name if there is none), normalised for matching. */
+function categoryPrefix(category: string): string {
+  return (category.split(' - ')[0] ?? category).trim().toLowerCase()
 }
 
 /**
@@ -240,17 +261,53 @@ export function importMessages(
   personByLegacyUserId: Map<number, string>,
   courses: RoutableCourse[],
   db: Database,
-  source?: string
+  source?: string,
+  options: ImportMessagesOptions = {}
 ): ImportMessagesResult {
-  const { index: categoryIndex, duplicates: duplicateCategories } =
-    buildCategoryIndex(courses)
+  const loose = options.looseCategories === true
+  const normalise = (name: string): string =>
+    loose ? name.trim().toLowerCase() : name
+  const { index: rawIndex, duplicates: duplicateCategories } =
+    buildCategoryIndex(
+      loose
+        ? courses.map((course) => ({
+            ...course,
+            categoryNames: course.categoryNames.map(normalise),
+          }))
+        : courses
+    )
+  const categoryIndex = rawIndex
+  const routeByPrefix = new Map(
+    (options.routes ?? []).map((route) => [
+      route.prefix.trim().toLowerCase(),
+      route.courseId,
+    ])
+  )
   const existingMessageIds = loadExistingMessageIds(organizationId, courses, db)
 
-  const existingFingerprints = loadExistingFingerprints(
-    organizationId,
-    courses,
-    db
-  )
+  const { counts: existingFingerprints, fingerprintById } =
+    loadExistingFingerprints(organizationId, courses, db)
+
+  const idFor = (legacyId: number): string =>
+    source === undefined
+      ? deterministicId('legacy-message', organizationId, String(legacyId))
+      : deterministicId(
+          'legacy-message',
+          organizationId,
+          source,
+          String(legacyId)
+        )
+
+  // A row already imported under its own id owns one copy of its fingerprint.
+  // Take those copies out first, so a sibling row with the same fingerprint
+  // (a partial earlier run left one of two identical messages behind) is not
+  // mistaken for a copy of it and swallowed as `matchedByContent`.
+  for (const legacyMessage of legacyMessages) {
+    const key = fingerprintById.get(idFor(legacyMessage.id))
+    if (key !== undefined) {
+      existingFingerprints.set(key, (existingFingerprints.get(key) ?? 1) - 1)
+    }
+  }
 
   let created = 0
   let matched = 0
@@ -258,7 +315,9 @@ export function importMessages(
   const unplaceable: UnplaceableMessage[] = []
 
   for (const legacyMessage of legacyMessages) {
-    const courseId = categoryIndex.get(legacyMessage.category)
+    const courseId =
+      routeByPrefix.get(categoryPrefix(legacyMessage.category)) ??
+      categoryIndex.get(normalise(legacyMessage.category))
     const personId = personByLegacyUserId.get(legacyMessage.userId)
 
     if (!courseId) {
@@ -293,19 +352,7 @@ export function importMessages(
       continue
     }
 
-    const messageId =
-      source === undefined
-        ? deterministicId(
-            'legacy-message',
-            organizationId,
-            String(legacyMessage.id)
-          )
-        : deterministicId(
-            'legacy-message',
-            organizationId,
-            source,
-            String(legacyMessage.id)
-          )
+    const messageId = idFor(legacyMessage.id)
     if (existingMessageIds.has(messageId)) {
       matched += 1
       continue

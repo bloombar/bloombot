@@ -1870,7 +1870,11 @@ rather than imported again, and only the genuinely new messages are added, to th
 course and conversation they belong to. Without a label it behaves exactly as before, so
 the first import can still be re-run unchanged. The report separates messages created,
 matched by id, matched by content and unplaced, and a message that cannot be placed is
-reported rather than dropped.
+reported rather than dropped. The import
+can also target an organization that already exists — one whose courses were created by
+hand or by an earlier import — placing messages by the categories those courses declare
+(ignoring case) or by explicit rules naming a course, and creating only people,
+conversations and messages, never an organization, project or course.
 
 ### 30. Conversation Core
 

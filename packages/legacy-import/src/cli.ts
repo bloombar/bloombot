@@ -63,11 +63,11 @@ function main(): void {
     process.exitCode = 1
     return
   }
-  const { snapshotPath, yamlPath, source } = parsed
+  const { snapshotPath, yamlPath, source, organizationId, routes } = parsed
 
   if (!snapshotPath || !yamlPath) {
     console.error(
-      'Usage: legacy:import <path-to-snapshot.db> <path-to-bot_config.yml> [--source <label>] [--i-know]'
+      'Usage: legacy:import <path-to-snapshot.db> <path-to-bot_config.yml> [--source <label>] [--organization <id> [--route "<prefix>=<course id>"]...] [--i-know]'
     )
     process.exitCode = 1
     return
@@ -93,6 +93,7 @@ function main(): void {
       yamlPath,
       db,
       ...(source === undefined ? {} : { source }),
+      ...(organizationId === undefined ? {} : { organizationId, routes }),
     })
     printReport(report)
 

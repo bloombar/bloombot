@@ -14540,3 +14540,17 @@ therefore collided with already-imported rows: a new row was counted as `matched
   and a failed run is repaired by re-running, which MIG-4's idempotency makes safe. MIG-5 keeps that.
 - **Known limit.** A message edited between snapshots, or timestamped differently, is not recognised as the same and
   imports as new. Use a rehearsal's `matchedByContent` against the expected overlap to catch it.
+- **Timezone.** Legacy datetimes are timezone-free and read as local time, so the content match depends on `TZ`; a
+  later import must use the first import's `TZ` (CUTOVER 2.4a).
+- **A row matched by id owns its fingerprint (rework).** Before the loop, every row already present under its own id
+  takes one copy out of the fingerprint counts. Otherwise, after a partial run left one of two identical messages
+  behind, the re-run swallowed the other as a content match and lost it (a MIG-4 regression).
+- **Importing into an existing organization (`--organization`, `--route`).** The real target is a platform
+  organization with a UUID id whose courses already exist, so the YAML-derived organization is wrong for it. With
+  `organizationId` the importer validates the organization and every route's course first (throwing before any write),
+  skips the YAML and `importConfig`, and imports only people and messages. The YAML positional stays so the argument
+  list is unchanged; it is ignored and may be `-`. Categories are matched against all the organization's
+  `course_categories` names trimmed and case-insensitively (the original path stays exact, as before). A route is
+  `<prefix>=<course id>`, the prefix being the text before ` - ` compared case-insensitively; a route wins over a
+  declared category, and `--route` without `--organization` is refused. A category nothing matches stays
+  `unplaceable`. The report's `project` is empty and `courses.matched` is the number of courses available.

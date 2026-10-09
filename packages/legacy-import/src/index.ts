@@ -33,6 +33,8 @@ export type {
   DuplicateCategory,
   ImportMessagesResult,
   RoutableCourse,
+  CategoryRoute,
+  ImportMessagesOptions,
 } from './import-messages.js'
 
 export { parseCliArgs } from './cli-args.js'

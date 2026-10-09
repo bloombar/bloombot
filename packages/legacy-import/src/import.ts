@@ -38,7 +38,12 @@
  * second organization.
  */
 
-import { closeDatabase, type Database } from '@bloombot/db'
+import {
+  closeDatabase,
+  courses as coursesRepo,
+  organizations as organizationsRepo,
+  type Database,
+} from '@bloombot/db'
 
 import { assertLegacySnapshotPath } from './guard.js'
 import {
@@ -47,7 +52,7 @@ import {
   type CourseImportOutcome,
 } from './import-config.js'
 import { loadRoutableCourses, importMessages } from './import-messages.js'
-import type { ImportMessagesResult } from './import-messages.js'
+import type { CategoryRoute, ImportMessagesResult } from './import-messages.js'
 import { importPeople, type PersonImportOutcome } from './import-people.js'
 import {
   openLegacySnapshot,
@@ -67,6 +72,15 @@ export interface RunImportOptions {
   projectName?: string
   /** MIG-5 — label for this legacy database lineage; see `importMessages`. Omit for the original import. */
   source?: string
+  /**
+   * MIG-5 — import into this EXISTING organization instead of creating one
+   * from the YAML. Nothing but people, identities, conversations and messages
+   * is created; the YAML is not read. Courses are matched through their
+   * `course_categories` names (case-insensitively) and `routes`.
+   */
+  organizationId?: string
+  /** MIG-5 — explicit category-prefix to course rules; only with `organizationId`. */
+  routes?: CategoryRoute[]
 }
 
 /** The full report `runImport` returns — what it created, matched, and could not place (MIG-4). */
@@ -106,6 +120,20 @@ export function runImport(options: RunImportOptions): ImportReport {
     legacyMessages = readLegacyMessages(legacyDb)
   } finally {
     legacyDb.close()
+  }
+
+  if (options.organizationId !== undefined) {
+    return runImportIntoExisting(
+      options.organizationId,
+      legacyUsers,
+      legacyMessages,
+      db,
+      source,
+      options.routes ?? []
+    )
+  }
+  if (options.routes && options.routes.length > 0) {
+    throw new Error('--route needs --organization.')
   }
 
   const config = loadLegacyConfig(yamlPath)
@@ -172,6 +200,73 @@ export function runImport(options: RunImportOptions): ImportReport {
       skippedReasons: peopleSkipped,
     },
     messages: messagesResult,
+  }
+}
+
+/**
+ * MIG-5 — the existing-organization path: validate the organization and every
+ * route's course up front (nothing is written if either is wrong), then import
+ * people and messages only. The organization, its project and its courses are
+ * never created or changed. The report's `project` is `{ id: '', created: false }`
+ * and `courses` all zero, since this path does not touch them.
+ */
+function runImportIntoExisting(
+  organizationId: string,
+  legacyUsers: ReturnType<typeof readLegacyUsers>,
+  legacyMessages: ReturnType<typeof readLegacyMessages>,
+  db: Database,
+  source: string | undefined,
+  routes: CategoryRoute[]
+): ImportReport {
+  if (!organizationsRepo.getOrganizationById(organizationId, db)) {
+    throw new Error(`Organization '${organizationId}' does not exist.`)
+  }
+  for (const route of routes) {
+    if (!coursesRepo.getCourse(organizationId, route.courseId, db)) {
+      throw new Error(
+        `--route course '${route.courseId}' does not exist in organization '${organizationId}'.`
+      )
+    }
+  }
+
+  const peopleOutcomes = importPeople(organizationId, legacyUsers, db)
+  const personByLegacyUserId = new Map<number, string>()
+  for (const outcome of peopleOutcomes) {
+    if (outcome.ok)
+      personByLegacyUserId.set(outcome.legacyUserId, outcome.personId)
+  }
+
+  const routableCourses = loadRoutableCourses(
+    organizationId,
+    coursesRepo.listCourses(organizationId, db).map((course) => course.id),
+    db
+  )
+  const messages = importMessages(
+    organizationId,
+    legacyMessages,
+    personByLegacyUserId,
+    routableCourses,
+    db,
+    source,
+    { looseCategories: true, routes }
+  )
+  const peopleSkipped = peopleOutcomes.filter((outcome) => !outcome.ok)
+  return {
+    organization: { id: organizationId, created: false },
+    project: { id: '', created: false },
+    courses: {
+      created: 0,
+      matched: routableCourses.length,
+      skipped: 0,
+      conflicts: [],
+    },
+    people: {
+      created: peopleOutcomes.filter((o) => o.ok && o.created).length,
+      matched: peopleOutcomes.filter((o) => o.ok && !o.created).length,
+      skipped: peopleSkipped.length,
+      skippedReasons: peopleSkipped,
+    },
+    messages,
   }
 }
 

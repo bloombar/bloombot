@@ -143,6 +143,7 @@ import {
   type CourseEditorTab,
   type Route,
 } from '../routing/route.js'
+import { DangerZoneSection } from '../components/DangerZoneSection.js'
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
@@ -2157,13 +2158,7 @@ export function CourseEditor({
                     refuse teaches nothing but a click that fails" reasoning
                     `components/Team.tsx`'s own Danger zone already gives. */}
                 {isOwner && (
-                  <section
-                    aria-label="Danger zone"
-                    className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
-                  >
-                    <h2 className="text-section-title font-semibold text-danger-700">
-                      Danger zone
-                    </h2>
+                  <DangerZoneSection title="Danger zone">
                     {deleteError && <ErrorMessage error={deleteError} />}
                     <Button
                       variant="destructive"
@@ -2175,7 +2170,7 @@ export function CourseEditor({
                     >
                       {deleting ? 'Deleting…' : 'Delete course'}
                     </Button>
-                  </section>
+                  </DangerZoneSection>
                 )}
               </>
             )}

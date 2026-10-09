@@ -509,6 +509,43 @@ because the position-keyed `data/topic_classifications.json` is invalid for the 
 is never applied to it. `analytics.ipynb` loads through the shared loader rather than querying the
 database itself, and ships without outputs.
 
+#### ANLY-9 Staff usage reported separately from student usage
+
+Every message is tagged with the sender's role in its course, `staff` or `student`. Staff are
+course owners, instructors and assistants: anyone whose person record is linked to an active
+(not revoked) membership in the course's organization, plus anyone whose handle matches the
+configured list, which stays as a manual override. Staff use the bot for different reasons
+(demonstrations in class, testing it, announcements, quick lookups while teaching), so their
+messages are no longer mixed into student figures. Student-facing measures (adoption, sessions,
+session shape, topics, quotes) count students only. Staff usage is reported in its own section,
+which states how many staff messages and sessions there were and what share of all traffic they
+make up. A session belongs to one role, because a person has one role in a course.
+
+#### ANLY-10 Topic sets that fit the questions people actually ask
+
+The original nine topic labels left over a third of real sessions as "Other", so they are
+replaced by two label sets. Student sessions use: Project & assignment requirements; Deadlines &
+schedule; Grades & grading; Course policies (extensions, late work, attendance, AI use); Course
+concepts; Quiz & exam questions; Code & debugging; Git & GitHub workflow; Tools, setup &
+deployment; Team coordination; Discord & platform help; Greetings & bot questions; Other. Staff
+sessions use a set of purposes: Testing the bot; Demonstrating to class; Announcements;
+Directing students; Course content & policy lookup; Course setup; Other. Both the keyword
+classifier and the model classifier use the set that matches the session's role. Cache keys
+include the label set's version, so a label made under the old set is never reused. The topic
+audit records the role of each sampled session, so agreement can be reported for each set.
+
+#### ANLY-11 Enrolled students and registered users are reported separately
+
+The platform's `enrolments` table is not a class roster. A Discord-role enrolment is created only
+when a role holder messages the bot, and no roster is ever imported, so it lists the students who
+have registered with the bot, not everyone taking the course. The analysis therefore uses two
+terms consistently. **Enrolled students** are the official class sizes per course and term,
+entered by hand in the analysis configuration as headcounts only (no names, no roster). **Users**
+(registered users) are the students the platform knows about through an enrolment. The report
+states, per course and in total, how many enrolled students are registered users and how many
+were active, both as shares of enrolled students. Where no class size is configured for a
+course, those shares are shown as unavailable rather than computed against registered users.
+
 ### 10. Operations & Deployment
 
 #### OPS-1 Python environment

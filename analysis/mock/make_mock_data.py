@@ -13,7 +13,12 @@ known to handle them before the real files arrive:
   this term's Discord, web and chat-assistant traffic;
 * a **soft-deleted conversation** and a **deleted person**, which must not
   appear in any aggregate;
-* an **instructor account**, which must be excluded as a non-student;
+* a **course owner** (ANLY-9) who is staff because a web identity of theirs holds
+  an account with an active membership: they post across all four courses, in
+  other students' private channels, on Discord, web and the chat assistant, and
+  have imported legacy history. Two lookalikes must stay students: a person whose
+  membership was **revoked**, and an owner of a *different* organization;
+* a **test account** ("testbot"), which is dropped from every aggregate;
 * a course with **enrolments but almost no usage**, so adoption is not uniform;
 * **partial-term data**: this fall stops at the as-of date, three weeks into a
   fifteen-week term.
@@ -32,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import random
 import shutil
 import sqlite3
@@ -47,7 +53,37 @@ sys.path.insert(0, str(REPO_ROOT / "analysis"))
 AS_OF = date(2026, 9, 25)
 FALL_2025 = (date(2025, 9, 3), date(2025, 12, 16))
 SPRING_2026 = (date(2026, 1, 20), date(2026, 5, 12))
+# Summer-course traffic starts in mid-May, inside the analysis's widened Summer
+# 2026 window (11 May - 19 Aug) and overlapping the end of Spring (ANLY-11).
+SUMMER_2026_MOCK = (date(2026, 5, 13), date(2026, 6, 20))
 FALL_2026_START = date(2026, 9, 2)
+
+# ANLY-11. Mock class sizes, larger than the registered counts above so the
+# report shows the gap between enrolled students and registered users.
+# "Introduction to Programming" is left out on purpose: no class size, so its
+# shares must come out as unavailable. Written beside the databases and read
+# through the config's BLOOMBOT_ANALYSIS_CLASS_SIZES override.
+MOCK_CLASS_SIZES = {
+    "fall_2025": {
+        "Software Engineering": 50,
+        "Agile Software Development & DevOps": 40,
+        "Web Design": 35,
+    },
+    "summer_2026": {
+        "Introduction to Programming": 50,
+        "Web Design": 30,
+    },
+    "spring_2026": {
+        "Software Engineering": 55,
+        "Agile Software Development & DevOps": 38,
+        "Web Design": 36,
+    },
+    "fall_2026": {
+        "Software Engineering": 60,
+        "Agile Software Development & DevOps": 45,
+        "Web Design": 40,
+    },
+}
 
 COURSES = [
     ("Software Engineering", "Software Engineering", 34),
@@ -60,54 +96,116 @@ COURSES = [
 # them apart, and the mock report has to read like a real one, so these are
 # written as a student would actually type them.
 PROMPTS = {
-    "Syllabus, schedule & deadlines": [
+    "Project & assignment requirements": [
+        "does a mobile app count as a component for the milestone 2 requirement",
+        "what are the user stories we need to hand in",
+        "how big should the backlog be for this milestone",
+        "what exactly does assignment 3 ask for",
+        "where is the starter code for this assignment",
+    ],
+    "Deadlines & schedule": [
         "when is the next assignment due",
         "is the deadline for the project extended?",
         "what's on the schedule for next week",
-        "can I submit the homework late if I'm sick",
+        "what time is class on thursday",
     ],
-    "Assignments & homework": [
-        "what exactly does assignment 3 ask for",
-        "do we have to submit the homework as a zip or a repo link",
-        "I don't understand the requirements for the lab exercise",
-        "where is the starter code for this assignment",
+    "Grades & grading": [
+        "how is the project graded",
+        "what is the rubric for the midterm",
+        "how much is the final worth of my grade",
     ],
-    "Technical setup & tools": [
-        "I get an error when I run npm install, what do I do",
-        "how do I set up the virtual environment on a mac",
-        "git says there is a merge conflict, how do I fix it",
-        "docker won't start on port 3000, is that normal",
-        "vs code can't find python on my path",
+    "Course policies": [
+        "are late days or extensions available this term",
+        "do extensions apply to pair assignments",
+        "is using chatgpt allowed for the homework",
+        "what happens if I miss attendance one week",
     ],
-    "Course material & content": [
+    "Course concepts": [
         "can you explain what a closure is",
         "what is the difference between an interface and an abstract class",
         "why does the lecture say to avoid global state",
         "I don't understand the slide about normalization",
     ],
-    "Grades & assessment": [
-        "how is the project graded",
-        "what is the rubric for the midterm",
-        "how much is the final worth of my grade",
+    "Quiz & exam questions": [
+        "Which of the following describes an idempotent request?",
+        "true or false: a set keeps its order",
+        "is the quiz open book",
     ],
-    "Team projects & collaboration": [
-        "my teammate hasn't pushed anything, what should we do",
-        "how should our group split up the sprint work",
-        "can we change team members for the final project",
+    "Code & debugging": [
+        "my unit test is not working: def mul(a, b): return a + b",
+        "I get a traceback when I call the function with None",
+        "my loop never ends and I can't find the bug",
     ],
-    "Resources & references": [
-        "is there a tutorial you recommend for this",
-        "where can I find the reading for this week",
-        "do you have an example of a good documentation page",
+    "Git & GitHub workflow": [
+        "do I make a feature branch before opening a pull request",
+        "git says there is a merge conflict, how do I fix it",
+        "should I rebase before I push my commits?",
     ],
-    "Professor & office hours": [
-        "when are office hours this week",
-        "can I meet with the professor about my project",
+    "Tools, setup & deployment": [
+        "should I use a managed postgres or run it in a container",
+        "how do I deploy this to a cloud server",
+        "how do I set up the virtual environment on a mac",
+        "npm install keeps hanging on my laptop",
     ],
-    "Other": [
+    "Team coordination": [
+        "nobody told me which team I'm on",
+        "my teammate hasn't replied in days, what should we do",
+        "how should our group split up the work",
+        "can we change team members after week three",
+    ],
+    "Discord & platform help": [
+        "my group's channel disappeared",
+        "does the channel have to be invite-only",
+        "how do I connect my account",
+    ],
+    "Greetings & bot questions": [
         "hi",
         "thanks!",
-        "are you a real person",
+        "are you a bot or a person",
+        "what's your name",
+    ],
+    "Other": [
+        "ok sounds good",
+        "lol that's funny",
+        "never mind",
+    ],
+}
+
+# What a course owner types (ANLY-9/10): testing the bot, demonstrating it in
+# class, announcements, directing it at students, lookups and course setup.
+STAFF_PROMPTS = {
+    "Testing the bot": [
+        "hello, can you hear me?",
+        "do you recognize my name?",
+        "who built you?",
+        "remember this code word: tulip",
+    ],
+    "Demonstrating to class": [
+        "explain what a sprint review is to the class",
+        "describe dependency hell to everyone",
+        "explain polymorphism to everyone in two sentences",
+    ],
+    "Announcements": [
+        "@everyone the study bot is live in the course channels starting today",
+        "@here reminder: class is moved to room 204 on Thursday",
+    ],
+    "Directing students": [
+        "please create a new channel for the design group",
+        "help the student locate the sprint 2 rubric",
+        "tell the students to check the syllabus",
+    ],
+    "Course content & policy lookup": [
+        "what is the rule about late homework",
+        "when is the third assignment due",
+        "what are the office hours for this course",
+    ],
+    "Course setup": [
+        "please change the course title to Intro to Python",
+        "upload the new syllabus as course material",
+    ],
+    "Other": [
+        "ok sounds good",
+        "never mind",
     ],
 }
 
@@ -121,10 +219,10 @@ REPLIES = [
 # Which topics each course skews toward, so the by-course chart has something
 # real to show.
 COURSE_TOPIC_WEIGHTS = {
-    "Software Engineering": {"Team projects & collaboration": 3, "Technical setup & tools": 3, "Assignments & homework": 2},
-    "Agile Software Development & DevOps": {"Technical setup & tools": 4, "Team projects & collaboration": 3},
-    "Introduction to Programming": {"Course material & content": 4, "Technical setup & tools": 3, "Assignments & homework": 3},
-    "Web Design": {"Course material & content": 2, "Resources & references": 3, "Assignments & homework": 2},
+    "Software Engineering": {"Team coordination": 3, "Project & assignment requirements": 3, "Git & GitHub workflow": 2},
+    "Agile Software Development & DevOps": {"Tools, setup & deployment": 4, "Team coordination": 3, "Git & GitHub workflow": 2},
+    "Introduction to Programming": {"Course concepts": 4, "Code & debugging": 3, "Tools, setup & deployment": 3},
+    "Web Design": {"Course concepts": 2, "Discord & platform help": 2, "Project & assignment requirements": 2},
 }
 
 
@@ -175,6 +273,10 @@ class MockSession:
     topic: str
     channel_kind: str
     messages: list = field(default_factory=list)
+    # Staff sessions draw from STAFF_PROMPTS; `channel_name` is the student
+    # whose private channel a staff message was posted in (default: the sender's).
+    staff: bool = False
+    channel_name: str = ""
 
 
 def build_messages(rng: random.Random, session: MockSession) -> list:
@@ -182,7 +284,8 @@ def build_messages(rng: random.Random, session: MockSession) -> list:
     out = []
     when = session.started
     for _ in range(session.turns):
-        out.append((when, "from", rng.choice(PROMPTS[session.topic])))
+        pool = STAFF_PROMPTS if session.staff else PROMPTS
+        out.append((when, "from", rng.choice(pool[session.topic])))
         when += timedelta(seconds=rng.randrange(4, 25))
         out.append((when, "to", rng.choice(REPLIES)))
         # Think time stays under the 30-minute gap, so a session stays one session.
@@ -368,13 +471,23 @@ def main() -> None:
             everyone.append(person)
         students[title] = roster
 
-    instructor = {
+    # Staff by membership, not by name: the handle matches no override.
+    owner = {
         "discord_id": 700999999999999999,
-        "handle": "instructor",
-        "person_id": "per_instructor",
+        "handle": "prof.rivera",
+        "person_id": "per_owner",
         "course": COURSES[0][0],
     }
-    everyone.append(instructor)
+    testbot = {
+        "discord_id": 700999999999999998,
+        "handle": "testbot",
+        "person_id": "per_testbot",
+        "course": COURSES[0][0],
+    }
+    everyone += [owner, testbot]
+    # Students that look like staff but are not (see the module docstring).
+    revoked_person = students[COURSES[1][0]][1]
+    other_org_person = students[COURSES[2][0]][1]
 
     # Who actually uses the bot: a share of each roster, varying by course, so
     # adoption is something to measure rather than a foregone 100%.
@@ -398,6 +511,13 @@ def main() -> None:
         historical += build_sessions(
             rng, active, [c[0] for c in COURSES], start, end, ["discord"]
         )
+    # Summer-course traffic in mid-May 2026: it must be counted under Summer 2026,
+    # not Spring, though `semester_of` calls May Spring. Own generator so the
+    # rest of the mock data is unchanged.
+    historical += build_sessions(
+        random.Random(args.seed + 1), active,
+        ["Introduction to Programming", "Web Design"], *SUMMER_2026_MOCK, ["discord"],
+    )
     # The cutover gap: a few days of September 2026 the importer never picked up.
     cutover = build_sessions(
         rng, active, [c[0] for c in COURSES], FALL_2026_START, date(2026, 9, 8), ["discord"]
@@ -412,17 +532,46 @@ def main() -> None:
         AS_OF,
         {"discord": 6, "web": 3, "mcp": 1},
     )
-    # The instructor also uses it — and must be excluded from every aggregate.
-    for when, surface, turns in (
-        (datetime(2026, 9, 10, 14, 5), "web", 3),
-        (datetime(2026, 9, 17, 9, 30), "discord", 2),
-    ):
+    # The course owner uses it everywhere (ANLY-9). Historical sessions are on
+    # Discord only (and so appear in the legacy file); this term's are spread
+    # over all three surfaces, in shared and in students' private channels.
+    course_names = [c[0] for c in COURSES]
+    staff_topics = list(STAFF_PROMPTS)
+
+    def owner_session(when, course, surface, kind, topic):
+        roster = active[course]
         session = MockSession(
-            student=instructor, course=COURSES[0][0], surface=surface, started=when,
-            turns=turns, topic="Other", channel_kind="GLOBAL",
+            student=owner, course=course, surface=surface, started=when,
+            turns=rng.choice([1, 1, 2, 3]), topic=topic, channel_kind=kind, staff=True,
+            channel_name=rng.choice(roster)["handle"] if kind == "STUDENT" else "",
         )
         session.messages = build_messages(rng, session)
-        this_term.append(session)
+        return session
+
+    for i, (day, course) in enumerate(
+        (d, c) for d in (date(2025, 10, 8), date(2026, 2, 11), date(2026, 3, 18)) for c in course_names[:2]
+    ):
+        historical.append(
+            owner_session(datetime(day.year, day.month, day.day, 10 + i, 15), course, "discord",
+                          ["GLOBAL", "STUDENT"][i % 2], staff_topics[i % len(staff_topics)])
+        )
+    for i in range(12):
+        course = course_names[i % len(course_names)]
+        surface = ["discord", "discord", "web", "mcp", "discord", "web"][i % 6]
+        this_term.append(
+            owner_session(
+                datetime(2026, 9, 3 + (i * 2) % 22, 9 + i % 8, 5 + i), course, surface,
+                ["GLOBAL", "STUDENT"][i % 2] if surface == "discord" else "GLOBAL",
+                staff_topics[i % len(staff_topics)],
+            )
+        )
+    # A test rig also posts, and is dropped from every aggregate.
+    session = MockSession(
+        student=testbot, course=COURSES[0][0], surface="web", started=datetime(2026, 9, 11, 16, 0),
+        turns=2, topic="Greetings & bot questions", channel_kind="GLOBAL",
+    )
+    session.messages = build_messages(rng, session)
+    this_term.append(session)
 
     # ── Write the legacy database ─────────────────────────────────────────
     legacy = sqlite3.connect(legacy_path)
@@ -453,7 +602,11 @@ def main() -> None:
         channel = (
             "general"
             if session.channel_kind == "GLOBAL"
-            else (student["handle"] if session.channel_kind == "STUDENT" else "team-1")
+            else (
+                (session.channel_name or student["handle"])
+                if session.channel_kind == "STUDENT"
+                else "team-1"
+            )
         )
         for when, direction, content in session.messages:
             message_id += 1
@@ -492,13 +645,36 @@ def main() -> None:
     current.executemany(
         "INSERT INTO people VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", people_rows
     )
+
+    # ANLY-9: accounts and memberships. Each of these three people has a web
+    # identity naming an account; only the owner's membership makes them staff.
+    other_org = "org_other"
+    current.execute("INSERT INTO organizations VALUES (?,?,?)", (other_org, "Another University", now_ms))
+    current.executemany(
+        "INSERT INTO accounts VALUES (?,?,?)",
+        [("acc_owner", "rivera@example.edu", "Prof. Rivera"),
+         ("acc_revoked", "former-ta@example.edu", "Former TA"),
+         ("acc_other_org", "owner@other.example.edu", "Other Owner")],
+    )
+    current.executemany(
+        "INSERT INTO memberships VALUES (?,?,?,?)",
+        [(ORG_ID, "acc_owner", "owner", None),
+         (ORG_ID, "acc_revoked", "assistant", ms(datetime(2026, 9, 12, 12, 0))),
+         (other_org, "acc_other_org", "owner", None)],
+    )
+    for person, account in (
+        (owner, "acc_owner"), (revoked_person, "acc_revoked"), (other_org_person, "acc_other_org"),
+    ):
+        identity_rows.append(
+            (f"pid_web_{account}", ORG_ID, person["person_id"], "web", account, now_ms)
+        )
     current.executemany("INSERT INTO person_identities VALUES (?,?,?,?,?,?)", identity_rows)
 
     # Enrolments: every roster member, plus one course where most students
     # never actually used the bot (Web Design), so adoption varies.
     enrolment_rows = []
     for i, person in enumerate(everyone, start=1):
-        if person is instructor:
+        if person is owner or person is testbot:
             continue
         enrolment_rows.append(
             (f"enr_{i}", ORG_ID, course_ids[person["course"]], person["person_id"],
@@ -540,7 +716,11 @@ def main() -> None:
         if surface == "discord":
             channel = (
                 "general" if session.channel_kind == "GLOBAL"
-                else (student["handle"] if session.channel_kind == "STUDENT" else "team-1")
+                else (
+                    (session.channel_name or student["handle"])
+                    if session.channel_kind == "STUDENT"
+                    else "team-1"
+                )
             )
         for when, direction, content in session.messages:
             seq[conv_id] = seq.get(conv_id, 0) + 1
@@ -587,12 +767,14 @@ def main() -> None:
     current.commit()
     current.close()
 
+    (out_dir / "class_sizes.json").write_text(json.dumps(MOCK_CLASS_SIZES, indent=2))
+
     combined_path = out_dir / "combined.db"
     imported = write_combined(legacy_path, current_path, combined_path)
     print(f"combined → {combined_path}  ({imported:,} imported legacy messages)")
     print(f"legacy  → {legacy_path}  ({len(legacy_messages):,} messages)")
     print(f"current → {current_path}  ({len(messages):,} messages, {len(costs):,} cost rows)")
-    print(f"as-of {AS_OF}  ·  {len(everyone) - 1} students  ·  {len(COURSES)} courses")
+    print(f"as-of {AS_OF}  ·  {len(everyone) - 2} students  ·  {len(COURSES)} courses")
 
 
 if __name__ == "__main__":

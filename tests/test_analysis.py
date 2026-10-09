@@ -166,7 +166,7 @@ def test_deleted_conversations_never_load(tmp_path):
 
 
 def test_excluded_accounts_are_dropped(tmp_path):
-    """Instructor and test accounts are not student usage."""
+    """Test rigs are dropped from every aggregate (ANLY-9: only test rigs)."""
     frame = pd.DataFrame(
         {
             "message_id": ["a", "b"],
@@ -180,7 +180,7 @@ def test_excluded_accounts_are_dropped(tmp_path):
             "direction": ["from", "from"],
             "content": ["hi", "hi"],
             "source": ["current"] * 2,
-            "handle": ["student042", "instructor"],
+            "handle": ["student042", "testbot"],
         }
     )
     merged, provenance = load.merge_messages(frame.iloc[:0], frame, Config())
@@ -254,12 +254,289 @@ def test_term_completeness_reports_a_partial_term():
     assert completeness["comparison_window_end"] == date(2025, 9, 26)
 
 
-def test_adoption_is_unmeasurable_without_enrolments():
-    """A course with no roster comes back as NA, never as a silent 0%."""
+def _registered(course: str, n: int) -> pd.DataFrame:
+    return pd.DataFrame({"course": course, "person_key": [f"p{i}" for i in range(n)]})
+
+
+def test_adoption_is_unmeasurable_without_a_class_size():
+    """ANLY-11: no class size means NA shares, never a share of registered users."""
     session_rows = sessions.session_frame(_messages(["2026-09-10 10:00"]))
-    result = sessions.adoption(session_rows, pd.DataFrame(columns=["course", "person_key"]))
-    assert result.loc[0, "active"] == 1
-    assert pd.isna(result.loc[0, "share"])
+    result = sessions.adoption(session_rows, _registered("Web Design", 1))
+    assert result.loc[0, "active"] == 1 and result.loc[0, "registered"] == 1
+    assert pd.isna(result.loc[0, "enrolled"])
+    assert pd.isna(result.loc[0, "registered_share"]) and pd.isna(result.loc[0, "active_share"])
+
+
+def test_adoption_divides_by_the_class_size_not_by_registered_users():
+    """ANLY-11: 1 active of 3 registered of a class of 10."""
+    rows = sessions.session_frame(_messages(["2026-09-10 10:00"]))
+    result = sessions.adoption(rows, _registered("Web Design", 3), {"Web Design": 10})
+    row = result.iloc[0]
+    assert (row["enrolled"], row["registered"], row["active"]) == (10, 3, 1)
+    assert row["registered_share"] == pytest.approx(0.3)
+    assert row["active_share"] == pytest.approx(0.1)
+
+
+def test_adoption_tolerates_more_registered_than_the_class_size():
+    rows = sessions.session_frame(_messages(["2026-09-10 10:00"]))
+    with pytest.warns(UserWarning, match="more registered users"):
+        result = sessions.adoption(rows, _registered("Web Design", 12), {"Web Design": 10})
+    assert result.loc[0, "registered_share"] == pytest.approx(1.2)
+
+
+def test_adoption_totals_count_only_sized_courses_in_the_shares():
+    rows = pd.concat(
+        [
+            sessions.session_frame(_messages(["2026-09-10 10:00"], person="a", course="Web Design")),
+            sessions.session_frame(_messages(["2026-09-10 10:00"], person="b", course="Other")),
+        ]
+    )
+    enrolments = pd.concat([_registered("Web Design", 2), _registered("Other", 4)])
+    table = sessions.adoption(rows, enrolments, {"Web Design": 10})
+    totals = sessions.adoption_totals(table)
+    assert totals["enrolled_total"] == 10
+    assert totals["registered_total"] == 6 and totals["active_total"] == 2
+    assert totals["registered_share"] == pytest.approx(0.2)
+    assert totals["active_share"] == pytest.approx(0.1)
+    assert totals["courses_without_class_size"] == ["Other"]
+
+
+def test_class_sizes_are_configured_by_term_and_pipeline_label():
+    """ANLY-11: the summer course is keyed by the analysis label, not the platform title."""
+    config = Config()
+    assert config.class_sizes_for("summer_2026") == {"Introduction to Programming": 54, "Web Design": 28}
+    assert config.class_sizes_for("fall_2026")["Software Engineering"] == 109
+    assert config.class_sizes_for("summer_2025") == {}
+    # Official dates; the one-week buffer is applied by Config.window.
+    assert (config.term("summer_2026").start, config.term("summer_2026").end) == (date(2026, 5, 18), date(2026, 8, 12))
+    assert config.window("summer_2026") == (date(2026, 5, 11), date(2026, 8, 19))
+    assert not config.registration_existed("spring_2026") and config.registration_existed("fall_2026")
+
+
+def test_term_adoption_computes_active_share_before_registration_existed():
+    """ANLY-11: a term with class sizes but no registration has registered NA and a real share."""
+    config = Config(as_of=date(2026, 10, 9))
+    times = [f"2025-09-1{i} 10:00" for i in range(6)]
+    frame = pd.concat(
+        [_messages([t], person=f"p{i}", course="Software Engineering") for i, t in enumerate(times)]
+    )
+    rows = sessions.session_frame(frame).rename(columns={})
+    table = sessions.term_adoption(rows, pd.DataFrame(columns=["course", "person_key"]), config)
+    row = table[(table["term"] == "fall_2025") & (table["course"] == "Software Engineering")].iloc[0]
+    assert pd.isna(row["registered"]) and not row["registration_existed"]
+    assert row["enrolled"] == 100 and row["active"] == 6
+    assert row["active_share"] == pytest.approx(0.06)
+    assert not row["partial"]
+    # The current term is flagged partial.
+    assert table[table["term"] == "fall_2026"]["partial"].all()
+
+
+def test_term_adoption_has_no_share_without_a_class_size_and_blanks_small_cells():
+    config = Config(as_of=date(2026, 10, 9))
+    frame = pd.concat(
+        [_messages(["2025-07-10 10:00"], person=f"p{i}", course="Web Design") for i in range(6)]
+        + [_messages(["2025-09-10 10:00"], person="solo", course="Software Engineering")]
+    )
+    table = sessions.term_adoption(
+        sessions.session_frame(frame), pd.DataFrame(columns=["course", "person_key"]), config
+    )
+    summer = table[table["term"] == "summer_2025"].iloc[0]  # no class size configured
+    assert summer["active"] == 6 and pd.isna(summer["enrolled"]) and pd.isna(summer["active_share"])
+    solo = table[(table["term"] == "fall_2025") & (table["course"] == "Software Engineering")].iloc[0]
+    assert pd.isna(solo["active"]) and pd.isna(solo["active_share"])  # 1 < min_cell_students
+
+
+def test_overlapping_term_windows_count_each_session_once():
+    """ANLY-11: 11-19 May sits in Spring's and Summer's buffered windows; the course's class-size term wins."""
+    config = Config(as_of=date(2026, 10, 9))
+    frame = pd.concat(
+        [_messages(["2026-05-12 10:00"], person="a", course="Web Design"),  # summer course
+         _messages(["2026-05-12 11:00"], person="b", course="Software Engineering"),  # spring course
+         _messages(["2026-05-20 10:00"], person="c", course="Web Design")]
+    )
+    table = sessions.term_adoption(
+        sessions.session_frame(frame), pd.DataFrame(columns=["course", "person_key"]), config
+    )
+    summer = table[(table["term"] == "summer_2026") & (table["course"] == "Web Design")].iloc[0]
+    assert pd.isna(summer["active"])  # 2 active is under the small-cell floor
+    spring_se = table[(table["term"] == "spring_2026") & (table["course"] == "Software Engineering")]
+    assert len(spring_se) == 1
+    # No Web Design row under Spring, and every session is counted in exactly one term.
+    assert table[(table["term"] == "spring_2026") & (table["course"] == "Web Design")].empty
+    tagged = sessions._assign_terms(sessions.session_frame(frame), config)
+    assert sorted(tagged["_term"]) == ["spring_2026", "summer_2026", "summer_2026"]
+
+
+def test_the_buffer_applies_to_every_term_and_elapsed_days_stay_official():
+    config = Config(as_of=date(2026, 10, 9))
+    assert config.term_buffer_days == 7
+    for key, term in config.terms.items():
+        first, last = config.window(key)
+        assert (term.start - first).days == 7 and (last - term.end).days == 7
+    assert config.term("fall_2026").elapsed_days(date(2026, 10, 9)) == 37  # from 2 Sep, not 26 Aug
+
+
+def test_a_session_five_days_before_the_official_start_counts_in_that_term():
+    config = Config(as_of=date(2026, 10, 9))
+    frame = pd.concat(
+        [_messages(["2025-08-29 10:00"], person=f"p{i}", course="Software Engineering") for i in range(6)]
+    )  # Fall 2025 starts 3 Sep
+    table = sessions.term_adoption(
+        sessions.session_frame(frame), pd.DataFrame(columns=["course", "person_key"]), config
+    )
+    row = table[(table["term"] == "fall_2025") & (table["course"] == "Software Engineering")].iloc[0]
+    assert row["active"] == 6
+    # 14 days after Fall 2025 ends (23 Dec is the buffer's last day): counted nowhere.
+    early = sessions.session_frame(_messages(["2025-12-30 10:00"], course="Software Engineering"))
+    assert sessions._assign_terms(early, config)["_term"].isna().all()
+
+
+def test_like_for_like_includes_the_pre_term_week_for_both_terms():
+    term = Term("t", "T", date(2025, 9, 3), date(2025, 12, 16))
+    frame = _messages(["2025-08-27 10:00", "2025-08-26 10:00", "2025-09-10 10:00", "2025-09-13 10:00"])
+    kept = sessions.like_for_like(frame, term, elapsed_days=7, buffer_days=7)
+    assert list(kept["ts"].dt.day) == [27, 10]  # 26 Aug is 8 days early; 13 Sep is day 10
+
+
+def test_registered_counts_of_one_to_four_are_blanked_in_the_term_table():
+    config = Config(as_of=date(2026, 10, 9))
+    enrolments = _registered("Software Engineering", 3).assign(created_at="2026-09-10 10:00:00")
+    table = sessions.term_adoption(pd.DataFrame(), enrolments, config)
+    row = table[(table["term"] == "fall_2026") & (table["course"] == "Software Engineering")].iloc[0]
+    assert pd.isna(row["registered"]) and row["registration_existed"]
+    enough = _registered("Software Engineering", 6).assign(created_at="2026-09-10 10:00:00")
+    row = sessions.term_adoption(pd.DataFrame(), enough, config).query(
+        "term == 'fall_2026' and course == 'Software Engineering'"
+    ).iloc[0]
+    assert row["registered"] == 6
+
+
+def test_student_counts_over_a_blanked_course_are_withheld():
+    frame = sessions.session_frame(
+        pd.concat([_messages(["2026-09-10 10:00"], person=f"a{i}", course="A") for i in range(7)]
+                  + [_messages(["2026-09-10 10:00"], person=f"b{i}", course="B") for i in range(3)])
+    )
+    assert sessions.distinct_students(frame, 5) is None  # B has 3 in the window
+    only_a = frame[frame["course"] == "A"]
+    assert sessions.distinct_students(only_a, 5) == 7
+    assert sessions.distinct_students(only_a, 5, blanked_courses={"A"}) is None
+    split = sessions.surface_split(frame, blanked_courses={"B"})
+    assert split["students"].isna().all() or split["students"].tolist() == [None]
+
+
+def test_a_small_interface_blanks_every_interfaces_students_and_prompts():
+    """ANLY-11: Web with 3 students (real: Discord 13 / Web 3) must not be recoverable from a total."""
+    frame = sessions.session_frame(
+        pd.concat([_messages(["2026-09-10 10:00"], person=f"d{i}", course="A", surface="discord") for i in range(13)]
+                  + [_messages(["2026-09-10 11:00"], person=f"w{i}", course="A", surface="web") for i in range(3)])
+    )
+    plain = sessions.surface_split(frame)
+    assert plain["students"].tolist() == [13, 3]  # without the rule the numbers print
+    split = sessions.surface_split(frame, min_cell=5)
+    assert split["students"].isna().all() and split["prompts"].isna().all()
+    assert split["sessions"].tolist() == [13, 3]
+    # All interfaces large enough: nothing is blanked.
+    big = sessions.surface_split(frame[frame["surface"] == "discord"], min_cell=5)
+    assert big["students"].tolist() == [13]
+
+
+def test_like_for_like_term_gives_a_summer_session_to_summer_not_fall():
+    """ANLY-11: a Summer-2025-sized course on 28 Aug 2025 is not in Fall 2025's window."""
+    config = Config(as_of=date(2026, 10, 9), class_sizes={"summer_2025": {"Web Design": 30}})
+    frame = sessions.session_frame(
+        pd.concat([_messages(["2025-08-28 10:00"], person="a", course="Web Design"),
+                   _messages(["2025-09-12 10:00"], person="b", course="Web Design")])
+    )
+    window = sessions.like_for_like_term(frame, config, "fall_2025", 37)
+    assert list(window["person_key"]) == ["b"]
+    # The old path (raw sessions, date window only) would have counted both.
+    raw = sessions.like_for_like(frame, config.term("fall_2025"), 37, "started_at", config.term_buffer_days)
+    assert len(raw) == 2
+
+
+def test_notebooks_build_their_like_for_like_windows_from_the_library_function():
+    """Reverting notebook 01 or 03 to the raw `like_for_like` would reopen the double-count."""
+    for name in ("01_volume_and_adoption.ipynb", "03_topics.ipynb"):
+        source = (REPO_ROOT / "analysis" / "notebooks" / name).read_text()
+        assert "like_for_like_term(" in source
+        assert "sessions.like_for_like(" not in source
+
+
+def test_class_sizes_source_names_no_developer_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("BLOOMBOT_ANALYSIS_CLASS_SIZES", str(tmp_path / "class_sizes.json"))
+    (tmp_path / "class_sizes.json").write_text("{}")
+    config = Config()
+    assert config.class_sizes_source == "class_sizes.json (BLOOMBOT_ANALYSIS_CLASS_SIZES override)"
+    assert "class sizes: class_sizes.json" in config.describe_inputs()
+
+
+def test_summer_traffic_in_mid_may_is_counted_under_summer_2026():
+    config = Config(as_of=date(2026, 10, 9))
+    frame = pd.concat(
+        [_messages(["2026-05-14 10:00"], person=f"p{i}", course="Web Design") for i in range(6)]
+    )
+    table = sessions.term_adoption(
+        sessions.session_frame(frame), pd.DataFrame(columns=["course", "person_key"]), config
+    )
+    row = table[(table["term"] == "summer_2026") & (table["course"] == "Web Design")].iloc[0]
+    assert row["active"] == 6 and row["active_share"] == pytest.approx(6 / 28)
+
+
+def test_small_counts_are_blanked_and_totals_withheld():
+    """ANLY-11: a total that would reveal a blanked cell is withheld."""
+    rows = sessions.session_frame(
+        pd.concat([_messages(["2026-09-10 10:00"], person=f"p{i}", course="A") for i in range(4)]
+                  + [_messages(["2026-09-10 10:00"], person=f"q{i}", course="B") for i in range(7)])
+    )
+    table = sessions.adoption(rows, pd.concat([_registered("A", 2), _registered("B", 9)]), {"A": 10, "B": 20})
+    cells = sessions.suppress_small_counts(table, 5)
+    assert pd.isna(cells.loc[0, "active"]) and pd.isna(cells.loc[0, "registered"])  # 4 and 2
+    assert cells.loc[1, "active"] == 7 and pd.isna(cells.loc[0, "active_share"])
+    totals = sessions.adoption_totals(table, 5)
+    assert totals["active_total"] is None and totals["registered_total"] is None
+    assert totals["enrolled_total"] == 30 and totals["active_withheld"]
+    assert pd.isna(totals["active_share"])
+    assert sessions.adoption_totals(table)["active_total"] == 11  # no floor, no withholding
+
+
+def test_window_active_share_withholds_a_small_course_and_counts_per_course():
+    window = sessions.session_frame(
+        pd.concat([_messages(["2026-09-10 10:00"], person="a", course="A"),
+                   _messages(["2026-09-10 10:00"], person="a", course="B")]
+                  + [_messages(["2026-09-10 10:00"], person=f"b{i}", course="B") for i in range(6)])
+    )
+    result = sessions.window_active_share(window, {"A": 10, "B": 10}, min_cell=5)
+    assert result["suppressed"] and result["active"] is None and result["share"] is None
+    plain = sessions.window_active_share(window, {"A": 10, "B": 10})
+    assert plain["active"] == 8  # the student in two courses counts once in each
+
+
+def test_registrations_are_scoped_to_the_term_they_were_made_in():
+    """ANLY-11: Fall 2026 registrations are not inherited by a later term."""
+    config = Config(
+        as_of=date(2027, 2, 1),
+        class_sizes={"spring_2027": {"Web Design": 30}, "fall_2026": {"Web Design": 30}},
+        terms={
+            "fall_2026": Term("fall_2026", "Fall 2026", date(2026, 9, 2), date(2026, 12, 15)),
+            "spring_2027": Term("spring_2027", "Spring 2027", date(2027, 1, 19), date(2027, 5, 11)),
+        },
+        registration_from_term="fall_2026",
+    )
+    enrolments = _registered("Web Design", 6).assign(created_at="2026-09-20 10:00:00")
+    table = sessions.term_adoption(pd.DataFrame(), enrolments, config)
+    registered = dict(zip(table["term"], table["registered"]))
+    assert registered["fall_2026"] == 6 and registered["spring_2027"] == 0
+
+
+def test_window_active_share_ignores_unsized_courses():
+    window = pd.concat(
+        [
+            _messages(["2026-09-10 10:00"], person="a", course="Web Design"),
+            _messages(["2026-09-10 10:00"], person="b", course="Unsized"),
+        ]
+    ).rename(columns={})
+    result = sessions.window_active_share(sessions.session_frame(window), {"Web Design": 4})
+    assert result == {"active": 1, "enrolled": 4, "share": 0.25, "suppressed": False}
 
 
 def test_weekly_matrix_leaves_the_summer_empty():
@@ -303,30 +580,76 @@ def test_keyword_classifier_reads_the_students_words_not_the_bots():
     )
     texts = topics.session_texts(tagged)
     labelled = topics.classify_sessions(texts, method="keyword", use_cache=False)
-    assert labelled.loc[0, "topic"] == "Course material & content"
+    assert labelled.loc[0, "topic"] == "Course concepts"
 
 
-def test_topic_cache_is_keyed_by_content_not_position(tmp_path):
-    """Re-sessionising must not silently invalidate every cached label."""
+def _fake_openai(monkeypatch, label="Deadlines & schedule"):
+    """Replace the model call with a counter, so cache behaviour is testable offline."""
+    calls = []
+
+    def fake(text, course, role="student"):
+        calls.append((text, role))
+        return label
+
+    monkeypatch.setattr(topics, "classify_openai", fake)
+    return calls
+
+
+def test_model_cache_is_keyed_by_content_not_position(tmp_path, monkeypatch):
+    """Re-sessionising must not silently invalidate every cached model label."""
     config = _config(tmp_path, None, None)
+    calls = _fake_openai(monkeypatch)
     texts = pd.DataFrame(
         {"session_id": ["s1"], "course": ["Web Design"], "text": ["Student: when is hw2 due"],
          "student_text": ["when is hw2 due"]}
     )
-    topics.classify_sessions(texts, method="keyword", config=config)
-    cache = topics.load_cache(config.topic_cache)
-    assert list(cache) == [f"keyword:{topics.text_key('when is hw2 due')}"]
+    topics.classify_sessions(texts, method="openai", config=config)
+    (key,) = topics.load_cache(config.topic_cache)
+    assert key == (
+        f"v2-student:openai-{topics.openai_fingerprint('student')}:"
+        f"{topics.text_key('Student: when is hw2 due')}"
+    )
+    again = topics.classify_sessions(texts.assign(session_id=["s99"]), method="openai", config=config)
+    assert again.loc[0, "topic_method"] == "openai-cached" and len(calls) == 1
 
-    renumbered = texts.assign(session_id=["s99"])
-    again = topics.classify_sessions(renumbered, method="keyword", config=config)
-    assert again.loc[0, "topic_method"] == "keyword-cached"
+
+def test_keyword_labels_are_never_cached_so_a_rule_edit_takes_effect(tmp_path, monkeypatch):
+    config = _config(tmp_path, None, None)
+    texts = pd.DataFrame(
+        {"session_id": ["s1"], "course": ["Web Design"], "text": ["Student: tell me a joke"],
+         "student_text": ["tell me a joke"]}
+    )
+    assert topics.classify_sessions(texts, config=config).loc[0, "topic"] == "Other"
+    assert topics.load_cache(config.topic_cache) == {}
+    edited = {
+        "student": [("Greetings & bot questions", r"\bjoke\b"), *topics.STUDENT_RULES],
+        "staff": topics.STAFF_RULES,
+    }
+    monkeypatch.setattr(topics, "KEYWORD_RULES", edited)
+    again = topics.classify_sessions(texts, config=config)
+    assert again.loc[0, "topic"] == "Greetings & bot questions"
+    assert again.loc[0, "topic_method"] == "keyword"
+
+
+def test_a_changed_prompt_relabels_a_cached_model_session(tmp_path, monkeypatch):
+    config = _config(tmp_path, None, None)
+    calls = _fake_openai(monkeypatch)
+    texts = pd.DataFrame(
+        {"session_id": ["s1"], "course": ["Web Design"], "text": ["Student: hi"], "student_text": ["hi"]}
+    )
+    topics.classify_sessions(texts, method="openai", config=config)
+    assert topics.classify_sessions(texts, method="openai", config=config).loc[0, "topic_method"] == "openai-cached"
+    edited = {**topics.STUDENT_DESCRIPTIONS, "Other": "something else entirely"}
+    monkeypatch.setattr(topics, "STUDENT_DESCRIPTIONS", edited)
+    out = topics.classify_sessions(texts, method="openai", config=config)
+    assert out.loc[0, "topic_method"] == "openai" and len(calls) == 2
 
 
 def test_agreement_rate_ignores_unaudited_rows():
     audited = pd.DataFrame(
         {
-            "topic": ["Assignments & homework", "Other", "Other"],
-            "hand_label": ["Assignments & homework", "Course material & content", ""],
+            "topic": ["Deadlines & schedule", "Other", "Other"],
+            "hand_label": ["Deadlines & schedule", "Course concepts", ""],
         }
     )
     assert topics.agreement_rate(audited) == {"checked": 2, "agreed": 1, "rate": 0.5}
@@ -717,3 +1040,484 @@ def test_mock_run_refuses_real_input_paths(flag, tmp_path):
     )
     assert run.returncode == 2
     assert "--mock uses its own synthetic databases" in run.stderr
+
+
+# ── Staff and student roles (ANLY-9) ──────────────────────────────────────
+
+
+def _platform_db(tmp_path: Path, with_accounts: bool = True) -> Path:
+    """
+    A platform database with four people in org 'org' and one message each:
+    the linked owner, a person whose membership was revoked, an owner of a
+    different organization, and a plain student.
+    """
+    path = tmp_path / "roles.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(CURRENT_DDL)
+    if not with_accounts:
+        conn.executescript("DROP TABLE accounts; DROP TABLE memberships;")
+    conn.executemany("INSERT INTO organizations VALUES (?,?,0)", [("org", "Org"), ("org2", "Org 2")])
+    conn.execute("INSERT INTO courses VALUES ('crs','org','prj','Web Design',1,0)")
+    people = {"owner": "prof", "revoked": "ta", "foreign": "visitor", "plain": "stu"}
+    for person, handle in people.items():
+        conn.execute(
+            "INSERT INTO people VALUES (?,?,?,?,?,?,?,0,NULL,NULL,NULL,NULL,0)",
+            (person, "org", handle, f"{handle}@example.edu", "F", "L", handle),
+        )
+        conn.execute(
+            "INSERT INTO person_identities VALUES (?,?,?,?,?,0)",
+            (f"d_{person}", "org", person, "discord", f"9{len(person)}{ord(person[0])}"),
+        )
+        conn.execute(
+            "INSERT INTO conversations VALUES (?,?,?,?,?,NULL,NULL,NULL,0,0)",
+            (f"cnv_{person}", "org", "crs", person, "web"),
+        )
+        conn.execute(
+            "INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,NULL,NULL,1,?)",
+            (f"m_{person}", "org", f"cnv_{person}", person, "crs", "from_person", "hello",
+             "web", _ms(datetime(2026, 9, 3, 10, 0))),
+        )
+    if with_accounts:
+        conn.executemany(
+            "INSERT INTO accounts VALUES (?,?,?)",
+            [("acc_owner", "o@x.edu", "O"), ("acc_revoked", "r@x.edu", "R"), ("acc_foreign", "f@x.edu", "F")],
+        )
+        conn.executemany(
+            "INSERT INTO memberships VALUES (?,?,?,?)",
+            [("org", "acc_owner", "owner", None), ("org", "acc_revoked", "assistant", 5),
+             ("org2", "acc_foreign", "owner", None)],
+        )
+        conn.executemany(
+            "INSERT INTO person_identities VALUES (?,?,?,?,?,0)",
+            [("w1", "org", "owner", "web", "acc_owner"), ("w2", "org", "revoked", "web", "acc_revoked"),
+             ("w3", "org", "foreign", "web", "acc_foreign")],
+        )
+    # One ledger row and one enrolment per person, to test the role on both.
+    for i, person in enumerate(people):
+        conn.execute(
+            "INSERT INTO cost_ledger_entries VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (f"c_{person}", "org", "crs", person, "gpt-4.1", 100, 10, (i + 1) * 1_000_000,
+             "measured", "web", _ms(datetime(2026, 9, 3, 10, 0))),
+        )
+        conn.execute(
+            "INSERT INTO enrolments VALUES (?,?,?,?,?,0,NULL,NULL,NULL)",
+            (f"e_{person}", "org", "crs", person, "join_link"),
+        )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _roles(frame: pd.DataFrame) -> dict:
+    return dict(zip(frame["message_id"].str.replace("current:m_", "", regex=False), frame["role"]))
+
+
+def test_staff_join_flags_the_linked_owner_only(tmp_path):
+    """An active membership in the message's org makes staff; revoked or foreign ones do not."""
+    roles = _roles(load.load_current(_platform_db(tmp_path)))
+    assert roles == {"owner": "staff", "revoked": "student", "foreign": "student", "plain": "student"}
+
+
+def test_cost_rows_carry_the_role_of_whoever_caused_them(tmp_path):
+    costs = load.load_costs(_platform_db(tmp_path))
+    roles = dict(zip(costs["usd"].round().astype(int), costs["role"]))
+    # The ledger rows were written in the order owner, revoked, foreign, plain ($1..$4).
+    assert roles == {1: "staff", 2: "student", 3: "student", 4: "student"}
+
+
+def test_enrolled_staff_are_left_out_of_the_adoption_denominator(tmp_path):
+    enrolments = load.load_enrolments(_platform_db(tmp_path))
+    assert len(enrolments) == 3  # the owner is enrolled too, and is not counted
+
+
+def test_roles_fall_back_to_handles_without_the_account_tables(tmp_path):
+    """Older files have no accounts/memberships: no crash, and nobody is staff by membership."""
+    frame = load.load_current(_platform_db(tmp_path, with_accounts=False))
+    assert set(frame["role"]) == {"student"}
+    config = Config(staff_handles=("prof",), excluded_handles=())
+    merged, provenance = load.merge_messages(frame.iloc[:0], frame, config, dedupe="id")
+    assert _roles(merged)["owner"] == "staff" and provenance["staff_rows"] == 1
+
+
+def test_a_handle_override_marks_staff_and_is_kept_in_the_frame():
+    frame = pd.DataFrame(
+        {
+            "message_id": ["a", "b"],
+            "ts": pd.to_datetime(["2026-09-03 10:00", "2026-09-03 10:01"]),
+            "person_key": ["discord:1", "discord:2"],
+            "course": ["Web Design"] * 2,
+            "surface": ["web"] * 2,
+            "category": [""] * 2,
+            "channel": [""] * 2,
+            "channel_type": ["Direct"] * 2,
+            "direction": ["from", "from"],
+            "content": ["hi", "hi"],
+            "source": ["current"] * 2,
+            "handle": ["student042", "Instructor Smith"],
+            "role": ["student", "student"],
+        }
+    )
+    merged, provenance = load.merge_messages(frame.iloc[:0], frame, Config())
+    assert dict(zip(merged["person_key"], merged["role"])) == {"discord:1": "student", "discord:2": "staff"}
+    assert provenance["staff_rows"] == 1 and provenance["excluded_account_rows"] == 0
+
+
+def _unified_row(message_id, person_key, ts, content, source, role, handle):
+    return {
+        "message_id": message_id, "ts": pd.Timestamp(ts), "person_key": person_key,
+        "course": "Web Design", "surface": "discord", "category": "Web Design - GLOBAL",
+        "channel": "general", "channel_type": "Global", "direction": "from", "content": content,
+        "source": source, "handle": handle, "role": role,
+    }
+
+
+def test_legacy_messages_of_a_staff_person_are_staff():
+    """
+    Two-file mode: a legacy row whose person_key is a staff person in the current
+    database is staff. The legacy row is NOT a duplicate of anything current, so
+    it survives the merge and only the promotion can make it staff.
+    """
+    legacy = pd.DataFrame(
+        [
+            _unified_row("legacy:1", "discord:7", "2025-10-01 10:00", "old staff question", "legacy", "student", "owner7"),
+            _unified_row("legacy:2", "discord:8", "2025-10-01 11:00", "old student question", "legacy", "student", "stu8"),
+        ]
+    )
+    current = pd.DataFrame(
+        [_unified_row("current:1", "discord:7", "2026-09-04 10:00", "new staff question", "current", "staff", "Owner Seven")]
+    )
+    merged, provenance = load.merge_messages(legacy, current, Config())
+    by_id = dict(zip(merged["message_id"], merged["role"]))
+    assert by_id == {"legacy:1": "staff", "legacy:2": "student", "current:1": "staff"}
+    assert provenance["duplicates_dropped"] == 0 and provenance["staff_rows"] == 2
+
+
+def test_role_survives_on_imported_legacy_messages(mock_dbs):
+    """Combined mode: the owner's imported history carries the staff role, through the discord key."""
+    config = Config(input_mode="combined", combined_db=mock_dbs / "combined.db", topic_cache=mock_dbs / "t.json")
+    merged, provenance = load.load_messages(config)
+    imported = merged[merged["message_id"].str.startswith("current:" + load.IMPORTED_PREFIX)]
+    owner = imported[imported["person_key"] == "discord:700999999999999999"]
+    assert len(owner) > 0 and set(owner["role"]) == {"staff"}
+    # The same single person appears on every surface.
+    staff = merged[merged["role"] == "staff"]
+    assert staff["person_key"].nunique() == 1 and {"discord", "web", "mcp"} <= set(staff["surface"])
+    assert provenance["staff_rows"] == len(staff)
+    assert provenance["excluded_account_rows"] > 0  # the test rig
+
+
+def test_mock_lookalikes_count_as_students(mock_dbs):
+    """A revoked membership and another org's owner are students, not staff."""
+    conn = sqlite3.connect(mock_dbs / "combined.db")
+    keys = {
+        f"discord:{r[0]}"
+        for r in conn.execute(
+            "SELECT d.external_id FROM person_identities w JOIN person_identities d "
+            "ON d.person_id = w.person_id AND d.surface='discord' "
+            "WHERE w.surface='web' AND w.external_id IN ('acc_revoked','acc_other_org')"
+        )
+    }
+    assert len(keys) == 2
+    config = Config(input_mode="combined", combined_db=mock_dbs / "combined.db", topic_cache=mock_dbs / "t.json")
+    merged, _ = load.load_messages(config)
+    seen = merged[merged["person_key"].isin(keys)]
+    assert len(seen) > 0 and set(seen["role"]) == {"student"}
+
+
+def test_student_measures_exclude_staff(mock_dbs):
+    """Sessions carry one role each, and a student-only summary counts no staff person."""
+    config = Config(input_mode="combined", combined_db=mock_dbs / "combined.db", topic_cache=mock_dbs / "t.json")
+    merged, _ = load.load_messages(config)
+    frame = sessions.session_frame(merged)
+    assert set(frame["role"]) == {"staff", "student"}
+    students = frame[frame["role"] == "student"]
+    assert "discord:700999999999999999" not in set(students["person_key"])
+    summary = sessions.usage_summary(students)
+    assert summary["students"] == students["person_key"].nunique()
+    assert summary["sessions"] == len(frame) - (frame["role"] == "staff").sum()
+    # A person has one role, so no session mixes the two.
+    assert frame.groupby("person_key")["role"].nunique().max() == 1
+
+
+def test_a_session_never_mixes_roles():
+    times = pd.to_datetime(["2026-09-03 10:00", "2026-09-03 10:01"])
+    frame = _messages(times).assign(role=["staff", "student"])
+    assert sorted(sessions.session_frame(frame)["role"]) == ["staff", "student"]
+
+
+# ── Topic sets (ANLY-10) ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("are late days or extensions available this term", "Course policies"),
+        ("do extensions apply to pair assignments", "Course policies"),
+        ("Which of the following describes an idempotent request?", "Quiz & exam questions"),
+        ("do I make a feature branch before opening a pull request", "Git & GitHub workflow"),
+        ("should I rebase before I push my commits?", "Git & GitHub workflow"),
+        ("does a mobile app count as a component for the milestone 2 requirement", "Project & assignment requirements"),
+        ("my group's channel disappeared", "Discord & platform help"),
+        ("does the channel have to be invite-only", "Discord & platform help"),
+        ("hi", "Greetings & bot questions"),
+        ("are you there", "Greetings & bot questions"),
+        ("should I use a managed postgres or run it in a container", "Tools, setup & deployment"),
+        ("my unit test is not working\ndef mul(a, b): return a + b", "Code & debugging"),
+        ("nobody told me which team I'm on", "Team coordination"),
+        ("when is the third assignment due", "Deadlines & schedule"),
+        ("hi, when is the third assignment due", "Deadlines & schedule"),
+        ("how is the project graded", "Grades & grading"),
+        ("can you explain what a closure is", "Course concepts"),
+        ("ok sounds good", "Other"),
+        # Over-matching words that once misrouted a session (ANLY-10 rework).
+        ("what should our final project be about", "Project & assignment requirements"),
+        ("can you test my understanding of loops", "Course concepts"),
+        ("what does pull mean in pandas", "Other"),
+        ("what is variable scope", "Course concepts"),
+        ("I'm stuck on the wireframe", "Project & assignment requirements"),
+        ("what's a database index", "Course concepts"),
+        ("explain what an ide is", "Course concepts"),
+        ("allowed characters in a variable name", "Other"),
+        ("I need to rest my eyes", "Other"),
+    ],
+)
+def test_student_keyword_rules(text, expected):
+    assert topics.classify_keyword(text, "student") == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("hello, can you hear me?", "Testing the bot"),
+        ("do you recognize my name?", "Testing the bot"),
+        ("remember this code word: tulip", "Testing the bot"),
+        ("is the bot working now?", "Testing the bot"),
+        ("@everyone the study bot is live in the course channels starting today", "Announcements"),
+        ("please create a new channel for the design group", "Directing students"),
+        ("describe dependency hell to everyone", "Demonstrating to class"),
+        ("what is the rule about late homework", "Course content & policy lookup"),
+        ("when is the third assignment due", "Course content & policy lookup"),
+        ("please change the course title to Intro to Python", "Course setup"),
+        ("how many students have joined", "Course setup"),
+        ("ok sounds good", "Other"),
+    ],
+)
+def test_staff_keyword_rules(text, expected):
+    assert topics.classify_keyword(text, "staff") == expected
+
+
+def test_every_rule_label_belongs_to_its_set():
+    from bloombot_analysis.config import STAFF_TOPICS, STUDENT_TOPICS
+
+    assert {t for t, _ in topics.STUDENT_RULES} <= set(STUDENT_TOPICS)
+    assert {t for t, _ in topics.STAFF_RULES} <= set(STAFF_TOPICS)
+    assert set(topics.STUDENT_DESCRIPTIONS) == set(STUDENT_TOPICS)
+    assert set(topics.STAFF_DESCRIPTIONS) == set(STAFF_TOPICS)
+
+
+def test_mock_prompts_classify_to_their_intended_topic():
+    """The mock's prompts are the examples the rules are written against."""
+    mock = _mock_module()
+    for topic, prompts in mock.PROMPTS.items():
+        for prompt in prompts:
+            assert topics.classify_keyword(prompt, "student") == topic, prompt
+    for topic, prompts in mock.STAFF_PROMPTS.items():
+        for prompt in prompts:
+            assert topics.classify_keyword(prompt, "staff") == topic, prompt
+
+
+def test_sessions_are_classified_under_their_roles_set(tmp_path):
+    config = _config(tmp_path, None, None)
+    texts = pd.DataFrame(
+        {
+            "session_id": ["s1", "s2"], "role": ["student", "staff"], "course": ["Web Design"] * 2,
+            "text": ["when is hw2 due"] * 2, "student_text": ["when is hw2 due"] * 2,
+        }
+    )
+    out = topics.classify_sessions(texts, method="keyword", config=config)
+    assert list(out["topic"]) == ["Deadlines & schedule", "Course content & policy lookup"]
+
+
+def test_a_v1_cache_entry_is_not_reused(tmp_path, monkeypatch):
+    """A label from the nine-label set must never be served under the new sets."""
+    config = _config(tmp_path, None, None)
+    calls = _fake_openai(monkeypatch, "Deadlines & schedule")
+    text = "Student: when is hw2 due"
+    topics.save_cache({f"openai:{topics.text_key(text)}": "Syllabus, schedule & deadlines"}, config.topic_cache)
+    texts = pd.DataFrame(
+        {"session_id": ["s1"], "course": ["Web Design"], "text": [text], "student_text": ["when is hw2 due"]}
+    )
+    out = topics.classify_sessions(texts, method="openai", config=config)
+    assert out.loc[0, "topic"] == "Deadlines & schedule" and len(calls) == 1
+
+
+def test_staff_prompt_says_it_classifies_an_instructors_conversation(monkeypatch):
+    sent = {}
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.chat = type("C", (), {"completions": self})()
+
+        def create(self, **kwargs):
+            sent.update(kwargs)
+            message = type("M", (), {"content": "Announcements"})()
+            return type("R", (), {"choices": [type("Ch", (), {"message": message})()]})()
+
+    monkeypatch.setitem(sys.modules, "openai", type("Mod", (), {"OpenAI": FakeOpenAI}))
+    monkeypatch.setenv("OPENAI_API_KEY", "not-a-real-key")
+    assert topics.classify_openai("@everyone hello", "Web Design", "staff") == "Announcements"
+    system = sent["messages"][0]["content"]
+    assert "instructor" in system and "- Testing the bot:" in system and "Quiz & exam" not in system
+    topics.classify_openai("when is hw2 due", "Web Design", "student")
+    assert "- Quiz & exam questions:" in sent["messages"][0]["content"]
+
+
+def test_audit_sample_records_role_and_agreement_reports_per_role():
+    sessions_frame = pd.DataFrame(
+        {
+            "session_id": [f"s{i}" for i in range(6)],
+            "role": ["student"] * 4 + ["staff"] * 2,
+            "course": "Web Design", "topic": ["Other"] * 6, "text": "x",
+        }
+    )
+    sample = topics.audit_sample(sessions_frame, n=3)
+    assert set(sample["role"]) == {"student", "staff"} and (sample["role"] == "staff").sum() == 2
+    audited = sample.assign(hand_label="Other")
+    audited.loc[audited["role"] == "staff", "hand_label"] = "Testing the bot"
+    result = topics.agreement_rate(audited)
+    assert result["by_role"]["student"]["rate"] == 1.0 and result["by_role"]["staff"]["rate"] == 0.0
+
+
+def test_topic_tables_take_the_label_set():
+    from bloombot_analysis.config import STAFF_TOPICS
+
+    assert list(topics.topic_counts(pd.DataFrame(), STAFF_TOPICS)["topic"]) == STAFF_TOPICS
+    frame = pd.DataFrame({"course": ["a"], "topic": ["Announcements"]})
+    assert list(topics.topic_by(frame, "course", STAFF_TOPICS).columns) == STAFF_TOPICS
+
+
+# ── The report's staff section (ANLY-9) ───────────────────────────────────
+
+
+def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
+    """Run the whole notebook chain on the mock data; the report gains the staff slides."""
+    out = mock_dbs / "report-out"
+    env = {
+        **os.environ,
+        "BLOOMBOT_ANALYSIS_INPUT": "two-file",
+        "BLOOMBOT_ANALYSIS_LEGACY_DB": str(mock_dbs / "legacy.db"),
+        "BLOOMBOT_ANALYSIS_CURRENT_DB": str(mock_dbs / "current.db"),
+        "BLOOMBOT_ANALYSIS_COMBINED_DB": str(mock_dbs / "combined.db"),
+        "BLOOMBOT_ANALYSIS_TOPIC_CACHE": str(mock_dbs / "report_topics.json"),
+        "BLOOMBOT_ANALYSIS_OUT_DIR": str(out),
+        "BLOOMBOT_ANALYSIS_AS_OF": "2026-09-25",
+        "BLOOMBOT_ANALYSIS_CLASS_SIZES": str(mock_dbs / "class_sizes.json"),
+        "MPLBACKEND": "Agg",
+    }
+    # Execute copies of the notebooks, so the committed ones are never rewritten.
+    code = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import nbformat\nfrom nbclient import NotebookClient\n"
+        "from pathlib import Path\n"
+        "import run_all\n"
+        "for name in run_all.NOTEBOOKS:\n"
+        "    nb = nbformat.read(Path(%r) / name, as_version=4)\n"
+        "    NotebookClient(nb, timeout=300, resources={'metadata': {'path': %r}}).execute()\n"
+    ) % (str(REPO_ROOT / "analysis"), str(REPO_ROOT / "analysis" / "notebooks"), str(REPO_ROOT))
+    subprocess.run([sys.executable, "-c", code], check=True, env=env, capture_output=True)
+
+    text = (out / "USAGE_REPORT.md").read_text()
+    assert "## S23 · Staff use it too, and it is counted separately" in text
+    assert "What staff used it for" in text
+    assert "Testing the bot" in text and "Quiz & exam questions" in text
+    metrics = json.loads((out / "metrics.json").read_text())
+    staff, dataset = metrics["staff"], metrics["dataset"]
+    assert staff["messages"] > 0 and dataset["staff_rows"] == staff["messages"]
+    # Student figures are students only: the staff session count is not in them.
+    assert dataset["sessions"] == staff["all_sessions"] - staff["sessions"]
+    assert "quote" not in json.dumps(staff).lower()
+
+    # ANLY-11: S09 reports enrolled students and registered users apart, and
+    # "enrolled" never stands in for registered users anywhere in the report.
+    s09 = text.split("## S09", 1)[1].split("\n## S", 1)[0]
+    assert "enrolled students" in s09 and "registered" in s09
+    assert "of 145 enrolled students" in s09  # mock class sizes 60 + 45 + 40
+    for phrase in ("enrolled students used", "enrolled students tried"):
+        assert phrase not in text
+    assert "registration did not exist" in text  # the term-by-term slide
+    volume = metrics["volume"]
+    assert volume["adoption_total_enrolled"] == 145
+    assert volume["adoption_total_registered"] > 0
+    # Mid-May summer-course traffic lands in Summer 2026, not Spring (term windows overlap).
+    summer = [r for r in volume["term_adoption"] if r["term"] == "summer_2026" and r["course"] == "Introduction to Programming"]
+    assert summer and summer[0]["active"] and summer[0]["active"] > 0
+    assert any(r["course"] == "Introduction to Programming" and pd.isna(r["enrolled"]) for r in volume["adoption"])
+
+    # Small cells: whatever S10 blanks, S09 must not reveal by cell, total or takeaway.
+    blanked = [r["course"] for r in volume["term_adoption"] if r["term"] == "fall_2026" and r["active"] is None
+               and r["enrolled"] is not None]
+    assert blanked, "the mock should have a Fall 2026 course with a blanked active count"
+    for row in volume["adoption"]:
+        if row["course"] in blanked:
+            assert row["active"] is None or pd.isna(row["active"])
+    assert volume["adoption_total_active"] is None and volume["adoption_active_sized"] is None
+    for course in blanked:
+        line = next(l for l in s09.splitlines() if l.startswith(f"| {course} |"))
+        assert line.split("|")[4].strip() == "—"  # the Active users cell
+    assert "active total is withheld" in s09
+    assert "{registered_phrase}" not in text and "{" not in s09  # f-strings all rendered
+
+    # Cross-slide small-cell check: with Web Design blanked, no other slide or metric may print a
+    # student count over a set that contains it, or the blank could be worked out by subtraction.
+    unblanked_total = sum(
+        r["active"] for r in volume["adoption"] if r["active"] is not None and not pd.isna(r["active"])
+    )
+    published = [
+        volume["comparison"]["Fall 2026"]["Students"],
+        metrics["cost"]["students_in_window"],
+        *[r["students"] for r in volume["surface_split"]],
+    ]
+    assert volume["comparison"]["Fall 2026"]["Students"] is None  # S13 row and chart bar
+    # Per-interface counts: an interface with 1-4 students blanks every interface's students and
+    # prompts (complementary suppression); sessions stay. The mock has a small interface.
+    assert all(r["students"] is None and r["prompts"] is None for r in volume["surface_split"])
+    assert all(r["sessions"] for r in volume["surface_split"])
+    s12 = text.split("## S12", 1)[1].split("\n## S", 1)[0]
+    assert "Student and prompt counts are left out" in s12
+    surface_line = next(l for l in s12.splitlines() if l.startswith("| Discord |"))
+    assert surface_line.split("|")[3].strip() == "—" and surface_line.split("|")[4].strip() == "—"
+    assert metrics["cost"]["students_in_window"] is None and metrics["cost"]["usd_per_student"] is None  # S22
+    for value in published:
+        assert value is None or not (unblanked_total < value <= unblanked_total + 4)
+    s22 = text.split("## S22", 1)[1].split("\n## S", 1)[0]
+    assert "withheld, because the count would give away" in s22 and "active users." not in s22.split("Per active user")[1][:20]
+    s13 = text.split("## S13", 1)[1].split("\n## S", 1)[0]
+    assert "| Students | " in s13 and "| — |" in s13.split("| Students | ")[1].split("\n")[0]
+    # S10 prints no registered count that S09 blanks (Fall 2026 rows, by course).
+    assert "class_sizes.json (BLOOMBOT_ANALYSIS_CLASS_SIZES override)" in text and "/Users/" not in text
+    # Derived wording, not hard-coded.
+    assert "three weeks" not in text and "the two new interfaces are being used" not in text
+    assert "Most enrolled students (54%) have registered" in text  # derived: the mock registers 54%
+
+    # Every student notebook filters to students: the numbers they wrote match
+    # a student-only recount of the tidy files, and differ from an all-roles one.
+    data = pd.read_csv(out / "data" / "sessions.csv", parse_dates=["started_at"])
+    students = data[data["role"] == "student"]
+    assert len(students) < len(data)
+    assert metrics["shape"]["sessions"] == len(students)  # notebook 02
+    first, last = Config().window("fall_2026")
+    now = students[(students["started_at"].dt.date >= first) & (students["started_at"].dt.date <= last)]
+    recount = now.groupby("course")["person_key"].nunique()
+    if (recount.between(1, 4)).any():  # a blanked cell: the total must be withheld too
+        assert metrics["volume"]["adoption_total_active"] is None
+    else:
+        assert metrics["volume"]["adoption_total_active"] == recount.sum()  # 01
+    cost = metrics["cost"]
+    window = students[
+        (students["started_at"] >= pd.Timestamp(cost["window_start"]))
+        & (students["started_at"] <= pd.Timestamp(cost["window_end"]))
+    ]
+    assert cost["sessions_in_window"] == len(window)  # notebook 04
+    assert cost["staff_usd"] > 0 and abs(cost["student_usd"] + cost["staff_usd"] - cost["total_usd"]) < 1e-6
+    assert "$" in text and "all users, staff included" in text
+    assert [s for s in staff["purposes"]][0]["topic"] in {p["topic"] for p in staff["purposes"]}

@@ -267,7 +267,7 @@ export function importMessages(
   const loose = options.looseCategories === true
   const normalise = (name: string): string =>
     loose ? name.trim().toLowerCase() : name
-  const { index: rawIndex, duplicates: duplicateCategories } =
+  const { index: categoryIndex, duplicates: duplicateCategories } =
     buildCategoryIndex(
       loose
         ? courses.map((course) => ({
@@ -276,7 +276,6 @@ export function importMessages(
           }))
         : courses
     )
-  const categoryIndex = rawIndex
   const routeByPrefix = new Map(
     (options.routes ?? []).map((route) => [
       route.prefix.trim().toLowerCase(),

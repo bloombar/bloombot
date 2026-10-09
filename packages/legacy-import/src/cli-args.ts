@@ -65,6 +65,11 @@ export function parseCliArgs(argv: string[]): CliArgs {
       if (at < 0 || prefix === '' || courseId === '') {
         throw new Error('--route must look like "Python=<course id>".')
       }
+      if (routes.some((r) => r.prefix.toLowerCase() === prefix.toLowerCase())) {
+        throw new Error(
+          `--route prefix '${prefix}' is given more than once (prefixes are case-insensitive).`
+        )
+      }
       routes.push({ prefix, courseId })
     }
   }

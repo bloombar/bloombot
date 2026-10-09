@@ -203,12 +203,27 @@ export function runImport(options: RunImportOptions): ImportReport {
   }
 }
 
+/** MIG-5 — two routes with the same prefix (ignoring case) are ambiguous; refuse rather than pick one. */
+export function assertDistinctRoutes(routes: CategoryRoute[]): void {
+  const seen = new Set<string>()
+  for (const route of routes) {
+    const key = route.prefix.trim().toLowerCase()
+    if (seen.has(key)) {
+      throw new Error(
+        `--route prefix '${route.prefix}' is given more than once (prefixes are case-insensitive).`
+      )
+    }
+    seen.add(key)
+  }
+}
+
 /**
  * MIG-5 — the existing-organization path: validate the organization and every
  * route's course up front (nothing is written if either is wrong), then import
  * people and messages only. The organization, its project and its courses are
  * never created or changed. The report's `project` is `{ id: '', created: false }`
- * and `courses` all zero, since this path does not touch them.
+ * and `courses` reports nothing created or skipped, with `matched` the number
+ * of the organization's courses available for routing (D-150).
  */
 function runImportIntoExisting(
   organizationId: string,
@@ -221,6 +236,7 @@ function runImportIntoExisting(
   if (!organizationsRepo.getOrganizationById(organizationId, db)) {
     throw new Error(`Organization '${organizationId}' does not exist.`)
   }
+  assertDistinctRoutes(routes)
   for (const route of routes) {
     if (!coursesRepo.getCourse(organizationId, route.courseId, db)) {
       throw new Error(

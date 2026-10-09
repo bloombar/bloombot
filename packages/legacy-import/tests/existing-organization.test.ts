@@ -285,6 +285,48 @@ describe('importing into an existing organization (MIG-5)', () => {
   })
 })
 
+describe('isolation between organizations (MIG-5, TEN-2)', () => {
+  it('creates a new person for a Discord user known only to another organization', () => {
+    const w = buildWorld()
+    // The same Discord user already exists in the unrelated organization.
+    const otherOrgId = (
+      testDb.db.$client
+        .prepare('select organization_id as id from courses where id = ?')
+        .get(w.otherOrgCourseId) as { id: string }
+    ).id
+    const stranger = people.resolvePersonByIdentity(
+      otherOrgId,
+      { surface: 'discord', externalId: ALICE },
+      testDb.db
+    )
+    const othersBefore = people.listPeople(otherOrgId, testDb.db)
+
+    const report = run(w, snapshotP().path)
+    expect(report.people).toMatchObject({ created: 2, matched: 0 })
+
+    const mine = people.listPeople(w.orgId, testDb.db)
+    expect(mine).toHaveLength(2)
+    expect(mine.map((p) => p.id)).not.toContain(stranger.id)
+    expect(people.listPeople(otherOrgId, testDb.db)).toEqual(othersBefore)
+
+    // Every message agrees with its conversation, person and course on org.
+    const mismatched = testDb.db.$client
+      .prepare(
+        `select count(*) as n from messages m
+         join conversations c on c.id = m.conversation_id
+         join people p on p.id = m.person_id
+         join courses k on k.id = m.course_id
+         where m.organization_id != c.organization_id
+            or m.organization_id != p.organization_id
+            or m.organization_id != k.organization_id`
+      )
+      .get() as { n: number }
+    expect(mismatched.n).toBe(0)
+    expect(count('messages')).toBe(3)
+    expect(testDb.db.$client.pragma('foreign_key_check')).toEqual([])
+  })
+})
+
 describe('parseCliArgs --organization / --route (MIG-5)', () => {
   it('reads both flags, with --route repeatable', () => {
     const parsed = parseCliArgs([
@@ -304,6 +346,31 @@ describe('parseCliArgs --organization / --route (MIG-5)', () => {
         { prefix: 'Web Design', courseId: 'c2' },
       ],
     })
+  })
+
+  it('refuses two routes with the same prefix, ignoring case', () => {
+    expect(() =>
+      parseCliArgs([
+        's',
+        '-',
+        '--organization',
+        'o',
+        '--route',
+        'Python=a',
+        '--route',
+        'python=b',
+      ])
+    ).toThrow(/more than once/)
+    const w = buildWorld()
+    expect(() =>
+      run(w, snapshotP().path, {
+        routes: [
+          { prefix: 'Python', courseId: w.pythonId },
+          { prefix: 'PYTHON', courseId: w.webId },
+        ],
+      })
+    ).toThrow(/more than once/)
+    expect(count('messages')).toBe(0)
   })
 
   it('refuses a malformed route, an empty organization, and a route without one', () => {

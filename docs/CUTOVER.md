@@ -289,6 +289,62 @@ source unconditionally regardless of the flag. Read the report the same way as 1
 rehearsal; every count should match what the rehearsal already showed for the same snapshot
 if nothing changed between taking the two copies.
 
+### 2.4a Importing a later snapshot (MIG-5)
+
+If the legacy bot kept running after the first import and a newer copy is taken, do not
+re-run 2.4 against it. A later copy is a different database lineage: its row ids restart at
+1, so without a label the importer would treat its rows as ones already imported and skip
+the new messages. Give the copy a label with `--source`, and **rehearse into `tmp/` first**,
+on a copy of the platform database that already holds the first import:
+
+```bash
+cp data/data.db tmp/rehearsal-platform.db
+DATABASE_PATH=./tmp/rehearsal-platform.db \
+  npm run legacy:import --workspace packages/legacy-import -- \
+  tmp/later-snapshot.db bot_config.yml --source 2026-term2
+```
+
+Read the report: `messages.matchedByContent` should be about the size of the overlap with
+the first import, `messages.created` only the messages sent since, and `messages.unplaceable`
+should be empty. Re-run the same command and every message should read `matched`. Then
+apply it to the real file exactly as in 2.4 (`DATABASE_PATH=./data/data.db`, `--i-know`),
+with the **same** `--source` label — a different label on a re-run would make every new
+message look new again, though the content check still stops duplicates. The first import
+needs no label and must keep being re-run without one.
+
+**Keep the timezone the same.** Legacy timestamps carry no timezone and are read as local
+time, and the content match compares them to the second, so it depends on `TZ`. Run this
+import with the same `TZ` as the first one (here `TZ=America/New_York`); a different `TZ`
+shifts every time and nothing matches, so the whole overlap would be imported again.
+Rehearse and check `matchedByContent` as above.
+
+**Importing into an existing organization.** When the history already lives in a platform
+organization (a UUID id, courses created earlier), do not let the YAML create another one.
+Name the organization, and route categories it does not declare:
+
+```bash
+TZ=America/New_York DATABASE_PATH=./tmp/rehearsal-platform.db \
+  npm run legacy:import --workspace packages/legacy-import -- \
+  tmp/later-snapshot.db - --source 2026-term2 \
+  --organization 0b9c7e1a-1111-4222-8333-444455556666 \
+  --route "Python=ba75e2c0-aaaa-4bbb-8ccc-ddddeeeeffff" \
+  --route "Web Design=ee1f4d3b-aaaa-4bbb-8ccc-ddddeeeeffff"
+```
+
+- `--organization <id>` imports into that organization and fails if it does not exist. It
+  creates no organization, project or course and does not read the YAML, so the YAML
+  argument is ignored; pass `-`.
+- A message's category is matched against the organization's declared category names,
+  ignoring case and surrounding spaces. `PYTHON - STUDENTS 01` therefore takes
+  `Python - Students 01`.
+- `--route "<prefix>=<course id>"` (repeatable) sends every category whose part before
+  ` - ` equals the prefix (ignoring case) to that course; use it for categories the
+  organization does not declare, such as `Python - GLOBAL`. A route beats a declared
+  category, and each course must exist in `--organization` or the import refuses to start.
+- Anything still unplaced is listed under `messages.unplaceable` and the command exits
+  non-zero. The existing-organization path creates only people, their Discord identities,
+  conversations and messages.
+
 ### 2.5 Start the platform
 
 ```bash

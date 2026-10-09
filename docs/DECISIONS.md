@@ -14629,3 +14629,43 @@ Every Danger zone (account, organization, course editor, project and course admi
   published elsewhere (S13, S09), a single blanked interface could be worked out by subtraction, so one blanked
   interface blanks the students and prompts of every interface (complementary suppression). The staff-by-interface table
   is aggregate-only and unchanged. S14 and the interface chart show sessions only.
+
+## D-150 — `packages/legacy-import`: MIG-5 — a later snapshot is told apart by a source label, and de-duplicated by content
+
+A later legacy snapshot restarts its row ids at 1. The message id (`legacy-message` + organization + legacy id)
+therefore collided with already-imported rows: a new row was counted as `matched` and silently lost.
+
+- **`--source <label>` (`RunImportOptions.source`).** When given, it is added to the id hash. Without it the id is
+  byte-for-byte what it was, so existing imports stay recognised and the first import keeps re-running unchanged.
+  An empty label is refused by `parseCliArgs` (`cli-args.ts`), since it would silently mean "no label".
+- **Content match, not id, finds the overlap.** Namespacing alone would import the overlapping messages a second
+  time. Before inserting, a message is looked up by (person, `created_at` floored to the second, direction, trimmed
+  content), read once up front from the existing transcripts like `loadExistingMessageIds`. Seconds, because the
+  importer stores epoch milliseconds (`parseLegacyTimestamp`) and another snapshot may differ below that.
+  Compared in the same epoch-ms representation, after the id check, so a re-run still reports `matched`.
+- **Counts, not a set.** Each incoming row consumes one existing copy, so two genuinely identical messages in one
+  second import as two rather than collapsing. Rows created during the run are not added: a snapshot's own repeated
+  rows are never hidden from each other. The content check applies with or without a label.
+- **Sequence.** `appendMessage` assigns `sequence` as the conversation's highest plus one, so a later snapshot's new
+  messages sit after the existing ones in a reused conversation, even if some are older than the last existing
+  message (`lastMessageAt` still takes the maximum). Ordering by `createdAt` would need a repo change and was left alone.
+- **Report.** `messages.matchedByContent` is new beside `created`, `matched` and `unplaceable`. The CLI prints it.
+  People and courses already reported created vs. matched.
+- **No wrapping transaction.** The importer never had one: each repo call (`appendMessage`) is its own transaction,
+  and a failed run is repaired by re-running, which MIG-4's idempotency makes safe. MIG-5 keeps that.
+- **Known limit.** A message edited between snapshots, or timestamped differently, is not recognised as the same and
+  imports as new. Use a rehearsal's `matchedByContent` against the expected overlap to catch it.
+- **Timezone.** Legacy datetimes are timezone-free and read as local time, so the content match depends on `TZ`; a
+  later import must use the first import's `TZ` (CUTOVER 2.4a).
+- **A row matched by id owns its fingerprint (rework).** Before the loop, every row already present under its own id
+  takes one copy out of the fingerprint counts. Otherwise, after a partial run left one of two identical messages
+  behind, the re-run swallowed the other as a content match and lost it (a MIG-4 regression).
+- **Importing into an existing organization (`--organization`, `--route`).** The real target is a platform
+  organization with a UUID id whose courses already exist, so the YAML-derived organization is wrong for it. With
+  `organizationId` the importer validates the organization and every route's course first (throwing before any write),
+  skips the YAML and `importConfig`, and imports only people and messages. The YAML positional stays so the argument
+  list is unchanged; it is ignored and may be `-`. Categories are matched against all the organization's
+  `course_categories` names trimmed and case-insensitively (the original path stays exact, as before). A route is
+  `<prefix>=<course id>`, the prefix being the text before ` - ` compared case-insensitively; a route wins over a
+  declared category, and `--route` without `--organization` is refused. A category nothing matches stays
+  `unplaceable`. The report's `project` is empty and `courses.matched` is the number of courses available.

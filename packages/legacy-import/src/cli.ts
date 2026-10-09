@@ -15,6 +15,7 @@ import { CONFIG, loadDotEnv } from '@bloombot/config'
 import { openDatabase, runMigrations } from '@bloombot/db'
 import { createLogger } from '@bloombot/logger'
 
+import { parseCliArgs } from './cli-args.js'
 import { assertImportDestinationPath } from './guard.js'
 import {
   runImport,
@@ -38,7 +39,7 @@ function printReport(report: ImportReport): void {
     `people: ${report.people.created} created, ${report.people.matched} matched, ${report.people.skipped} skipped`
   )
   console.log(
-    `messages: ${report.messages.created} created, ${report.messages.matched} matched, ${report.messages.unplaceable.length} unplaceable`
+    `messages: ${report.messages.created} created, ${report.messages.matched} matched by id, ${report.messages.matchedByContent} matched by content, ${report.messages.unplaceable.length} unplaceable`
   )
 }
 
@@ -54,11 +55,19 @@ function main(): void {
 
   const log = createLogger('legacy-import')
   const argv = process.argv.slice(2)
-  const [snapshotPath, yamlPath] = argv.filter((arg) => arg !== '--i-know')
+  let parsed
+  try {
+    parsed = parseCliArgs(argv)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exitCode = 1
+    return
+  }
+  const { snapshotPath, yamlPath, source, organizationId, routes } = parsed
 
   if (!snapshotPath || !yamlPath) {
     console.error(
-      'Usage: legacy:import <path-to-snapshot.db> <path-to-bot_config.yml> [--i-know]'
+      'Usage: legacy:import <path-to-snapshot.db> <path-to-bot_config.yml> [--source <label>] [--organization <id> [--route "<prefix>=<course id>"]...] [--i-know]'
     )
     process.exitCode = 1
     return
@@ -78,8 +87,14 @@ function main(): void {
     // the operator has to remember.
     runMigrations(db)
 
-    log.info({ snapshotPath, yamlPath }, 'starting legacy import')
-    const report = runImport({ snapshotPath, yamlPath, db })
+    log.info({ snapshotPath, yamlPath, source }, 'starting legacy import')
+    const report = runImport({
+      snapshotPath,
+      yamlPath,
+      db,
+      ...(source === undefined ? {} : { source }),
+      ...(organizationId === undefined ? {} : { organizationId, routes }),
+    })
     printReport(report)
 
     if (reportHasUnplaced(report)) {

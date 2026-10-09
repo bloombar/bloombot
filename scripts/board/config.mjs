@@ -74,6 +74,7 @@ export const MILESTONE_TITLE = {
   45: 'Phase 45 — Reading usage, and finding your way around it',
   46: 'Phase 46 — Analysis on the combined database',
   47: 'Phase 47 — Staff usage and topic sets that fit',
+  48: 'Phase 48 — Importing a later legacy snapshot',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -237,11 +237,9 @@ class Config:
     terms: dict[str, Term] = field(
         default_factory=lambda: {
             "fall_2026": Term("fall_2026", "Fall 2026", date(2026, 9, 2), date(2026, 12, 15)),
-            # Summer 2026: the official dates are 2026-05-18 to 2026-08-12; the
-            # window is widened a week either side. It overlaps the end of
-            # Spring 2026 (12 May); `sessions.term_adoption` gives each session
-            # to exactly one term.
-            "summer_2026": Term("summer_2026", "Summer 2026", date(2026, 5, 11), date(2026, 8, 19)),
+            # Summer 2026 official dates (the one-week buffer is applied by
+            # `term_buffer_days`, not by editing the dates).
+            "summer_2026": Term("summer_2026", "Summer 2026", date(2026, 5, 18), date(2026, 8, 12)),
             # Summer 2025: dates not known, so the approximate boundaries of
             # `load.semester_of` (1 Jun - 31 Aug).
             "summer_2025": Term("summer_2025", "Summer 2025", date(2025, 6, 1), date(2025, 8, 31)),
@@ -249,6 +247,13 @@ class Config:
             "spring_2026": Term("spring_2026", "Spring 2026", date(2026, 1, 20), date(2026, 5, 12)),
         }
     )
+
+    # ANLY-11. The instructor wants a week either side of every term counted as
+    # part of it (pre-term setup questions, end-of-term stragglers). Windows
+    # that decide which term a session belongs to run from official start minus
+    # this to official end plus this. `Term.start`/`end` stay the official dates,
+    # and elapsed days and completeness use those.
+    term_buffer_days: int = 7
 
     # The two terms the headline comparison is between.
     current_term: str = "fall_2026"
@@ -282,6 +287,12 @@ class Config:
     def registration_existed(self, term_key: str) -> bool:
         """True when the platform could register students during this term."""
         return self.term(term_key).start >= self.term(self.registration_from_term).start
+
+    def window(self, term_key: str) -> tuple[date, date]:
+        """(first, last) date that counts as this term: official dates plus the buffer."""
+        term = self.term(term_key)
+        pad = timedelta(days=self.term_buffer_days)
+        return term.start - pad, term.end + pad
 
     def class_sizes_for(self, term_key: str) -> dict[str, int]:
         """Class sizes for one term; empty when none are configured."""

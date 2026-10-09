@@ -128,7 +128,7 @@ Bloombot's history spans two data models: the Python bot's log up to Fall 2026, 
 
 Fall 2026 runs 2026-09-02 → 2026-12-15. The data stops at 2026-09-25. Two consequences the rest of the deck is built around:
 
-1. **Nothing from this term is compared against a complete prior term.** Every year-over-year comparison cuts both terms to the same first **23 days** of their own term.
+1. **Nothing from this term is compared against a complete prior term.** Every year-over-year comparison cuts both terms to the same window: from **7 days before** each term's official start to the first **23 days** after it. The pre-term week is included, for both terms, because students ask setup questions before classes begin. Days-elapsed counts use the official dates.
 2. **The new interfaces launched this term.** Web and chat-assistant volume measures our own release as much as it measures student behaviour, and every chart that mixes interfaces says so.
 
 **Speaker notes:** This slide is the one that earns the right to show the rest. Do not skip it, and do not apologise for it — a partial term honestly labelled is worth more than a full term quietly implied.
@@ -225,13 +225,13 @@ Web and the chat assistant have existed for three weeks. Their share is a fact a
 
 ## S13 · Fall 2025 against Fall 2026, like for like
 
-**Takeaway:** Both terms cut to their first 23 days, so this compares behaviour rather than the calendar.
+**Takeaway:** Both terms cut to the same window, 7 days before the official start through day 23, so this compares behaviour rather than the calendar.
 
 The comparison that is *not* like-for-like is the interface split: Discord is the only row that existed in both terms, and the next slide separates it out for that reason. As a share of enrolled students (courses with a class size only), active users were 17 of 125 (14%) in Fall 2025; 18 of 145 (12%) in Fall 2026, over those same days.
 
 ![Fall 2025 against Fall 2026, like for like](figures/term_comparison.png)
 
-*Figure: Sessions, distinct students and prompts in the first 23 days of each term.*
+*Figure: Sessions, distinct students and prompts from 7 days before each term's official start through day 23 (the pre-term week is included).*
 
 | Measure | Fall 2025 | Fall 2026 |
 | --- | --- | --- |
@@ -251,7 +251,7 @@ Read the Discord pair as the behavioural comparison and the other two as a launc
 
 ![The same window, by interface](figures/term_comparison_by_surface.png)
 
-*Figure: Sessions by interface in the first 23 days of each term.*
+*Figure: Sessions by interface, 7 days before each term's start through day 23.*
 
 | Interface | Fall 2025 | Fall 2026 |
 | --- | --- | --- |
@@ -371,7 +371,7 @@ The hypothesis worth stating: a private web page invites questions a student mig
 
 ![Did the new interfaces change what gets asked?](figures/topics_by_term.png)
 
-*Figure: Topics in the first 23 days of each term.*
+*Figure: Topics, 7 days before each term's start through day 23.*
 
 | Topic | Fall 2025 | Fall 2026 |
 | --- | --- | --- |

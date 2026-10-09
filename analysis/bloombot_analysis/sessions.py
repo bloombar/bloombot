@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -106,19 +106,25 @@ def session_frame(messages: pd.DataFrame, gap_minutes: int | None = None) -> pd.
 # ── Term windows ──────────────────────────────────────────────────────────
 
 
-def in_term(frame: pd.DataFrame, term: Term, ts_column: str = "ts") -> pd.DataFrame:
-    """Rows falling inside a term's calendar span."""
+def in_term(
+    frame: pd.DataFrame, term: Term, ts_column: str = "ts", buffer_days: int = 0
+) -> pd.DataFrame:
+    """Rows falling inside a term's calendar span, plus `buffer_days` either side."""
     if frame.empty:
         return frame
     ts = pd.to_datetime(frame[ts_column])
-    return frame[(ts.dt.date >= term.start) & (ts.dt.date <= term.end)]
+    pad = timedelta(days=buffer_days)
+    return frame[(ts.dt.date >= term.start - pad) & (ts.dt.date <= term.end + pad)]
 
 
 def like_for_like(
-    frame: pd.DataFrame, term: Term, elapsed_days: int, ts_column: str = "ts"
+    frame: pd.DataFrame, term: Term, elapsed_days: int, ts_column: str = "ts", buffer_days: int = 0
 ) -> pd.DataFrame:
     """
-    The first `elapsed_days` of a term.
+    The first `elapsed_days` of a term, starting `buffer_days` before its official start.
+
+    The same rule is used for both terms of a comparison: official start minus
+    the buffer, to official start plus the elapsed days (ANLY-11).
 
     This is the correction the whole year-over-year comparison depends on.
     Fall 2026 is in progress — the term does not end until mid-December — so
@@ -130,7 +136,7 @@ def like_for_like(
         return frame
     ts = pd.to_datetime(frame[ts_column])
     day_of_term = (ts.dt.normalize() - pd.Timestamp(term.start)).dt.days
-    return frame[(day_of_term >= 0) & (day_of_term <= elapsed_days)]
+    return frame[(day_of_term >= -buffer_days) & (day_of_term <= elapsed_days)]
 
 
 def term_completeness(config: Config | None = None) -> dict:
@@ -274,22 +280,27 @@ def _assign_terms(sessions: pd.DataFrame, config: Config) -> pd.DataFrame:
     Tag each session with the one term it belongs to (`_term`), so term windows
     that overlap never count a session twice.
 
-    A session falls in every term window that contains its date. If that is
-    several, it goes to the term whose class sizes list its course (Summer
-    courses in the May overlap with Spring); if still several or none do, to
-    the latest-starting one. Sessions outside every window get no term.
+    A session falls in every buffered term window (official dates plus
+    `term_buffer_days`) that contains its date. If that is several, it goes to
+    the term whose class sizes list its course, then to one whose official dates
+    contain the day, then to the latest-starting. Sessions outside every window
+    get no term.
     This uses the `Term` windows, not `load.semester_of`, which calls all of
     May Spring.
     """
     if sessions.empty:
         return sessions.assign(_term=pd.Series(dtype=object))
     days = pd.to_datetime(sessions["started_at"]).dt.date
-    ordered = sorted(config.terms.items(), key=lambda kv: kv[1].start, reverse=True)
+    windows = {k: config.window(k) for k in config.terms}
     owners = []
     for day, course in zip(days, sessions["course"]):
-        inside = [(k, t) for k, t in ordered if t.start <= day <= t.end]
-        sized = [k for k, _ in inside if course in config.class_sizes_for(k)]
-        owners.append(sized[0] if sized else (inside[0][0] if inside else None))
+        inside = [k for k, (first, last) in windows.items() if first <= day <= last]
+
+        def preference(k: str):
+            term = config.term(k)
+            return (course in config.class_sizes_for(k), term.start <= day <= term.end, term.start)
+
+        owners.append(max(inside, key=preference) if inside else None)
     return sessions.assign(_term=owners)
 
 
@@ -447,8 +458,9 @@ def weekly_matrix(sessions: pd.DataFrame, config: Config | None = None, by: str 
     wide = counts.reindex(full_index)
 
     in_any_term = pd.Series(False, index=wide.index)
-    for term in config.terms.values():
-        inside = (wide.index.date >= term.start) & (wide.index.date <= term.end)
+    for key in config.terms:
+        first, last = config.window(key)
+        inside = (wide.index.date >= first) & (wide.index.date <= last)
         # A term with no traffic at all in this data (a summer term the bot was
         # not used in) stays empty, so the line still breaks there.
         if not wide[inside].notna().any().any():

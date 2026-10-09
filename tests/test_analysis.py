@@ -307,8 +307,9 @@ def test_class_sizes_are_configured_by_term_and_pipeline_label():
     assert config.class_sizes_for("summer_2026") == {"Introduction to Programming": 54, "Web Design": 28}
     assert config.class_sizes_for("fall_2026")["Software Engineering"] == 109
     assert config.class_sizes_for("summer_2025") == {}
-    # Official 18 May - 12 Aug, widened a week either side.
-    assert (config.term("summer_2026").start, config.term("summer_2026").end) == (date(2026, 5, 11), date(2026, 8, 19))
+    # Official dates; the one-week buffer is applied by Config.window.
+    assert (config.term("summer_2026").start, config.term("summer_2026").end) == (date(2026, 5, 18), date(2026, 8, 12))
+    assert config.window("summer_2026") == (date(2026, 5, 11), date(2026, 8, 19))
     assert not config.registration_existed("spring_2026") and config.registration_existed("fall_2026")
 
 
@@ -346,7 +347,7 @@ def test_term_adoption_has_no_share_without_a_class_size_and_blanks_small_cells(
 
 
 def test_overlapping_term_windows_count_each_session_once():
-    """ANLY-11: 11-12 May sits in Spring and Summer windows; the course's class-size term wins."""
+    """ANLY-11: 11-19 May sits in Spring's and Summer's buffered windows; the course's class-size term wins."""
     config = Config(as_of=date(2026, 10, 9))
     frame = pd.concat(
         [_messages(["2026-05-12 10:00"], person="a", course="Web Design"),  # summer course
@@ -364,6 +365,37 @@ def test_overlapping_term_windows_count_each_session_once():
     assert table[(table["term"] == "spring_2026") & (table["course"] == "Web Design")].empty
     tagged = sessions._assign_terms(sessions.session_frame(frame), config)
     assert sorted(tagged["_term"]) == ["spring_2026", "summer_2026", "summer_2026"]
+
+
+def test_the_buffer_applies_to_every_term_and_elapsed_days_stay_official():
+    config = Config(as_of=date(2026, 10, 9))
+    assert config.term_buffer_days == 7
+    for key, term in config.terms.items():
+        first, last = config.window(key)
+        assert (term.start - first).days == 7 and (last - term.end).days == 7
+    assert config.term("fall_2026").elapsed_days(date(2026, 10, 9)) == 37  # from 2 Sep, not 26 Aug
+
+
+def test_a_session_five_days_before_the_official_start_counts_in_that_term():
+    config = Config(as_of=date(2026, 10, 9))
+    frame = pd.concat(
+        [_messages(["2025-08-29 10:00"], person=f"p{i}", course="Software Engineering") for i in range(6)]
+    )  # Fall 2025 starts 3 Sep
+    table = sessions.term_adoption(
+        sessions.session_frame(frame), pd.DataFrame(columns=["course", "person_key"]), config
+    )
+    row = table[(table["term"] == "fall_2025") & (table["course"] == "Software Engineering")].iloc[0]
+    assert row["active"] == 6
+    # 14 days after Fall 2025 ends (23 Dec is the buffer's last day): counted nowhere.
+    early = sessions.session_frame(_messages(["2025-12-30 10:00"], course="Software Engineering"))
+    assert sessions._assign_terms(early, config)["_term"].isna().all()
+
+
+def test_like_for_like_includes_the_pre_term_week_for_both_terms():
+    term = Term("t", "T", date(2025, 9, 3), date(2025, 12, 16))
+    frame = _messages(["2025-08-27 10:00", "2025-08-26 10:00", "2025-09-10 10:00", "2025-09-13 10:00"])
+    kept = sessions.like_for_like(frame, term, elapsed_days=7, buffer_days=7)
+    assert list(kept["ts"].dt.day) == [27, 10]  # 26 Aug is 8 days early; 13 Sep is day 10
 
 
 def test_summer_traffic_in_mid_may_is_counted_under_summer_2026():

@@ -106,6 +106,20 @@ Before Fall 2026 there was no registration, so only the active share can be comp
 `CLASS_SIZES`; mock runs read their own sizes from `tmp/analysis/class_sizes.json` through
 `BLOOMBOT_ANALYSIS_CLASS_SIZES`.
 
+### Term windows and the one-week buffer
+
+Each `Term` keeps its official dates (Summer 2026: 18 May to 12 Aug; Summer 2025 is approximate). Which term a session
+belongs to is decided by `Config.window(term)`: official start minus `term_buffer_days` (7) to official end plus 7.
+Elapsed days ("day 37 of 104") and completeness stay on the official dates. The like-for-like comparison cuts both terms
+the same way, from official start minus 7 days to official start plus the elapsed days, so the pre-term week is included.
+
+The buffer makes windows overlap: Spring and Summer 2026 on 11 to 19 May, and Summer and Fall 2025 on 27 Aug to 7 Sep
+(Fall 2025 and Spring 2026 do not overlap). `sessions._assign_terms` gives each session to exactly one term: the term
+whose class sizes list its course, then one whose official dates contain the day, then the latest-starting. Per-term
+tables, the adoption slide and the like-for-like windows all use that assignment (`sessions.term_sessions`), not
+`load.semester_of`. Registrations count in a term only if the enrolment was created inside its window. The small-cell
+rule applies to the adoption slides too: counts of 1 to 4 are blanked, and a total is withheld when a course in it is blanked.
+
 ## Privacy
 
 - Notebook **outputs never reach GitHub**: a pre-commit hook strips them from the staged copy, a pre-push hook

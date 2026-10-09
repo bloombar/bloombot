@@ -47,7 +47,7 @@
       "web"
     ]
   },
-  "_written_at": "2026-10-09T12:11:24",
+  "_written_at": "2026-10-09T12:27:05",
   "volume": {
     "elapsed_days": 23,
     "adoption": [
@@ -79,18 +79,18 @@
         "course": "Web Design",
         "enrolled": 40,
         "registered": 23,
-        "active": 4,
+        "active": null,
         "registered_share": 0.575,
-        "active_share": 0.1
+        "active_share": null
       }
     ],
-    "adoption_total_active": 27,
+    "adoption_total_active": null,
     "adoption_total_registered": 124,
     "adoption_total_enrolled": 145,
     "adoption_registered_sized": 78,
-    "adoption_active_sized": 18,
+    "adoption_active_sized": null,
     "adoption_registered_share": 0.5379310344827586,
-    "adoption_active_share": 0.12413793103448276,
+    "adoption_active_share": null,
     "adoption_courses_without_class_size": [
       "Introduction to Programming"
     ],
@@ -133,12 +133,14 @@
       "Fall 2025": {
         "active": 17,
         "enrolled": 125,
-        "share": 0.136
+        "share": 0.136,
+        "suppressed": false
       },
       "Fall 2026": {
-        "active": 18,
+        "active": null,
         "enrolled": 145,
-        "share": 0.12413793103448276
+        "share": null,
+        "suppressed": true
       }
     },
     "term_adoption": [

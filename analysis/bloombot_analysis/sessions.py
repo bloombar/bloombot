@@ -304,6 +304,18 @@ def _assign_terms(sessions: pd.DataFrame, config: Config) -> pd.DataFrame:
     return sessions.assign(_term=owners)
 
 
+def term_sessions(sessions: pd.DataFrame, config: Config, term_key: str) -> pd.DataFrame:
+    """
+    The sessions that belong to one term under the single-term assignment
+    (`_assign_terms`), so a like-for-like window or a per-term table never
+    counts a session that another term owns (ANLY-11).
+    """
+    if sessions.empty:
+        return sessions
+    tagged = _assign_terms(sessions, config)
+    return tagged[tagged["_term"] == term_key].drop(columns="_term")
+
+
 def term_adoption(
     student_sessions: pd.DataFrame,
     enrolments: pd.DataFrame,
@@ -330,9 +342,16 @@ def term_adoption(
         active = (
             in_this.groupby("course")["person_key"].nunique() if not in_this.empty else pd.Series(dtype=int)
         )
+        # Registrations count in the term only if the enrolment was created in
+        # its buffered window, so a later term never inherits earlier ones.
+        first, last = config.window(key)
+        scoped = enrolments
+        if not enrolments.empty and "created_at" in enrolments:
+            made = pd.to_datetime(enrolments["created_at"]).dt.date
+            scoped = enrolments[(made >= first) & (made <= last)]
         registered = (
-            enrolments.groupby("course")["person_key"].nunique()
-            if config.registration_existed(key) and not enrolments.empty
+            scoped.groupby("course")["person_key"].nunique()
+            if config.registration_existed(key) and not scoped.empty
             else pd.Series(dtype=int)
         )
         existed = config.registration_existed(key)
@@ -361,48 +380,84 @@ def term_adoption(
     return out
 
 
-def window_active_share(window: pd.DataFrame, class_sizes: Mapping[str, int]) -> dict:
+def window_active_share(
+    window: pd.DataFrame, class_sizes: Mapping[str, int], min_cell: int = 0
+) -> dict:
     """
-    Active users / enrolled students over one like-for-like window (ANLY-11).
+    Active students per course enrolment over one like-for-like window (ANLY-11).
 
-    Only courses that have a class size count, in numerator and denominator
-    alike, so an unsized course cannot inflate the share.
+    `active` sums the per-course distinct students, so a student in two sized
+    courses counts once in each; `enrolled` sums the class sizes, the same
+    unit. Only courses with a class size count, in numerator and denominator
+    alike. If any course's count is between 1 and `min_cell - 1`, the figures
+    are withheld (`suppressed` True, active and share None) so the total cannot
+    be used to back out a blanked cell.
     """
     sized = window[window["course"].isin(class_sizes)] if not window.empty else window
-    active = int(sized.groupby("course")["person_key"].nunique().sum()) if not sized.empty else 0
+    per_course = sized.groupby("course")["person_key"].nunique() if not sized.empty else pd.Series(dtype=int)
     enrolled = int(sum(class_sizes.values()))
+    suppressed = bool(((per_course > 0) & (per_course < min_cell)).any())
+    active = int(per_course.sum())
     return {
-        "active": active,
+        "active": None if suppressed else active,
         "enrolled": enrolled,
-        "share": active / enrolled if enrolled else float("nan"),
+        "share": None if suppressed else (active / enrolled if enrolled else float("nan")),
+        "suppressed": suppressed,
     }
 
 
-def adoption_totals(table: pd.DataFrame) -> dict:
+def suppress_small_counts(table: pd.DataFrame, min_cell: int) -> pd.DataFrame:
+    """
+    Blank registered and active counts of 1 to `min_cell - 1` and the shares
+    that come from them (the small-cell rule, ANLY-11). Zero is not blanked.
+    """
+    out = table.copy()
+    for column, share in (("registered", "registered_share"), ("active", "active_share")):
+        hide = (out[column] > 0) & (out[column] < min_cell)
+        out[column] = out[column].astype("Int64").mask(hide)
+        out.loc[hide, share] = np.nan
+    return out
+
+
+def adoption_totals(table: pd.DataFrame, min_cell: int = 0) -> dict:
     """
     Totals across courses for the headline (ANLY-11).
 
     `enrolled_total` sums the configured class sizes. The two shares count only
     courses that have one, so a course with no class size cannot inflate the
     numerator against a denominator that leaves it out. `registered_total` and
-    `active_total` still count every course's users.
+    `active_total` still count every course's users. A student in two courses
+    counts once in each.
+
+    Small cells: with `min_cell` set, a total is withheld (None, shares NaN)
+    whenever any course in it has a count of 1 to `min_cell - 1`, since the
+    total would otherwise give that count away. `registered_withheld` and
+    `active_withheld` say which were withheld.
     """
-    sized = table[table["enrolled"].notna()] if not table.empty else table
+    empty = table.empty
+    sized = table[table["enrolled"].notna()] if not empty else table
+
+    def small(frame: pd.DataFrame, column: str) -> bool:
+        return bool(not frame.empty and ((frame[column] > 0) & (frame[column] < min_cell)).any())
+
+    def total(frame: pd.DataFrame, column: str, hidden: bool):
+        return None if hidden else (int(frame[column].sum()) if not frame.empty else 0)
+
     enrolled = int(sized["enrolled"].sum()) if not sized.empty else 0
-    registered_sized = int(sized["registered"].sum()) if not sized.empty else 0
-    active_sized = int(sized["active"].sum()) if not sized.empty else 0
-    return {
-        "enrolled_total": enrolled,
-        "registered_total": int(table["registered"].sum()) if not table.empty else 0,
-        "active_total": int(table["active"].sum()) if not table.empty else 0,
-        "registered_sized": registered_sized,
-        "active_sized": active_sized,
-        "registered_share": registered_sized / enrolled if enrolled else float("nan"),
-        "active_share": active_sized / enrolled if enrolled else float("nan"),
-        "courses_without_class_size": [
-            str(c) for c in (table.loc[table["enrolled"].isna(), "course"] if not table.empty else [])
-        ],
-    }
+    out = {"enrolled_total": enrolled}
+    for column in ("registered", "active"):
+        hide_all, hide_sized = small(table, column), small(sized, column)
+        sized_total = total(sized, column, hide_sized)
+        out[f"{column}_total"] = total(table, column, hide_all)
+        out[f"{column}_sized"] = sized_total
+        out[f"{column}_share"] = (
+            sized_total / enrolled if sized_total is not None and enrolled else float("nan")
+        )
+        out[f"{column}_withheld"] = hide_all
+    out["courses_without_class_size"] = [
+        str(c) for c in (table.loc[table["enrolled"].isna(), "course"] if not empty else [])
+    ]
+    return out
 
 
 def return_rate(sessions: pd.DataFrame) -> dict:

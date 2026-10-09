@@ -410,6 +410,52 @@ def test_summer_traffic_in_mid_may_is_counted_under_summer_2026():
     assert row["active"] == 6 and row["active_share"] == pytest.approx(6 / 28)
 
 
+def test_small_counts_are_blanked_and_totals_withheld():
+    """ANLY-11: a total that would reveal a blanked cell is withheld."""
+    rows = sessions.session_frame(
+        pd.concat([_messages(["2026-09-10 10:00"], person=f"p{i}", course="A") for i in range(4)]
+                  + [_messages(["2026-09-10 10:00"], person=f"q{i}", course="B") for i in range(7)])
+    )
+    table = sessions.adoption(rows, pd.concat([_registered("A", 2), _registered("B", 9)]), {"A": 10, "B": 20})
+    cells = sessions.suppress_small_counts(table, 5)
+    assert pd.isna(cells.loc[0, "active"]) and pd.isna(cells.loc[0, "registered"])  # 4 and 2
+    assert cells.loc[1, "active"] == 7 and pd.isna(cells.loc[0, "active_share"])
+    totals = sessions.adoption_totals(table, 5)
+    assert totals["active_total"] is None and totals["registered_total"] is None
+    assert totals["enrolled_total"] == 30 and totals["active_withheld"]
+    assert pd.isna(totals["active_share"])
+    assert sessions.adoption_totals(table)["active_total"] == 11  # no floor, no withholding
+
+
+def test_window_active_share_withholds_a_small_course_and_counts_per_course():
+    window = sessions.session_frame(
+        pd.concat([_messages(["2026-09-10 10:00"], person="a", course="A"),
+                   _messages(["2026-09-10 10:00"], person="a", course="B")]
+                  + [_messages(["2026-09-10 10:00"], person=f"b{i}", course="B") for i in range(6)])
+    )
+    result = sessions.window_active_share(window, {"A": 10, "B": 10}, min_cell=5)
+    assert result["suppressed"] and result["active"] is None and result["share"] is None
+    plain = sessions.window_active_share(window, {"A": 10, "B": 10})
+    assert plain["active"] == 8  # the student in two courses counts once in each
+
+
+def test_registrations_are_scoped_to_the_term_they_were_made_in():
+    """ANLY-11: Fall 2026 registrations are not inherited by a later term."""
+    config = Config(
+        as_of=date(2027, 2, 1),
+        class_sizes={"spring_2027": {"Web Design": 30}, "fall_2026": {"Web Design": 30}},
+        terms={
+            "fall_2026": Term("fall_2026", "Fall 2026", date(2026, 9, 2), date(2026, 12, 15)),
+            "spring_2027": Term("spring_2027", "Spring 2027", date(2027, 1, 19), date(2027, 5, 11)),
+        },
+        registration_from_term="fall_2026",
+    )
+    enrolments = _registered("Web Design", 6).assign(created_at="2026-09-20 10:00:00")
+    table = sessions.term_adoption(pd.DataFrame(), enrolments, config)
+    registered = dict(zip(table["term"], table["registered"]))
+    assert registered["fall_2026"] == 6 and registered["spring_2027"] == 0
+
+
 def test_window_active_share_ignores_unsized_courses():
     window = pd.concat(
         [
@@ -418,7 +464,7 @@ def test_window_active_share_ignores_unsized_courses():
         ]
     ).rename(columns={})
     result = sessions.window_active_share(sessions.session_frame(window), {"Web Design": 4})
-    assert result == {"active": 1, "enrolled": 4, "share": 0.25}
+    assert result == {"active": 1, "enrolled": 4, "share": 0.25, "suppressed": False}
 
 
 def test_weekly_matrix_leaves_the_summer_empty():
@@ -1335,15 +1381,34 @@ def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
     assert summer and summer[0]["active"] and summer[0]["active"] > 0
     assert any(r["course"] == "Introduction to Programming" and pd.isna(r["enrolled"]) for r in volume["adoption"])
 
+    # Small cells: whatever S10 blanks, S09 must not reveal by cell, total or takeaway.
+    blanked = [r["course"] for r in volume["term_adoption"] if r["term"] == "fall_2026" and r["active"] is None
+               and r["enrolled"] is not None]
+    assert blanked, "the mock should have a Fall 2026 course with a blanked active count"
+    for row in volume["adoption"]:
+        if row["course"] in blanked:
+            assert row["active"] is None or pd.isna(row["active"])
+    assert volume["adoption_total_active"] is None and volume["adoption_active_sized"] is None
+    for course in blanked:
+        line = next(l for l in s09.splitlines() if l.startswith(f"| {course} |"))
+        assert line.split("|")[4].strip() == "—"  # the Active users cell
+    assert "active total is withheld" in s09
+    assert "{registered_phrase}" not in text and "{" not in s09  # f-strings all rendered
+    assert "Most enrolled students (54%) have registered" in text  # derived: the mock registers 54%
+
     # Every student notebook filters to students: the numbers they wrote match
     # a student-only recount of the tidy files, and differ from an all-roles one.
     data = pd.read_csv(out / "data" / "sessions.csv", parse_dates=["started_at"])
     students = data[data["role"] == "student"]
     assert len(students) < len(data)
     assert metrics["shape"]["sessions"] == len(students)  # notebook 02
-    term = Config().term("fall_2026")
-    now = students[(students["started_at"].dt.date >= term.start) & (students["started_at"].dt.date <= term.end)]
-    assert metrics["volume"]["adoption_total_active"] == now.groupby("course")["person_key"].nunique().sum()  # 01
+    first, last = Config().window("fall_2026")
+    now = students[(students["started_at"].dt.date >= first) & (students["started_at"].dt.date <= last)]
+    recount = now.groupby("course")["person_key"].nunique()
+    if (recount.between(1, 4)).any():  # a blanked cell: the total must be withheld too
+        assert metrics["volume"]["adoption_total_active"] is None
+    else:
+        assert metrics["volume"]["adoption_total_active"] == recount.sum()  # 01
     cost = metrics["cost"]
     window = students[
         (students["started_at"] >= pd.Timestamp(cost["window_start"]))

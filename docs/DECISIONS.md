@@ -14606,3 +14606,10 @@ of deletions; the combined file excludes them with the rest of their history.
 - **Report.** S09 rewritten, a new slide after it for the term-by-term table (so later slide numbers moved up by one),
   definitions added to the method slide, and the roster wording reworded in the role, "what it cannot tell you" and
   conclusion slides. Per-student cost wording became per active user.
+- **Rework (review round 1).** The adoption slide (S09) uses the same small-cell rule as the term table: registered and
+  active counts of 1 to 4 are blanked with their shares, and a total (and the takeaway built on it) is withheld whenever
+  any course in it is blanked, since a total would otherwise give a blank away. The like-for-like active-share sentence is
+  withheld the same way. Totals and the like-for-like share count a student once per course (course enrolments), and say
+  so. Like-for-like windows, S09 and the term table all use `term_sessions` (single-term assignment). A term's
+  registered count includes only enrolments created in its buffered window. The report names the class-size source.
+  "Active" before Fall 2026 means any student with a prompt, since registration did not exist.

@@ -215,6 +215,14 @@ class Config:
 
     # ANLY-11. Official class sizes by term, then course label (see CLASS_SIZES).
     class_sizes: dict[str, dict[str, int]] = field(default_factory=_load_class_sizes)
+    # Where the class sizes came from, named in the report (ANLY-11).
+    class_sizes_source: str = field(
+        default_factory=lambda: (
+            f"{os.environ['BLOOMBOT_ANALYSIS_CLASS_SIZES']} (BLOOMBOT_ANALYSIS_CLASS_SIZES override)"
+            if os.environ.get("BLOOMBOT_ANALYSIS_CLASS_SIZES")
+            else "CLASS_SIZES in analysis/bloombot_analysis/config.py"
+        )
+    )
 
     # ANLY-11. The platform has recorded registrations (enrolment rows) only
     # since this term; the old bot had none. Terms starting earlier show
@@ -281,8 +289,10 @@ class Config:
             return f"{name} ({'exists' if path.exists() else 'missing'})"
 
         if self.input_mode == "combined":
-            return f"combined: {show(self.combined_db)}"
-        return f"two-file: legacy {show(self.legacy_db)}; current {show(self.current_db)}"
+            inputs = f"combined: {show(self.combined_db)}"
+        else:
+            inputs = f"two-file: legacy {show(self.legacy_db)}; current {show(self.current_db)}"
+        return f"{inputs}; class sizes: {self.class_sizes_source}"
 
     def registration_existed(self, term_key: str) -> bool:
         """True when the platform could register students during this term."""

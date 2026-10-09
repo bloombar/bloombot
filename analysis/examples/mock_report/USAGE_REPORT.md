@@ -84,7 +84,7 @@ Account creation is **gated on my approval**, deliberately. Every tenant's usage
 - **Prompt**: one student message. Bot replies are not counted, or every session would look twice as deep as it is.
 - **Enrolled student**: a student on the course's official class list. The count is the class size, a hand-entered headcount (no names, no roster) — not something the bot can see.
 - **User**: a student the platform knows through an enrolment record — registered the first time they messaged the bot or joined through a link. Users are a subset of enrolled students; staff are not counted.
-- **Active user**: a user with at least one prompt in the period.
+- **Active user**: a user (or, before registration existed in Fall 2026, any student) with at least one prompt in the period.
 - **Student**: every measure in this deck counts students only. Course owners, instructors and assistants (anyone with an active membership in the course's organization) are **staff**: their 50 messages are reported in their own section, not here.
 - **Excluded**: test accounts (4 messages), and anything a student has asked to have deleted.
 - All times are local (America/New_York), so 'by hour of day' means the hour the student was awake.
@@ -113,6 +113,7 @@ Bloombot's history spans two data models: the Python bot's log up to Fall 2026, 
 | Dropped as test accounts | 4 |
 | Staff messages (reported separately) | 50 |
 | Student messages analysed | 1,760 |
+| Class sizes (enrolled students) from | /Users/foobarstein/Documents/research/bloombot/tmp/analysis/class_sizes.json (BLOOMBOT_ANALYSIS_CLASS_SIZES override) |
 | Sessions | 285 |
 | Distinct students | 55 |
 | First message | 2025-09-04 |
@@ -139,20 +140,20 @@ Fall 2026 runs 2026-09-02 → 2026-12-15. The data stops at 2026-09-25. Two cons
 
 ## S09 · Adoption: who registered, and who used it
 
-**Takeaway:** 78 of 145 enrolled students (54%) are registered users; 18 (12%) used the bot this term so far.
+**Takeaway:** 78 of 145 enrolled students (54%) are registered users; the active total is withheld because a course has fewer than 5 active users.
 
-**Enrolled students** are the official class sizes, hand-entered headcounts rather than a roster. **Registered users** are the students the bot knows about: it learns of a student only when they first message it or join, so a student who has never tried it is not visible to the bot at all, only in the headcount. Both shares are of enrolled students. Registration began in Fall 2026, so the next slide gives earlier terms' active shares. No class size is configured for Introduction to Programming, so those courses show no share and are left out of the totals' shares.
+**Enrolled students** are the official class sizes, hand-entered headcounts rather than a roster. **Registered users** are the students the bot knows about: it learns of a student only when they first message it or join, so a student who has never tried it is not visible to the bot at all, only in the headcount. Both shares are of enrolled students. A student in two courses counts once in each, in the totals too. Counts of 1 to 4 are blanked, and a total is withheld when a course in it is blanked, so it cannot be used to work the blank out. Registration began in Fall 2026, so the next slide gives earlier terms' active shares. No class size is configured for Introduction to Programming, so those courses show no share and are left out of the totals' shares.
 
 ![Adoption: who registered, and who used it](figures/adoption_by_course.png)
 
-*Figure: Enrolled students (class size), registered users and active users, Fall 2026 through day 23 (n = 145 enrolled students, 124 registered users, 27 active users).*
+*Figure: Enrolled students (class size), registered users and active users, Fall 2026 through day 23 (n = 145 enrolled students, 124 registered users, active users withheld). Counts under 5 are omitted.*
 
 | Course | Enrolled students | Registered users | Active users | Registered, of enrolled | Active, of enrolled |
 | --- | --- | --- | --- | --- | --- |
 | Agile Software Development & DevOps | 45 | 21 | 5 | 47% | 11% |
 | Introduction to Programming | — | 46 | 9 | — | — |
 | Software Engineering | 60 | 34 | 9 | 57% | 15% |
-| Web Design | 40 | 23 | 4 | 57% | 10% |
+| Web Design | 40 | 23 | — | 57% | — |
 
 **Speaker notes:** Expect the question 'is that good?'. There is no benchmark; say so, and give the range across courses.
 
@@ -160,15 +161,15 @@ Fall 2026 runs 2026-09-02 → 2026-12-15. The data stops at 2026-09-25. Two cons
 
 ## S10 · How much of each class used it, term by term
 
-**Takeaway:** Between 11% and 29% of enrolled students were active users, depending on the course and term. The current term is partial (through day 23) and not yet comparable.
+**Takeaway:** Between 11% and 29% of enrolled students were active, depending on the course and term. The current term is partial (through day 23) and not yet comparable.
 
-Active share needs only the conversation record, so it exists for terms before the platform could register students; registration itself began in Fall 2026, so earlier terms say 'registration did not exist' rather than 0. A term still in progress covers only the days so far and must not be read against a complete one. Summer term dates are approximate. A term or course with no class size has no share.
+Active share needs only the conversation record, so it exists for terms before the platform could register students; registration itself began in Fall 2026, so earlier terms say 'registration did not exist' rather than 0. A term still in progress covers only the days so far and must not be read against a complete one. A term or course with no class size has no share. Every term also counts the week either side of its official dates. Summer 2026 uses its official dates (18 May to 12 Aug); only Summer 2025's are approximate (1 June to 31 August). 'Active' means any student with a prompt, so before registration began it is not limited to registered users.
 
 ![How much of each class used it, term by term](figures/adoption_by_term.png)
 
-*Figure: Enrolled students (class size) and active users per course and term. Active counts below 5 are blanked. n = 106 active users, summed over the course-terms shown.*
+*Figure: Enrolled students (class size) and active users per course and term. Active counts below 5 are blanked. n = 106 active students, summed over the course-terms shown.*
 
-| Term | Course | Enrolled students | Registered users | Active users | Active, of enrolled |
+| Term | Course | Enrolled students | Registered users | Active | Active, of enrolled |
 | --- | --- | --- | --- | --- | --- |
 | Fall 2025 | Agile Software Development & DevOps | 40 | registration did not exist | 11 | 28% |
 | Fall 2025 | Introduction to Programming | — | registration did not exist | 13 | — |
@@ -227,7 +228,7 @@ Web and the chat assistant have existed for three weeks. Their share is a fact a
 
 **Takeaway:** Both terms cut to the same window, 7 days before the official start through day 23, so this compares behaviour rather than the calendar.
 
-The comparison that is *not* like-for-like is the interface split: Discord is the only row that existed in both terms, and the next slide separates it out for that reason. As a share of enrolled students (courses with a class size only), active users were 17 of 125 (14%) in Fall 2025; 18 of 145 (12%) in Fall 2026, over those same days.
+The comparison that is *not* like-for-like is the interface split: Discord is the only row that existed in both terms, and the next slide separates it out for that reason. In the same window, as a share of class sizes (a student in two sized courses counts once in each; courses with a class size only), active students were 17 of 125 (14%) in Fall 2025. The active share for Fall 2026 is withheld because a course has fewer than 5 active students in the window.
 
 ![Fall 2025 against Fall 2026, like for like](figures/term_comparison.png)
 
@@ -502,7 +503,7 @@ Stated as hypotheses, with the evidence attached:
 
 1. **Reference, not tutoring.** A session is short — median 2 prompts, 41 of 285 (14%) of them a single question — and the largest topic is Course concepts. That pattern fits a look-it-up habit more than a study-with-me one.
 2. **It fills the hours nobody staffs.** 167 of 285 (59%) sessions start between 18:00 and 08:00.
-3. **Adoption is partial and shallow.** A minority of enrolled students has registered with the bot, and a smaller group returns repeatedly. Whether the shallow group got what they needed or gave up is exactly what this data cannot say.
+3. **Adoption is partial and shallow.** Most enrolled students (54%) have registered with the bot, and a smaller group returns repeatedly. Whether the shallow group got what they needed or gave up is exactly what this data cannot say.
 4. **A private interface may invite different questions.** Consistent with the topic split by interface; not established by it.
 
 **Speaker notes:** This slide was written first, before the deck was built around it. If it cannot be argued from the charts, the analysis is not finished.

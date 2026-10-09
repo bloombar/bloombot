@@ -398,6 +398,62 @@ def test_like_for_like_includes_the_pre_term_week_for_both_terms():
     assert list(kept["ts"].dt.day) == [27, 10]  # 26 Aug is 8 days early; 13 Sep is day 10
 
 
+def test_registered_counts_of_one_to_four_are_blanked_in_the_term_table():
+    config = Config(as_of=date(2026, 10, 9))
+    enrolments = _registered("Software Engineering", 3).assign(created_at="2026-09-10 10:00:00")
+    table = sessions.term_adoption(pd.DataFrame(), enrolments, config)
+    row = table[(table["term"] == "fall_2026") & (table["course"] == "Software Engineering")].iloc[0]
+    assert pd.isna(row["registered"]) and row["registration_existed"]
+    enough = _registered("Software Engineering", 6).assign(created_at="2026-09-10 10:00:00")
+    row = sessions.term_adoption(pd.DataFrame(), enough, config).query(
+        "term == 'fall_2026' and course == 'Software Engineering'"
+    ).iloc[0]
+    assert row["registered"] == 6
+
+
+def test_student_counts_over_a_blanked_course_are_withheld():
+    frame = sessions.session_frame(
+        pd.concat([_messages(["2026-09-10 10:00"], person=f"a{i}", course="A") for i in range(7)]
+                  + [_messages(["2026-09-10 10:00"], person=f"b{i}", course="B") for i in range(3)])
+    )
+    assert sessions.distinct_students(frame, 5) is None  # B has 3 in the window
+    only_a = frame[frame["course"] == "A"]
+    assert sessions.distinct_students(only_a, 5) == 7
+    assert sessions.distinct_students(only_a, 5, blanked_courses={"A"}) is None
+    split = sessions.surface_split(frame, blanked_courses={"B"})
+    assert split["students"].isna().all() or split["students"].tolist() == [None]
+
+
+def test_like_for_like_term_gives_a_summer_session_to_summer_not_fall():
+    """ANLY-11: a Summer-2025-sized course on 28 Aug 2025 is not in Fall 2025's window."""
+    config = Config(as_of=date(2026, 10, 9), class_sizes={"summer_2025": {"Web Design": 30}})
+    frame = sessions.session_frame(
+        pd.concat([_messages(["2025-08-28 10:00"], person="a", course="Web Design"),
+                   _messages(["2025-09-12 10:00"], person="b", course="Web Design")])
+    )
+    window = sessions.like_for_like_term(frame, config, "fall_2025", 37)
+    assert list(window["person_key"]) == ["b"]
+    # The old path (raw sessions, date window only) would have counted both.
+    raw = sessions.like_for_like(frame, config.term("fall_2025"), 37, "started_at", config.term_buffer_days)
+    assert len(raw) == 2
+
+
+def test_notebooks_build_their_like_for_like_windows_from_the_library_function():
+    """Reverting notebook 01 or 03 to the raw `like_for_like` would reopen the double-count."""
+    for name in ("01_volume_and_adoption.ipynb", "03_topics.ipynb"):
+        source = (REPO_ROOT / "analysis" / "notebooks" / name).read_text()
+        assert "like_for_like_term(" in source
+        assert "sessions.like_for_like(" not in source
+
+
+def test_class_sizes_source_names_no_developer_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("BLOOMBOT_ANALYSIS_CLASS_SIZES", str(tmp_path / "class_sizes.json"))
+    (tmp_path / "class_sizes.json").write_text("{}")
+    config = Config()
+    assert config.class_sizes_source == "class_sizes.json (BLOOMBOT_ANALYSIS_CLASS_SIZES override)"
+    assert "class sizes: class_sizes.json" in config.describe_inputs()
+
+
 def test_summer_traffic_in_mid_may_is_counted_under_summer_2026():
     config = Config(as_of=date(2026, 10, 9))
     frame = pd.concat(
@@ -1394,6 +1450,29 @@ def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
         assert line.split("|")[4].strip() == "—"  # the Active users cell
     assert "active total is withheld" in s09
     assert "{registered_phrase}" not in text and "{" not in s09  # f-strings all rendered
+
+    # Cross-slide small-cell check: with Web Design blanked, no other slide or metric may print a
+    # student count over a set that contains it, or the blank could be worked out by subtraction.
+    unblanked_total = sum(
+        r["active"] for r in volume["adoption"] if r["active"] is not None and not pd.isna(r["active"])
+    )
+    published = [
+        volume["comparison"]["Fall 2026"]["Students"],
+        metrics["cost"]["students_in_window"],
+        *[r["students"] for r in volume["surface_split"]],
+    ]
+    assert volume["comparison"]["Fall 2026"]["Students"] is None  # S13 row and chart bar
+    assert metrics["cost"]["students_in_window"] is None and metrics["cost"]["usd_per_student"] is None  # S22
+    for value in published:
+        assert value is None or not (unblanked_total < value <= unblanked_total + 4)
+    s22 = text.split("## S22", 1)[1].split("\n## S", 1)[0]
+    assert "withheld, because the count would give away" in s22 and "active users." not in s22.split("Per active user")[1][:20]
+    s13 = text.split("## S13", 1)[1].split("\n## S", 1)[0]
+    assert "| Students | " in s13 and "| — |" in s13.split("| Students | ")[1].split("\n")[0]
+    # S10 prints no registered count that S09 blanks (Fall 2026 rows, by course).
+    assert "class_sizes.json (BLOOMBOT_ANALYSIS_CLASS_SIZES override)" in text and "/Users/" not in text
+    # Derived wording, not hard-coded.
+    assert "three weeks" not in text and "the two new interfaces are being used" not in text
     assert "Most enrolled students (54%) have registered" in text  # derived: the mock registers 54%
 
     # Every student notebook filters to students: the numbers they wrote match

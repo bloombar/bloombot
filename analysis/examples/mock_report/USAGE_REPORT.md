@@ -113,7 +113,7 @@ Bloombot's history spans two data models: the Python bot's log up to Fall 2026, 
 | Dropped as test accounts | 4 |
 | Staff messages (reported separately) | 50 |
 | Student messages analysed | 1,760 |
-| Class sizes (enrolled students) from | /Users/foobarstein/Documents/research/bloombot/tmp/analysis/class_sizes.json (BLOOMBOT_ANALYSIS_CLASS_SIZES override) |
+| Class sizes (enrolled students) from | tmp/analysis/class_sizes.json (BLOOMBOT_ANALYSIS_CLASS_SIZES override) |
 | Sessions | 285 |
 | Distinct students | 55 |
 | First message | 2025-09-04 |
@@ -206,9 +206,9 @@ Points, not a trend line: with this many weeks a fitted line would assert more t
 
 ## S12 · Where students talked to it
 
-**Takeaway:** Discord still carries most of it; the two new interfaces are being used, at small numbers.
+**Takeaway:** Discord still carries most of it (33 of 44 sessions); Web and Chat assistant have 11 of them.
 
-Web and the chat assistant have existed for three weeks. Their share is a fact about our launch, not a preference students expressed over a year.
+The Web and Chat assistant interfaces have existed for 23 days of Fall 2026 (since 2026-09-02). Their share is a fact about our launch, not a preference students expressed over a year.
 
 ![Where students talked to it](figures/sessions_by_surface.png)
 
@@ -216,11 +216,11 @@ Web and the chat assistant have existed for three weeks. Their share is a fact a
 
 | Interface | Sessions | Prompts | Students |
 | --- | --- | --- | --- |
-| Discord | 33 | 103 | 25 |
-| Web | 7 | 19 | 7 |
-| Chat assistant | 4 | 14 | 4 |
+| Discord | 33 | 103 | — |
+| Web | 7 | 19 | — |
+| Chat assistant | 4 | 14 | — |
 
-**Speaker notes:** Resist reading a 'preference' into this. The honest claim is that both new doors got used at all.
+**Speaker notes:** Resist reading a 'preference' into this. The honest claim is only which interfaces got used at all: Discord, Web and Chat assistant.
 
 **Confidence:** indicative
 
@@ -232,23 +232,23 @@ The comparison that is *not* like-for-like is the interface split: Discord is th
 
 ![Fall 2025 against Fall 2026, like for like](figures/term_comparison.png)
 
-*Figure: Sessions, distinct students and prompts from 7 days before each term's official start through day 23 (the pre-term week is included).*
+*Figure: Sessions, distinct students and prompts from 7 days before each term's official start through day 23 (the pre-term week is included). A student count is left out where it would give away a count blanked elsewhere.*
 
 | Measure | Fall 2025 | Fall 2026 |
 | --- | --- | --- |
-| Sessions | 35 | 44 |
-| Students | 23 | 27 |
-| Prompts | 101 | 136 |
+| Sessions | 35.00 | 44.00 |
+| Students | — | — |
+| Prompts | 101.00 | 136.00 |
 
-**Speaker notes:** If this shows growth, the honest phrasing is 'more sessions in the same span of term', not 'usage is up X%' — three weeks is three weeks.
+**Speaker notes:** If this shows growth, the honest phrasing is 'more sessions in the same span of term', not 'usage is up X%' — a 30-day window is a 30-day window.
 
 **Confidence:** indicative
 
 ## S14 · The same window, by interface
 
-**Takeaway:** Discord is the only interface with both terms behind it; the others start at zero by construction.
+**Takeaway:** Discord is the only interface with both terms behind it; Chat assistant and Web did not exist in Fall 2025, so start at zero by construction.
 
-Read the Discord pair as the behavioural comparison and the other two as a launch record. A combined total would blur exactly that distinction, which is why it is not shown here.
+Read the Discord pair as the behavioural comparison and Chat assistant and Web as a launch record. A combined total would blur exactly that distinction, which is why it is not shown here.
 
 ![The same window, by interface](figures/term_comparison_by_surface.png)
 
@@ -336,7 +336,7 @@ A large *Other* share is itself a finding about what the thirteen labels miss, n
 
 ## S19 · The mix differs by course
 
-**Takeaway:** Programming courses ask about setup and concepts; project courses ask about teams and deadlines.
+**Takeaway:** Largest topic by course — Agile Software Development & DevOps: Tools, setup & deployment; Introduction to Programming: Course concepts; Software Engineering: Project & assignment requirements; Web Design: Greetings & bot questions.
 
 Cells backed by fewer than five distinct students are suppressed and drawn empty: in cohorts this small, a cell of one is effectively a named individual.
 
@@ -366,7 +366,7 @@ Cells backed by fewer than five distinct students are suppressed and drawn empty
 
 ## S20 · Did the new interfaces change what gets asked?
 
-**Takeaway:** Suggestive at best: three weeks of one term against three weeks of another.
+**Takeaway:** Suggestive at best: 30 days of one term against 30 days of another.
 
 The hypothesis worth stating: a private web page invites questions a student might not ask in a shared Discord channel. This chart is consistent with that and does not establish it.
 
@@ -424,7 +424,7 @@ Candidates below are mechanically redacted (emails, mentions, links and long num
 
 **Takeaway:** $0.68 of student model spend over the ledger window — about $0.015 per student session ($0.80 for all users, staff included).
 
-The cost ledger exists only on the current platform and only for live traffic, so this is a Fall 2026 figure over the window shown — not a yearly cost, and not extrapolated to one. The chart, table and per-session and per-user figures are student spend only; staff account for $0.12 more, so the all-users total is $0.80. Per active user in the window: $0.03 across 27 active users.
+The cost ledger exists only on the current platform and only for live traffic, so this is a Fall 2026 figure over the window shown — not a yearly cost, and not extrapolated to one. The chart, table and per-session and per-user figures are student spend only; staff account for $0.12 more, so the all-users total is $0.80. Per active user in the window: withheld, because the count would give away one the adoption slide blanks (a course has fewer than 5 active users).
 
 ![What it costs to run](figures/cost_by_course.png)
 
@@ -503,8 +503,8 @@ Stated as hypotheses, with the evidence attached:
 
 1. **Reference, not tutoring.** A session is short — median 2 prompts, 41 of 285 (14%) of them a single question — and the largest topic is Course concepts. That pattern fits a look-it-up habit more than a study-with-me one.
 2. **It fills the hours nobody staffs.** 167 of 285 (59%) sessions start between 18:00 and 08:00.
-3. **Adoption is partial and shallow.** Most enrolled students (54%) have registered with the bot, and a smaller group returns repeatedly. Whether the shallow group got what they needed or gave up is exactly what this data cannot say.
-4. **A private interface may invite different questions.** Consistent with the topic split by interface; not established by it.
+3. **Adoption is broad but shallow.** Most enrolled students (54%) have registered with the bot, and a smaller group returns repeatedly. Whether the shallow group got what they needed or gave up is exactly what this data cannot say.
+4. **A private interface may invite different questions.** A hypothesis for the by-term topic comparison to test; that comparison does not establish it.
 
 **Speaker notes:** This slide was written first, before the deck was built around it. If it cannot be argued from the charts, the analysis is not finished.
 
@@ -512,7 +512,7 @@ Stated as hypotheses, with the evidence attached:
 
 ## S26 · What this data cannot tell you
 
-**Takeaway:** No outcomes, no signal from non-users, and a term that is three weeks old.
+**Takeaway:** No outcomes, no signal from non-users, and a term that is only 22% elapsed.
 
 - **No outcome data.** Nothing links a conversation to a grade, a submission, or whether the answer was right or helpful. Every value claim in this deck is inference.
 - **No signal from non-use.** A student who never messaged the bot is visible only as part of a headcount, never as a person. We do not know whether they did not need it, did not know about it, or did not trust it.

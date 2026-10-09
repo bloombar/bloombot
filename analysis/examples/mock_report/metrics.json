@@ -47,7 +47,7 @@
       "web"
     ]
   },
-  "_written_at": "2026-10-09T12:27:05",
+  "_written_at": "2026-10-09T12:39:19",
   "volume": {
     "elapsed_days": 23,
     "adoption": [
@@ -99,33 +99,33 @@
         "surface": "discord",
         "sessions": 33,
         "prompts": 103,
-        "students": 25,
+        "students": null,
         "surface_label": "Discord"
       },
       {
         "surface": "web",
         "sessions": 7,
         "prompts": 19,
-        "students": 7,
+        "students": null,
         "surface_label": "Web"
       },
       {
         "surface": "mcp",
         "sessions": 4,
         "prompts": 14,
-        "students": 4,
+        "students": null,
         "surface_label": "Chat assistant"
       }
     ],
     "comparison": {
       "Fall 2025": {
         "Sessions": 35,
-        "Students": 23,
+        "Students": null,
         "Prompts": 101
       },
       "Fall 2026": {
         "Sessions": 44,
-        "Students": 27,
+        "Students": null,
         "Prompts": 136
       }
     },
@@ -690,9 +690,9 @@
     "student_usd": 0.678938,
     "staff_usd": 0.122002,
     "sessions_in_window": 44,
-    "students_in_window": 27,
+    "students_in_window": null,
     "usd_per_session": 0.015430409090909092,
-    "usd_per_student": 0.025145851851851853,
+    "usd_per_student": null,
     "models": {
       "gpt-4.1": 93
     },

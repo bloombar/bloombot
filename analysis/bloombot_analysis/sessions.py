@@ -16,7 +16,7 @@ within the gap is one session, not two — which is how it reads to the student.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import date, timedelta
 
 import numpy as np
@@ -329,7 +329,7 @@ def term_adoption(
     only from `config.registration_from_term`; earlier terms get `registered` NA,
     and `registration_existed` False so the report can say so instead of "0".
     The current term is flagged `partial` (data runs only to `as_of`), and an
-    active count of 1 to `min_cell_students - 1` is blanked (small-cell rule);
+    active or registered count of 1 to `min_cell_students - 1` is blanked (small-cell rule);
     the blanked row's share goes with it. A course with no class size has NA
     enrolled and NA share.
     """
@@ -342,13 +342,7 @@ def term_adoption(
         active = (
             in_this.groupby("course")["person_key"].nunique() if not in_this.empty else pd.Series(dtype=int)
         )
-        # Registrations count in the term only if the enrolment was created in
-        # its buffered window, so a later term never inherits earlier ones.
-        first, last = config.window(key)
-        scoped = enrolments
-        if not enrolments.empty and "created_at" in enrolments:
-            made = pd.to_datetime(enrolments["created_at"]).dt.date
-            scoped = enrolments[(made >= first) & (made <= last)]
+        scoped = registrations_in_window(enrolments, config, key)
         registered = (
             scoped.groupby("course")["person_key"].nunique()
             if config.registration_existed(key) and not scoped.empty
@@ -365,7 +359,11 @@ def term_adoption(
                     "term_label": term.label,
                     "course": course,
                     "enrolled": enrolled,
-                    "registered": int(registered.get(course, 0)) if existed else None,
+                    "registered": (
+                        None
+                        if not existed or 0 < int(registered.get(course, 0)) < config.min_cell_students
+                        else int(registered.get(course, 0))
+                    ),
                     "registration_existed": existed,
                     "active": None if blanked else n_active,
                     "active_share": (
@@ -528,11 +526,18 @@ def weekly_matrix(sessions: pd.DataFrame, config: Config | None = None, by: str 
     return wide
 
 
-def surface_split(sessions: pd.DataFrame) -> pd.DataFrame:
-    """Sessions, prompts and distinct students per surface."""
+def surface_split(
+    sessions: pd.DataFrame, blanked_courses: Collection[str] = ()
+) -> pd.DataFrame:
+    """
+    Sessions, prompts and distinct students per surface.
+
+    `students` is None for a surface whose sessions include a course in
+    `blanked_courses` (ANLY-11), so it cannot be used to bound a blanked count.
+    """
     if sessions.empty:
         return pd.DataFrame(columns=["surface", "sessions", "prompts", "students"])
-    return (
+    out = (
         sessions.groupby("surface")
         .agg(
             sessions=("session_id", "count"),
@@ -541,6 +546,71 @@ def surface_split(sessions: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
         .sort_values("sessions", ascending=False)
+    )
+    if blanked_courses:
+        touched = sessions[sessions["course"].isin(blanked_courses)]["surface"].unique()
+        out["students"] = out["students"].astype(object).where(~out["surface"].isin(touched), None)
+    return out
+
+
+def distinct_students(
+    frame: pd.DataFrame, min_cell: int, blanked_courses: Collection[str] = ()
+) -> int | None:
+    """
+    Distinct students in `frame`, or None if the figure could give away a
+    blanked cell (ANLY-11 small-cell rule).
+
+    A count over several courses is withheld when any course in the frame is in
+    `blanked_courses` (blanked in the adoption slides) or has a distinct count
+    of 1 to `min_cell - 1` within this frame; otherwise subtracting the other
+    courses' published counts would reveal that course's exact number.
+    """
+    if frame.empty:
+        return 0
+    per_course = frame.groupby("course")["person_key"].nunique()
+    if (per_course.index.isin(list(blanked_courses))).any():
+        return None
+    if ((per_course > 0) & (per_course < min_cell)).any():
+        return None
+    return int(frame["person_key"].nunique())
+
+
+def blanked_courses(table: pd.DataFrame, min_cell: int) -> set[str]:
+    """Courses whose registered or active count in an adoption table is 1 to `min_cell - 1`."""
+    if table.empty:
+        return set()
+    hide = ((table["registered"] > 0) & (table["registered"] < min_cell)) | (
+        (table["active"] > 0) & (table["active"] < min_cell)
+    )
+    return {str(c) for c in table.loc[hide.fillna(False), "course"]}
+
+
+def registrations_in_window(enrolments: pd.DataFrame, config: Config, term_key: str) -> pd.DataFrame:
+    """
+    Enrolments created inside a term's buffered window, so a later term never
+    inherits earlier registrations. Shared by the term table and the adoption slide.
+    """
+    if enrolments.empty or "created_at" not in enrolments:
+        return enrolments
+    first, last = config.window(term_key)
+    made = pd.to_datetime(enrolments["created_at"]).dt.date
+    return enrolments[(made >= first) & (made <= last)]
+
+
+def like_for_like_term(
+    frame: pd.DataFrame, config: Config, term_key: str, elapsed_days: int
+) -> pd.DataFrame:
+    """
+    One term's like-for-like window, taken from the single-term assignment so a
+    session another term owns is not counted. The notebooks use this, not
+    `like_for_like` on the raw sessions.
+    """
+    return like_for_like(
+        term_sessions(frame, config, term_key),
+        config.term(term_key),
+        elapsed_days,
+        ts_column="started_at",
+        buffer_days=config.term_buffer_days,
     )
 
 

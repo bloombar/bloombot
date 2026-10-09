@@ -103,6 +103,15 @@ CLASS_SIZES: dict[str, dict[str, int]] = {
 }
 
 
+def _short_path(value: str) -> str:
+    """Repo-relative path, or just the file name outside the repo: no developer paths in a report."""
+    path = Path(value)
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return path.name
+
+
 def _load_class_sizes() -> dict[str, dict[str, int]]:
     """CLASS_SIZES, or the JSON file named by BLOOMBOT_ANALYSIS_CLASS_SIZES (mock runs use this)."""
     path = os.environ.get("BLOOMBOT_ANALYSIS_CLASS_SIZES")
@@ -218,7 +227,7 @@ class Config:
     # Where the class sizes came from, named in the report (ANLY-11).
     class_sizes_source: str = field(
         default_factory=lambda: (
-            f"{os.environ['BLOOMBOT_ANALYSIS_CLASS_SIZES']} (BLOOMBOT_ANALYSIS_CLASS_SIZES override)"
+            f"{_short_path(os.environ['BLOOMBOT_ANALYSIS_CLASS_SIZES'])} (BLOOMBOT_ANALYSIS_CLASS_SIZES override)"
             if os.environ.get("BLOOMBOT_ANALYSIS_CLASS_SIZES")
             else "CLASS_SIZES in analysis/bloombot_analysis/config.py"
         )

@@ -34,6 +34,7 @@ NOTEBOOKS = [
     "01_volume_and_adoption.ipynb",
     "02_session_shape.ipynb",
     "03_topics.ipynb",
+    "03b_staff_usage.ipynb",
     "04_cost.ipynb",
     "05_report.ipynb",
 ]
@@ -126,6 +127,8 @@ def main() -> int:
         subprocess.run(
             [sys.executable, str(ANALYSIS_DIR / "mock" / "make_mock_data.py")], check=True
         )
+        # ANLY-11: the mock's own class sizes (set after generation, which writes the file).
+        os.environ["BLOOMBOT_ANALYSIS_CLASS_SIZES"] = str(mock_dir / "class_sizes.json")
 
     sys.path.insert(0, str(ANALYSIS_DIR))
     try:  # imported late: env vars must be set first

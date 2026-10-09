@@ -14515,6 +14515,59 @@ of deletions; the combined file excludes them with the rest of their history.
 - **Known limits.** Markdown-cell `attachments` (embedded images) are authored content and survive stripping, so a pasted screenshot could still carry student data. `npm run prepare` sets `core.hooksPath` for the repository, overriding any global setting a developer has.
 
 
+
+## D-147 — `analysis/`: ANLY-9/ANLY-10 — staff are tagged, not dropped; two topic sets; a staff section that is aggregates only
+
+- **Who is staff.** Decided on the person and organization, in the loader, before `person_key` folds a Discord id and
+  a person id together: a `person_identities` row with `surface='web'` whose `external_id` is an `accounts.id`, and
+  that account has a `memberships` row in the *message's* `organization_id` with `revoked_at IS NULL` (any role).
+  A revoked membership, or an owner of another organization, is a student. On the real database this flags exactly
+  one person, whose imported legacy messages match because the same `people` row carries both identities. Without
+  `accounts`/`memberships` (older files) the role rests on the handles alone. In two-file mode a legacy row is
+  promoted to staff when its `person_key` is a staff person in the current database; only legacy rows are promoted
+  that way, so one organization's role is never applied to another's.
+- **Config split.** `excluded_handles` is now test rigs only (`testbot`, `bloombot-test`), still dropped and counted
+  as `excluded_account_rows`. The new `staff_handles` (`instructor`) is the manual override: a match makes a message
+  staff, kept and tagged. Both stay case-insensitive substring matches, as before.
+- **One role per session.** `role` joins the session key, so a session never mixes roles. The audit sample draws up
+  to 30 sessions per role and `agreement_rate` reports each role separately, because the two sets are different
+  instruments.
+- **Topic sets and cache.** `STUDENT_TOPICS` (13) and `STAFF_TOPICS` (7), with one ordered first-match rule list each.
+  Greetings come last, so "hi, when is the third assignment due" is a deadline question; `group` no longer claims every
+  mention of a group; words that misrouted sessions (a bare `finals`, `test`, `pull`, `push`, `scope`, `stuck`,
+  `database`, `ide`, `allowed`, `rest`) now need their context. Keyword labels are **not cached**: they are
+  deterministic and free, so a rule edit takes effect on the next run and nothing is cleared by hand. Model labels are
+  cached under `<set version>:openai-<hash of model, prompt and label descriptions>:<text hash>` (`v2-student`,
+  `v2-staff`), so a v1 entry, or one made under a different prompt or model, is never a hit. A failed model call is
+  labelled by the keyword rules for that run only and is not cached. A leading `@everyone`/`@here` is no longer
+  stripped from the transcript, because it marks an announcement; a leading `@name` still is.
+- **Keyword result on the real data (as of 2026-10-07).** "Other" was 36% of sessions under the nine labels, roles
+  mixed; it is now a few percent of student sessions and about a tenth of staff sessions. These shares come from rules
+  tuned while looking at the sessions that fell through, so they say the rules cover what was seen, not that the labels
+  are right; the hand audit is still the accuracy measure. One owner account accounts for roughly a third of all
+  traffic.
+- **Staff section: aggregates only.** A staff group can be one person, so it reports counts of messages, sessions and
+  prompts, the share of all traffic, the purpose mix and the split by interface, and nothing else: no per-person
+  rows, no pseudonym, no per-course table, no quotes. The five-student cell rule cannot apply to such a group (it
+  would blank everything), so this restriction stands in for it. The headcount of staff is kept in `metrics.json`
+  but not printed in the report.
+- **Costs.** `load_costs` tags each ledger row with the role of the person behind it. The cost slide's chart, table and
+  per-session and per-student figures are *student* spend over *student* sessions; the all-users total and the staff
+  part are stated beside them.
+- **Enrolments.** `load_enrolments` leaves staff out, so an enrolled teacher does not inflate the adoption denominator.
+- **Notebook placement.** Staff are reported by a new notebook, `03b_staff_usage`, run after 03; notebooks 01, 02 and
+  04 filter their inputs to students on load; 00 writes both roles to the tidy files.
+- **`analytics.ipynb`.** Minimal change: imports `STUDENT_TOPICS` as `TOPICS` and keeps only student messages.
+- **Not done.** `docs/USAGE_REPORT_PLAN.md` still says "nine-label classifier" in its measure list; it is a planning
+  document and was left alone.
+- **Known limits of the role.**
+  - Role is not tied to dates. A student who later becomes a TA has their earlier history counted as staff, and a TA
+    whose membership was revoked counts as a student even for the term they taught.
+  - Staff whose Discord identity is not linked to their web account are counted as students, unless the handle
+    override catches them.
+  - In two-file mode someone matched as staff by handle only on the legacy side can end up with two roles, because
+    only a current-database staff person is promoted across.
+
 ## D-148 — `apps/web`: Danger zones are discreet — a neutral rule and a red heading, not a red box
 
 Every Danger zone (account, organization, course editor, project and course admin screens, platform account admin) had its own copy of `rounded-md border border-danger-600 bg-danger-50 p-4`: a red-tinted, red-bordered block around the whole section, far louder than the rest of the screen.
@@ -14524,3 +14577,55 @@ Every Danger zone (account, organization, course editor, project and course admi
 - **The organization tab opts out of the rule** (`divider={false}`) because `GeneralSettings` already draws one above its Danger zone.
 - **Visual only.** Copy, `data-testid`s, `aria-label`s, heading levels and the confirmation flows are unchanged. `tests/danger-zone-section.test.tsx` fails if any screen reintroduces its own red box instead of the shared component.
 - **The button hugs its content** (`[&>button]:self-start`): a full-width red-outlined button became the loudest element once the box was gone. Only the button shrinks; an error message above it still spans the section.
+
+## D-149 — `analysis/`: ANLY-11 — "enrolled students" means class size; platform enrolments are "registered users"
+
+- **The problem.** The platform's `enrolments` table is not a class roster: a Discord-role enrolment is created only
+  when a role holder messages the bot, and no roster is imported. The old adoption figure ("15 of 24 enrolled
+  students") therefore divided by registered users and made a minority look like a whole class.
+- **Definitions.** *Enrolled students*: the official class size per course and term. *Users* (registered users):
+  students with an `enrolments` row, staff excluded. *Active users*: users (or, before Fall 2026, any student) with a
+  prompt in the period. The report, metrics and column names keep these apart: `enrolled` only ever means class size.
+- **Where class sizes come from.** `CLASS_SIZES` in `config.py`, entered by hand from headcounts the instructor
+  supplied (Fall 2025, Spring 2026, Summer 2026, Fall 2026). Headcounts only, no names. Keys are the pipeline's own course
+  labels, e.g. "Intro to Computer Programming" is "Introduction to Programming". A course or term with no entry has NA
+  shares; the code never falls back to dividing by registered users.
+- **Mock runs.** `make_mock_data.py` writes `class_sizes.json` (larger than the registered counts, and one course left
+  out to exercise the NA path); `run_all.py --mock` points `BLOOMBOT_ANALYSIS_CLASS_SIZES` at it. A real run uses
+  `CLASS_SIZES`. The env var is a path to a JSON file of the same shape.
+- **Per-term active share.** Active users / enrolled students needs only sessions, so it is computed for every term
+  with a class size, including those before registration existed. `registered` is NA there ("registration did not
+  exist"), not 0. The current term is flagged partial. Active counts of 1 to 4 are blanked (small-cell rule), and the
+  share goes with them.
+- **Term windows and the buffer.** Every `Term` keeps its official start and end (Summer 2026: 2026-05-18 to
+  2026-08-12; Summer 2025 is approximate, 1 June to 31 August, its real dates unknown). The instructor wants a week
+  either side of every term counted as part of it, so `Config.term_buffer_days = 7` and `Config.window()` give each
+  term's membership window: official start minus 7 days to official end plus 7. Elapsed days and completeness ("day 37
+  of 104") stay on the official dates. The like-for-like comparison uses one rule for both terms: from official start
+  minus 7 days to official start plus the elapsed days, and the report says the pre-term week is included.
+- **Overlaps.** The buffer makes windows overlap: Spring 2026 and Summer 2026 (11-19 May), and Summer 2025 and Fall
+  2025 (27 Aug - 7 Sep). Fall 2025 and Spring 2026 do not overlap (23 Dec versus 13 Jan). `sessions._assign_terms`
+  gives each session to exactly one term: the term whose class sizes list its course, then one whose official dates
+  contain the day, then the latest-starting. Per-term tables use these windows, not `load.semester_of`, which calls all
+  of May Spring and still labels the `semester` column that way.
+- **Totals.** Shares in the total count only courses that have a class size, in numerator and denominator alike.
+  `registered_total` and `active_total` still count every course's users.
+- **Metrics keys.** `adoption_total_enrolled` now means the class-size total (it used to count registrations);
+  added `adoption_total_registered`, `adoption_registered_sized`, `adoption_active_sized`, `adoption_registered_share`,
+  `adoption_active_share`, `comparison_active_share`, `term_adoption`.
+- **Report.** S09 rewritten, a new slide after it for the term-by-term table (so later slide numbers moved up by one),
+  definitions added to the method slide, and the roster wording reworded in the role, "what it cannot tell you" and
+  conclusion slides. Per-student cost wording became per active user.
+- **Rework (review round 1).** The adoption slide (S09) uses the same small-cell rule as the term table: registered and
+  active counts of 1 to 4 are blanked with their shares, and a total (and the takeaway built on it) is withheld whenever
+  any course in it is blanked, since a total would otherwise give a blank away. The like-for-like active-share sentence is
+  withheld the same way. Totals and the like-for-like share count a student once per course (course enrolments), and say
+  so. Like-for-like windows, S09 and the term table all use `term_sessions` (single-term assignment). A term's
+  registered count includes only enrolments created in its buffered window. The report names the class-size source.
+  "Active" before Fall 2026 means any student with a prompt, since registration did not exist.
+- **Per-interface student counts (instructor, after round 2).** The small-cell rule covers the S12 Students column: an
+  interface with 1 to 4 students is blanked, and its prompts are blanked with it, since they describe at most four
+  people. Sessions stay (they are not people), and the caption says so. Because the term's distinct-student total is
+  published elsewhere (S13, S09), a single blanked interface could be worked out by subtraction, so one blanked
+  interface blanks the students and prompts of every interface (complementary suppression). The staff-by-interface table
+  is aggregate-only and unchanged. S14 and the interface chart show sessions only.

@@ -10,9 +10,10 @@ them from its flags), so a run never needs a code edit to read different data.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -29,20 +30,95 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(value) if value else default
 
 
-# ── Topic labels ──────────────────────────────────────────────────────────
-# The same nine labels `analytics.ipynb` has always used, so the cached
-# classifications in `data/topic_classifications.json` stay valid.
-TOPICS: list[str] = [
-    "Course material & content",
-    "Assignments & homework",
-    "Syllabus, schedule & deadlines",
-    "Technical setup & tools",
-    "Grades & assessment",
-    "Professor & office hours",
-    "Team projects & collaboration",
-    "Resources & references",
+# ── Topic labels (ANLY-10) ────────────────────────────────────────────────
+# Two label sets, because students and staff use the bot for different things.
+# A session is classified under the set that matches its role. The version is
+# part of every cache key, so a label made under an older set (the nine-label
+# v1 set) is never reused.
+STUDENT_TOPICS: list[str] = [
+    "Project & assignment requirements",
+    "Deadlines & schedule",
+    "Grades & grading",
+    "Course policies",
+    "Course concepts",
+    "Quiz & exam questions",
+    "Code & debugging",
+    "Git & GitHub workflow",
+    "Tools, setup & deployment",
+    "Team coordination",
+    "Discord & platform help",
+    "Greetings & bot questions",
     "Other",
 ]
+
+STAFF_TOPICS: list[str] = [
+    "Testing the bot",
+    "Demonstrating to class",
+    "Announcements",
+    "Directing students",
+    "Course content & policy lookup",
+    "Course setup",
+    "Other",
+]
+
+TOPIC_SET_VERSION = "v2"
+
+
+def topics_for(role: str) -> list[str]:
+    """The label set for a role: staff get the purpose set, everyone else the student set."""
+    return STAFF_TOPICS if role == "staff" else STUDENT_TOPICS
+
+
+def topic_set_key(role: str) -> str:
+    """Versioned label-set name used in cache keys, e.g. 'v2-student'."""
+    return f"{TOPIC_SET_VERSION}-{'staff' if role == 'staff' else 'student'}"
+
+
+# ── Class sizes (ANLY-11) ─────────────────────────────────────────────────
+# "Enrolled students" in the report means these official headcounts, per term
+# and per analysis course label (the label `load._course_labels` produces). They
+# are hand-entered numbers from the instructor, not a roster: no names, no ids.
+# The platform's `enrolments` table is *not* a roster (a student appears there
+# only once the bot learns of them), so it is reported as "registered users".
+# A course missing here has no class size and its shares are shown as unavailable.
+CLASS_SIZES: dict[str, dict[str, int]] = {
+    "fall_2025": {
+        "Agile Software Development & DevOps": 120,
+        "Software Engineering": 100,
+    },
+    "spring_2026": {
+        "Agile Software Development & DevOps": 70,
+        "Software Engineering": 124,
+    },
+    # "Intro to Computer Programming" is the platform title; the analysis calls
+    # the same course "Introduction to Programming" (COURSE_MAP "Python").
+    "summer_2026": {
+        "Introduction to Programming": 54,
+        "Web Design": 28,
+    },
+    "fall_2026": {
+        "Agile Software Development & DevOps": 118,
+        "Software Engineering": 109,
+    },
+}
+
+
+def _short_path(value: str) -> str:
+    """Repo-relative path, or just the file name outside the repo: no developer paths in a report."""
+    path = Path(value)
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return path.name
+
+
+def _load_class_sizes() -> dict[str, dict[str, int]]:
+    """CLASS_SIZES, or the JSON file named by BLOOMBOT_ANALYSIS_CLASS_SIZES (mock runs use this)."""
+    path = os.environ.get("BLOOMBOT_ANALYSIS_CLASS_SIZES")
+    if not path:
+        return {term: dict(sizes) for term, sizes in CLASS_SIZES.items()}
+    return json.loads(Path(path).read_text())
+
 
 # Discord category prefix → readable course name, carried over from
 # `analytics.ipynb`. A prefix with no entry here passes through unchanged. Matching
@@ -137,9 +213,30 @@ class Config:
     # are suppressed in published output (§5 of the plan).
     min_cell_students: int = 5
 
-    # Accounts excluded from every aggregate: the instructor, test rigs.
-    # Matched case-insensitively against the display name or handle.
-    excluded_handles: tuple[str, ...] = ("instructor", "testbot", "bloombot-test")
+    # ANLY-9. Staff are found from the platform's memberships (an active
+    # membership in the message's organization, any role). `staff_handles` is
+    # the manual override on top of that: a display name or handle containing
+    # one of these is staff. `excluded_handles` is for test rigs only, which are
+    # dropped from every aggregate, staff section included. Both are matched
+    # case-insensitively as substrings.
+    staff_handles: tuple[str, ...] = ("instructor",)
+    excluded_handles: tuple[str, ...] = ("testbot", "bloombot-test")
+
+    # ANLY-11. Official class sizes by term, then course label (see CLASS_SIZES).
+    class_sizes: dict[str, dict[str, int]] = field(default_factory=_load_class_sizes)
+    # Where the class sizes came from, named in the report (ANLY-11).
+    class_sizes_source: str = field(
+        default_factory=lambda: (
+            f"{_short_path(os.environ['BLOOMBOT_ANALYSIS_CLASS_SIZES'])} (BLOOMBOT_ANALYSIS_CLASS_SIZES override)"
+            if os.environ.get("BLOOMBOT_ANALYSIS_CLASS_SIZES")
+            else "CLASS_SIZES in analysis/bloombot_analysis/config.py"
+        )
+    )
+
+    # ANLY-11. The platform has recorded registrations (enrolment rows) only
+    # since this term; the old bot had none. Terms starting earlier show
+    # "registration did not exist" rather than a registered count of 0.
+    registration_from_term: str = "fall_2026"
 
     # ── Calendar ──────────────────────────────────────────────────────────
     # `as_of` is the cutoff every "so far this term" number is measured to,
@@ -157,10 +254,23 @@ class Config:
     terms: dict[str, Term] = field(
         default_factory=lambda: {
             "fall_2026": Term("fall_2026", "Fall 2026", date(2026, 9, 2), date(2026, 12, 15)),
+            # Summer 2026 official dates (the one-week buffer is applied by
+            # `term_buffer_days`, not by editing the dates).
+            "summer_2026": Term("summer_2026", "Summer 2026", date(2026, 5, 18), date(2026, 8, 12)),
+            # Summer 2025: dates not known, so the approximate boundaries of
+            # `load.semester_of` (1 Jun - 31 Aug).
+            "summer_2025": Term("summer_2025", "Summer 2025", date(2025, 6, 1), date(2025, 8, 31)),
             "fall_2025": Term("fall_2025", "Fall 2025", date(2025, 9, 3), date(2025, 12, 16)),
             "spring_2026": Term("spring_2026", "Spring 2026", date(2026, 1, 20), date(2026, 5, 12)),
         }
     )
+
+    # ANLY-11. The instructor wants a week either side of every term counted as
+    # part of it (pre-term setup questions, end-of-term stragglers). Windows
+    # that decide which term a session belongs to run from official start minus
+    # this to official end plus this. `Term.start`/`end` stay the official dates,
+    # and elapsed days and completeness use those.
+    term_buffer_days: int = 7
 
     # The two terms the headline comparison is between.
     current_term: str = "fall_2026"
@@ -188,8 +298,24 @@ class Config:
             return f"{name} ({'exists' if path.exists() else 'missing'})"
 
         if self.input_mode == "combined":
-            return f"combined: {show(self.combined_db)}"
-        return f"two-file: legacy {show(self.legacy_db)}; current {show(self.current_db)}"
+            inputs = f"combined: {show(self.combined_db)}"
+        else:
+            inputs = f"two-file: legacy {show(self.legacy_db)}; current {show(self.current_db)}"
+        return f"{inputs}; class sizes: {self.class_sizes_source}"
+
+    def registration_existed(self, term_key: str) -> bool:
+        """True when the platform could register students during this term."""
+        return self.term(term_key).start >= self.term(self.registration_from_term).start
+
+    def window(self, term_key: str) -> tuple[date, date]:
+        """(first, last) date that counts as this term: official dates plus the buffer."""
+        term = self.term(term_key)
+        pad = timedelta(days=self.term_buffer_days)
+        return term.start - pad, term.end + pad
+
+    def class_sizes_for(self, term_key: str) -> dict[str, int]:
+        """Class sizes for one term; empty when none are configured."""
+        return dict(self.class_sizes.get(term_key, {}))
 
     def term(self, key: str) -> Term:
         return self.terms[key]

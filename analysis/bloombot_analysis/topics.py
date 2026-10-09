@@ -1,12 +1,13 @@
 """
 What each session was about.
 
-Every session gets exactly one of the nine labels in `config.TOPICS`. Two
-classifiers are available:
+Every session gets exactly one label (ANLY-10) from the set that matches its
+role: `config.STUDENT_TOPICS` for students, `config.STAFF_TOPICS` (what an
+instructor was using the bot *for*) for staff. Two classifiers are available:
 
 * **`openai`** — the same approach `analytics.ipynb` has always used: one
   `gpt-4o-mini` call per session, temperature 0. Needs `OPENAI_API_KEY`.
-* **`keyword`** — a transparent rule-based fallback. It is what the mock run
+* **`keyword`** — a transparent rule-based fallback, one rule list per role. It is what the mock run
   uses (no API key, no spend, deterministic output) and it is also a useful
   sanity check on the model: where the two disagree wildly, the label set is
   probably the problem.
@@ -15,7 +16,12 @@ Results are cached on disk keyed by a hash of the session's own text, so a
 re-run never re-pays for a session already classified, and so the cache
 survives re-sessionising (the old cache in `data/topic_classifications.json`
 was keyed by a positional conversation number, which silently went stale the
-moment the grouping changed).
+moment the grouping changed). Only model (`openai`) labels are cached: the
+keyword rules are deterministic and free, so they are re-run every time and a
+rule edit can never leave a stale label behind. A model key names the label
+set's version (`v2-student`, `v2-staff`) and a hash of the model name, prompt and
+label descriptions, so a label made under the old nine-label set, or under a
+different prompt, is never reused.
 
 **The classifier is not ground truth.** `audit_sample()` draws a sample for
 hand-checking and `agreement_rate()` turns the hand labels into the one number
@@ -32,7 +38,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import CONFIG, TOPICS, Config
+from .config import CONFIG, STAFF_TOPICS, STUDENT_TOPICS, Config, topic_set_key, topics_for
 
 CLASSIFICATION_MODEL = "gpt-4o-mini"
 
@@ -45,11 +51,13 @@ def session_texts(tagged_messages: pd.DataFrame) -> pd.DataFrame:
     identifying detail we do not want leaving the analysis environment.
     """
     if tagged_messages.empty:
-        return pd.DataFrame(columns=["session_id", "course", "text", "student_text"])
+        return pd.DataFrame(columns=["session_id", "role", "course", "text", "student_text"])
 
     def clean(text: str) -> str:
         text = re.sub(r"<@!?\d+>", "", str(text))
-        text = re.sub(r"^@\S+\s*,?\s*", "", text)
+        # A leading @name is the bot being addressed; @everyone / @here is kept
+        # because it is what marks an announcement.
+        text = re.sub(r"^@(?!everyone\b|here\b)\S+\s*,?\s*", "", text)
         return text.strip()
 
     rows = []
@@ -71,6 +79,7 @@ def session_texts(tagged_messages: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "session_id": session_id,
+                "role": group["role"].iloc[0] if "role" in group else "student",
                 "course": group["course"].iloc[0],
                 "text": "\n".join(lines),
                 "student_text": "\n".join(student_only),
@@ -101,23 +110,71 @@ def save_cache(cache: dict[str, str], path: Path | None = None) -> None:
 
 
 # ── Keyword classifier ────────────────────────────────────────────────────
-# Ordered most-specific first: the first family whose pattern matches wins, so
-# "when is the project due" lands on deadlines rather than team projects.
-KEYWORD_RULES: list[tuple[str, str]] = [
-    ("Syllabus, schedule & deadlines", r"\b(due|deadline|extension|late|syllabus|schedule|calendar|when is|exam date|midterm date)\b"),
-    ("Grades & assessment", r"\b(grade|graded|grading|rubric|score|points|weight|curve|pass(ed)?|fail(ed)?|feedback on my)\b"),
-    ("Professor & office hours", r"\b(office hours?|professor|instructor|ta\b|email you|meet with|appointment)\b"),
-    ("Team projects & collaboration", r"\b(team|teammate|group|partner|merge conflict|pull request review|standup|sprint)\b"),
-    ("Technical setup & tools", r"\b(install|setup|set up|error|traceback|exception|docker|venv|node|npm|pip|git\b|github|vs ?code|environment|path|port|localhost|deploy|command)\b"),
-    ("Assignments & homework", r"\b(assignment|homework|hw\d*|problem set|lab\b|exercise|submit|submission|starter code|requirements? for)\b"),
-    ("Resources & references", r"\b(reading|book|tutorial|documentation|docs\b|link|resource|example|reference|article|video)\b"),
-    ("Course material & content", r"\b(explain|what is|how does|difference between|concept|lecture|slide|chapter|topic|understand|why does)\b"),
+# One ordered rule list per role. The first rule whose pattern matches wins, so
+# order carries meaning: narrow, unmistakable signals come first, broad words
+# (a bare "function", "what is") come late, and greetings come last so
+# "hi, when is project 1 due" is a deadline question. A label may appear in
+# more than one rule. Rules read only the sender's own words (`student_text`).
+STUDENT_RULES: list[tuple[str, str]] = [
+    # Pasted quiz items are long and mention anything, so their stock phrases win.
+    ("Quiz & exam questions", r"\b(which of the following|select all that apply|true or false|multiple[- ]choice|answer choices?|correct answer)\b"),
+    ("Discord & platform help", r"\b(discord|channels?|team chat|connect(ing|ed)? (my |an |the )?(account|discord|github)|(link|log|sign)(ing)? ?(in|into|to)? (my |the )?account|invite link|join link|notifications?|dm me|direct message)\b"),
+    ("Course policies", r"\b(extensions?|late (work|submissions?|penalt\w*|days?|policy)|attendance|absen(t|ce)|plagiari\w+|academic (integrity|honesty)|cheat\w*|polic(y|ies)|(are we|am i|is it|is that) allowed|allowed to|penalty|unable to attend|chat ?gpt|ai (use|tools?|policy)|use (of )?ai|make-?ups?|excused|accommodations?|withdraw|drop the course)\b"),
+    ("Deadlines & schedule", r"\b(due|deadlines?|when is|when are|when does|when do|what time|what day|schedule[ds]?|calendar|syllabus|next class|class time|office hours?|due date)\b"),
+    ("Grades & grading", r"\b(grades?|graded|grading|rubric|gpa|curve|weighted|how many points|points? (off|deducted|possible|for)|worth|my score|feedback on)\b"),
+    ("Git & GitHub workflow", r"\b(git|github|forks?|branch(es|ing)?|commits?|merge( conflicts?)?|clone|rebase|repos?|repositor(y|ies)|stash|checkout|gitignore|prs?|(pull|push)(ed|ing)? (request|to (main|origin|github|the (repo|branch|remote))|from (main|origin|upstream)|changes|my (code|branch|work)))\b"),
+    ("Code & debugging", r"(\b(errors?|exceptions?|traceback|bugs?|debug\w*|stack ?trace|syntax|undefined|segfault|compil(e|er|ing)|runtime|stuck (loading|on loading|in a loop)|(run|ran|running) (my|the) code)\b|\bdef \w+\(|```|\bconsole\.log|\bprint\(|[{};]\s*$|(isn'?t|not|doesn'?t|won'?t) (\w+ )?(working|work|run|pass|compile)\b|\btests? (fail\w*|is failing))"),
+    ("Tools, setup & deployment", r"\b(install\w*|set ?up|docker|mongo\w*|atlas|digital ?ocean|droplet|deploy\w*|heroku|aws|vercel|netlify|npm|pip|venv|node(js)?|environment|\.env|vs ?code|terminal|command line|localhost|ports?|ssh|hosting|pylint|lint\w*|yaml|continuous integration|build script|packages?|readme|postgres\w*|mysql|sqlite|api keys?|containers?)\b"),
+    ("Project & assignment requirements", r"\b(requirements?|deliverables?|assignments?|homework|hw ?\d+|project \d+|final project|project (requirements?|proposal|scope|ideas?|brief)|proposal|sprints?|project ?\d+|vision statement|project board|subsystems?|user stor(y|ies)|wireframes?|backlog|epics?|milestones?|mock-?ups?|prototype|use cases?|labs?|exercises?|starter code|problem set|capstone|submit|submission)\b"),
+    ("Team coordination", r"\b(teams?|team-?mates?|group (members?|number|work|leader|assign\w*)|(assigned|join|in|my|our|a|which|what|no) groups?|groups?\b(?! by)|partners?|pair(ed)? up|stand-?up|scrum master|product owner)\b"),
+    ("Quiz & exam questions", r"\b(quiz(zes)?|exams?|midterms?|final exam|finals week|test prep|study guide)\b"),
+    ("Course concepts", r"\b(explain|what is|what are|how does|how do|difference between|concepts?|lectures?|slides?|chapters?|topics?|understand(ing)?|scope|what'?s an? |why does|defin(e|ition)|meaning of|example of|stakeholders?|agile|scrum|kanban|oop|polymorphism|inherit\w*|recursion|algorithms?|big o|apis?|restful|rest api|design patterns?|class diagram|uml|waterfall|covered|notes?)\b"),
+    ("Greetings & bot questions", r"\b(hi|hello|hey|thanks?|thank you|are you (there|a real|a bot|an ai|human|working)|who are you|your (name|profile)|good (morning|afternoon|evening)|how old are (you|u)|do you (like|have|know)|previous instructions|recipe|testing|this is a test)\b"),
 ]
 
+STAFF_RULES: list[tuple[str, str]] = [
+    ("Announcements", r"(@everyone|@here|\bannouncement\b|\b(is|are) (now )?available\b|\bwelcome (back |to )|\bplease (remember|note|join|check)\b|\breminder:|<@&\d+>|forms\.gle)"),
+    ("Directing students", r"(<#\d+>|pinned message|see my note|\b((please )?(make|create|open) (a )?(new )?(private )?(channels?|groups?|teams?|roles?)|(tell|help|remind|show|guide|walk|assist) (the |this |that )?(students?|him|her|them|class)|help (out )?\w+ (with|find|understand|get))\b)"),
+    ("Course setup", r"\b(renam\w+|course (name|title|settings?|instructions?|materials?)|upload\w*|attachments?|enable|disable|configur\w+|settings?|system prompt|instructions for the bot|add (a )?(student|ta|assistant)|enrol\w*|roster|how many (students|people)|(has|have) joined)\b"),
+    ("Course content & policy lookup", r"\b(polic(y|ies)|due|deadlines?|when is|when are|syllabus|schedule|grading|extensions?|late|gradebook|grades?|points|credit|quizzes|private channels?|permissions?|what does the course|according to|rubric|requirements?|assignments?|project \d+|office hours?|attendance)\b"),
+    ("Demonstrating to class", r"\b((to|for) (the )?(class|students|everyone|you all|them)|demo(nstrat\w*)?|in front of|explain|defin(e|ition)|describe|what is an?|what are|give (me )?an example|how does|what (is|does)|how (would|do) (i|you)|why (should|does|do)|is it possible)\b"),
+    ("Testing the bot", r"\b(are you (there|working|online|a bot|real)|do you (know|remember)|who (am i|are you|do you work for)|what'?s your name|can you (remember|hear)|who (built|made|created|trained) you|(is|are) (the )?(bot|bloombot|it|this) (working|up|online|down|there)|remember (this|that|my)|test(ing)?|hello|hi|hey|ping|what model|what can you do|are you \w+|do you \w+|your (most recent|last|previous) message|you (said|told|wrote)|recipe|ignore (all )?previous)\b"),
+]
 
-def classify_keyword(text: str) -> str:
+KEYWORD_RULES: dict[str, list[tuple[str, str]]] = {"student": STUDENT_RULES, "staff": STAFF_RULES}
+
+# One line per label for the model prompt, in the same order as the label sets.
+STUDENT_DESCRIPTIONS: dict[str, str] = {
+    "Project & assignment requirements": "what a project or assignment asks for: scope, subsystems, wireframes, user stories, backlog, deliverables",
+    "Deadlines & schedule": "when something is due, class times, the calendar or syllabus dates",
+    "Grades & grading": "how work is graded, rubric, points, a grade the student received",
+    "Course policies": "extensions, late work, attendance, AI use, academic integrity and other rules",
+    "Course concepts": "explanations of subject-matter ideas taught in the course",
+    "Quiz & exam questions": "quiz or exam items, often pasted in, or study questions about a test",
+    "Code & debugging": "the student's own code, errors, failing tests, how to fix a bug",
+    "Git & GitHub workflow": "git commands, forks, branches, pull requests, merge problems, repositories",
+    "Tools, setup & deployment": "installing or configuring tools, databases, Docker, hosting and deployment",
+    "Team coordination": "teammates, group assignment, splitting work, team logistics",
+    "Discord & platform help": "finding channels, connecting an account, using Discord or the Bloombot platform",
+    "Greetings & bot questions": "hellos, thanks, testing whether the bot is there, questions about the bot itself",
+    "Other": "anything that fits none of the above",
+}
+
+STAFF_DESCRIPTIONS: dict[str, str] = {
+    "Testing the bot": "checking the bot works or what it knows: 'are you there', 'who am I', memory tests",
+    "Demonstrating to class": "asking the bot something to show students how it answers, often explaining a concept aloud",
+    "Announcements": "messages written for the whole class, such as @everyone notices",
+    "Directing students": "telling the bot to do something for students: make a channel, help a named student",
+    "Course content & policy lookup": "the instructor looking up a policy, a date, an assignment or course content",
+    "Course setup": "configuring the course or the bot: renaming, instructions, materials, enrolment",
+    "Other": "anything that fits none of the above",
+}
+
+
+def classify_keyword(text: str, role: str = "student") -> str:
+    """The first matching rule's label for the role's set, else 'Other'."""
     lowered = text.lower()
-    for topic, pattern in KEYWORD_RULES:
+    for topic, pattern in KEYWORD_RULES["staff" if role == "staff" else "student"]:
         if re.search(pattern, lowered):
             return topic
     return "Other"
@@ -126,30 +183,46 @@ def classify_keyword(text: str) -> str:
 # ── OpenAI classifier ─────────────────────────────────────────────────────
 
 
-def classify_openai(text: str, course: str) -> str:
+def _system_prompt(course: str, role: str) -> str:
+    """The instruction sent to the model for one role's label set."""
+    labels = topics_for(role)
+    descriptions = STAFF_DESCRIPTIONS if role == "staff" else STUDENT_DESCRIPTIONS
+    topic_list = "\n".join(f"- {t}: {descriptions[t]}" for t in labels)
+    who = (
+        "Classify this conversation between an instructor and a course bot for the course "
+        f"{course!r}, by what the instructor was using the bot for."
+        if role == "staff"
+        else f"Classify this student conversation with a course bot for the course {course!r}."
+    )
+    return (
+        f"{who} Choose exactly one topic from this list:\n{topic_list}\n\n"
+        "Reply with only the topic name, nothing else."
+    )
+
+
+def openai_fingerprint(role: str) -> str:
+    """Short hash of everything that shapes a model label except the session text."""
+    material = CLASSIFICATION_MODEL + "\0" + _system_prompt("{course}", role)
+    return hashlib.sha1(material.encode("utf-8")).hexdigest()[:8]
+
+
+def classify_openai(text: str, course: str, role: str = "student") -> str:
     """One classification call. Raises if the OpenAI client or key is missing."""
     from openai import OpenAI  # imported lazily: the keyword path needs no SDK
 
+    labels = topics_for(role)
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    topic_list = "\n".join("- " + t for t in TOPICS)
     response = client.chat.completions.create(
         model=CLASSIFICATION_MODEL,
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Classify this student conversation with a course bot for the course "
-                    f"{course!r}. Choose exactly one topic from this list:\n{topic_list}\n\n"
-                    "Reply with only the topic name, nothing else."
-                ),
-            },
+            {"role": "system", "content": _system_prompt(course, role)},
             {"role": "user", "content": text[:12000]},
         ],
         max_tokens=20,
         temperature=0,
     )
     label = (response.choices[0].message.content or "").strip()
-    return label if label in TOPICS else "Other"
+    return label if label in labels else "Other"
 
 
 # ── Driver ────────────────────────────────────────────────────────────────
@@ -164,9 +237,11 @@ def classify_sessions(
     """
     Label every session. Returns `texts` with `topic` and `topic_method` added.
 
-    `method='openai'` falls back to the keyword classifier for any session whose
-    API call fails, and records which classifier produced each label, so a
-    partially-failed run is visible in the output rather than silently mixed.
+    Each session is classified under its own role's label set (a `role` column;
+    absent means every session is a student's). `method='openai'` falls back to
+    the keyword classifier for any session whose API call fails, and records
+    which classifier produced each label, so a partially-failed run is visible
+    in the output rather than silently mixed.
     """
     config = config or CONFIG
     if texts.empty:
@@ -174,27 +249,29 @@ def classify_sessions(
 
     cache = load_cache(config.topic_cache) if use_cache else {}
     student_texts = texts["student_text"] if "student_text" in texts else texts["text"]
+    roles = texts["role"] if "role" in texts else pd.Series("student", index=texts.index)
     labels, methods = [], []
-    for text, student_text, course in zip(texts["text"], student_texts, texts["course"]):
-        # Key on the text the chosen method actually reads, so the two methods
-        # never collide in the cache and a hit always corresponds to the same
-        # input the label was derived from.
-        key = f"{method}:{text_key(text if method == 'openai' else student_text)}"
-        if key in cache:
-            labels.append(cache[key])
-            methods.append(method + "-cached")
-            continue
+    for text, student_text, course, role in zip(texts["text"], student_texts, texts["course"], roles):
         if method == "openai":
+            # Key on the label set's version, a hash of the model and prompt, and
+            # the session text, so a hit always means the same question put the
+            # same way to the same model.
+            key = f"{topic_set_key(role)}:openai-{openai_fingerprint(role)}:{text_key(text)}"
+            if key in cache:
+                labels.append(cache[key])
+                methods.append("openai-cached")
+                continue
             try:
-                label = classify_openai(text, course)
+                label = classify_openai(text, course, role)
                 used = "openai"
+                cache[key] = label
             except Exception:  # noqa: BLE001 — a failed call must not lose the run
-                label = classify_keyword(student_text)
+                label = classify_keyword(student_text, role)
                 used = "keyword-fallback"
         else:
-            label = classify_keyword(student_text)
+            # Deterministic and free: never cached, so a rule edit takes effect at once.
+            label = classify_keyword(student_text, role)
             used = "keyword"
-        cache[key] = label
         labels.append(label)
         methods.append(used)
 
@@ -204,23 +281,25 @@ def classify_sessions(
     return texts.assign(topic=labels, topic_method=methods)
 
 
-def topic_counts(sessions: pd.DataFrame) -> pd.DataFrame:
-    """Sessions per topic, every label present even at zero."""
+def topic_counts(sessions: pd.DataFrame, labels: list[str] | None = None) -> pd.DataFrame:
+    """Sessions per topic in a label set (students' by default), every label present even at zero."""
+    labels = labels or STUDENT_TOPICS
     if sessions.empty or "topic" not in sessions:
-        return pd.DataFrame({"topic": TOPICS, "sessions": [0] * len(TOPICS)})
-    counts = sessions["topic"].value_counts().reindex(TOPICS, fill_value=0)
+        return pd.DataFrame({"topic": labels, "sessions": [0] * len(labels)})
+    counts = sessions["topic"].value_counts().reindex(labels, fill_value=0)
     return pd.DataFrame({"topic": counts.index, "sessions": counts.values})
 
 
-def topic_by(sessions: pd.DataFrame, column: str) -> pd.DataFrame:
+def topic_by(sessions: pd.DataFrame, column: str, labels: list[str] | None = None) -> pd.DataFrame:
     """Topic × any dimension (course, term, surface) as a wide count table."""
+    labels = labels or STUDENT_TOPICS
     if sessions.empty or "topic" not in sessions:
-        return pd.DataFrame(index=pd.Index([], name=column), columns=TOPICS)
+        return pd.DataFrame(index=pd.Index([], name=column), columns=labels)
     return (
         sessions.groupby([column, "topic"])
         .size()
         .unstack(fill_value=0)
-        .reindex(columns=TOPICS, fill_value=0)
+        .reindex(columns=labels, fill_value=0)
     )
 
 
@@ -228,20 +307,41 @@ def audit_sample(sessions: pd.DataFrame, n: int = 30, seed: int = 20260925) -> p
     """
     Draw a reproducible sample to hand-check the classifier against.
 
-    Written out as a CSV with an empty `hand_label` column; fill it in, read it
-    back, and `agreement_rate()` gives the number that goes on the methodology
-    slide.
+    Up to `n` sessions are drawn per role, so each label set gets its own
+    audit. Written out as a CSV with an empty `hand_label` column; fill it in,
+    read it back, and `agreement_rate()` gives the number that goes on the
+    methodology slide.
     """
     if sessions.empty:
-        return pd.DataFrame(columns=["session_id", "course", "topic", "hand_label", "text"])
-    sample = sessions.sample(min(n, len(sessions)), random_state=seed)
-    return sample[["session_id", "course", "topic", "text"]].assign(hand_label="")
+        return pd.DataFrame(columns=["session_id", "role", "course", "topic", "hand_label", "text"])
+    frame = sessions if "role" in sessions else sessions.assign(role="student")
+    parts = [
+        group.sample(min(n, len(group)), random_state=seed)
+        for _, group in frame.groupby("role", sort=True)
+    ]
+    sample = pd.concat(parts)
+    return sample[["session_id", "role", "course", "topic", "text"]].assign(hand_label="")
 
 
 def agreement_rate(audited: pd.DataFrame) -> dict:
-    """Agreement between the classifier and the hand labels in a completed audit."""
+    """
+    Agreement between the classifier and the hand labels in a completed audit.
+
+    `by_role` repeats the rate for each role present, since the two label sets
+    are different instruments.
+    """
     filled = audited[audited["hand_label"].astype(str).str.strip() != ""]
     if filled.empty:
         return {"checked": 0, "agreed": 0, "rate": float("nan")}
     agreed = int((filled["topic"] == filled["hand_label"]).sum())
-    return {"checked": int(len(filled)), "agreed": agreed, "rate": agreed / len(filled)}
+    result = {"checked": int(len(filled)), "agreed": agreed, "rate": agreed / len(filled)}
+    if "role" in filled:
+        result["by_role"] = {
+            role: {
+                "checked": int(len(g)),
+                "agreed": int((g["topic"] == g["hand_label"]).sum()),
+                "rate": float((g["topic"] == g["hand_label"]).mean()),
+            }
+            for role, g in filled.groupby("role")
+        }
+    return result

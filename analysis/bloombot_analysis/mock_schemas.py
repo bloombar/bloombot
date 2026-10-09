@@ -25,6 +25,11 @@ CREATE TABLE messages (
 
 CURRENT_DDL = """
 CREATE TABLE organizations (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT, display_name TEXT);
+CREATE TABLE memberships (
+    organization_id TEXT NOT NULL, account_id TEXT NOT NULL, role TEXT NOT NULL,
+    revoked_at INTEGER
+);
 CREATE TABLE courses (
     id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, project_id TEXT,
     title TEXT NOT NULL, enabled INTEGER NOT NULL, created_at INTEGER

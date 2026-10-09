@@ -212,13 +212,13 @@ The Web and Chat assistant interfaces have existed for 23 days of Fall 2026 (sin
 
 ![Where students talked to it](figures/sessions_by_surface.png)
 
-*Figure: Sessions by interface, Fall 2026 through day 23 (n = 44 sessions).*
+*Figure: Sessions by interface, Fall 2026 through day 23 (n = 44 sessions). Student and prompt counts are left out where an interface has fewer than 5 students (and for the other interfaces, so the left-out count cannot be worked out from totals); sessions are shown.*
 
 | Interface | Sessions | Prompts | Students |
 | --- | --- | --- | --- |
-| Discord | 33 | 103 | — |
-| Web | 7 | 19 | — |
-| Chat assistant | 4 | 14 | — |
+| Discord | 33 | — | — |
+| Web | 7 | — | — |
+| Chat assistant | 4 | — | — |
 
 **Speaker notes:** Resist reading a 'preference' into this. The honest claim is only which interfaces got used at all: Discord, Web and Chat assistant.
 

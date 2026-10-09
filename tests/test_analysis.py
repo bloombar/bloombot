@@ -424,6 +424,22 @@ def test_student_counts_over_a_blanked_course_are_withheld():
     assert split["students"].isna().all() or split["students"].tolist() == [None]
 
 
+def test_a_small_interface_blanks_every_interfaces_students_and_prompts():
+    """ANLY-11: Web with 3 students (real: Discord 13 / Web 3) must not be recoverable from a total."""
+    frame = sessions.session_frame(
+        pd.concat([_messages(["2026-09-10 10:00"], person=f"d{i}", course="A", surface="discord") for i in range(13)]
+                  + [_messages(["2026-09-10 11:00"], person=f"w{i}", course="A", surface="web") for i in range(3)])
+    )
+    plain = sessions.surface_split(frame)
+    assert plain["students"].tolist() == [13, 3]  # without the rule the numbers print
+    split = sessions.surface_split(frame, min_cell=5)
+    assert split["students"].isna().all() and split["prompts"].isna().all()
+    assert split["sessions"].tolist() == [13, 3]
+    # All interfaces large enough: nothing is blanked.
+    big = sessions.surface_split(frame[frame["surface"] == "discord"], min_cell=5)
+    assert big["students"].tolist() == [13]
+
+
 def test_like_for_like_term_gives_a_summer_session_to_summer_not_fall():
     """ANLY-11: a Summer-2025-sized course on 28 Aug 2025 is not in Fall 2025's window."""
     config = Config(as_of=date(2026, 10, 9), class_sizes={"summer_2025": {"Web Design": 30}})
@@ -1462,6 +1478,14 @@ def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
         *[r["students"] for r in volume["surface_split"]],
     ]
     assert volume["comparison"]["Fall 2026"]["Students"] is None  # S13 row and chart bar
+    # Per-interface counts: an interface with 1-4 students blanks every interface's students and
+    # prompts (complementary suppression); sessions stay. The mock has a small interface.
+    assert all(r["students"] is None and r["prompts"] is None for r in volume["surface_split"])
+    assert all(r["sessions"] for r in volume["surface_split"])
+    s12 = text.split("## S12", 1)[1].split("\n## S", 1)[0]
+    assert "Student and prompt counts are left out" in s12
+    surface_line = next(l for l in s12.splitlines() if l.startswith("| Discord |"))
+    assert surface_line.split("|")[3].strip() == "—" and surface_line.split("|")[4].strip() == "—"
     assert metrics["cost"]["students_in_window"] is None and metrics["cost"]["usd_per_student"] is None  # S22
     for value in published:
         assert value is None or not (unblanked_total < value <= unblanked_total + 4)

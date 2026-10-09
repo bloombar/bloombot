@@ -47,7 +47,7 @@
       "web"
     ]
   },
-  "_written_at": "2026-10-09T12:39:19",
+  "_written_at": "2026-10-09T12:56:30",
   "volume": {
     "elapsed_days": 23,
     "adoption": [
@@ -98,21 +98,21 @@
       {
         "surface": "discord",
         "sessions": 33,
-        "prompts": 103,
+        "prompts": null,
         "students": null,
         "surface_label": "Discord"
       },
       {
         "surface": "web",
         "sessions": 7,
-        "prompts": 19,
+        "prompts": null,
         "students": null,
         "surface_label": "Web"
       },
       {
         "surface": "mcp",
         "sessions": 4,
-        "prompts": 14,
+        "prompts": null,
         "students": null,
         "surface_label": "Chat assistant"
       }

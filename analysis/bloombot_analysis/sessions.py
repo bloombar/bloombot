@@ -527,13 +527,18 @@ def weekly_matrix(sessions: pd.DataFrame, config: Config | None = None, by: str 
 
 
 def surface_split(
-    sessions: pd.DataFrame, blanked_courses: Collection[str] = ()
+    sessions: pd.DataFrame, blanked_courses: Collection[str] = (), min_cell: int = 0
 ) -> pd.DataFrame:
     """
     Sessions, prompts and distinct students per surface.
 
-    `students` is None for a surface whose sessions include a course in
-    `blanked_courses` (ANLY-11), so it cannot be used to bound a blanked count.
+    Small-cell rule (ANLY-11): the student count of an interface is blanked
+    (None) when it is 1 to `min_cell - 1`, or when the interface's sessions
+    include a course in `blanked_courses`. Because other published totals
+    (e.g. distinct students for the term) would let a lone blanked interface
+    be worked out by subtraction, one blanked interface blanks every
+    interface's students and prompts (complementary suppression). Sessions are
+    not people and stay.
     """
     if sessions.empty:
         return pd.DataFrame(columns=["surface", "sessions", "prompts", "students"])
@@ -547,9 +552,16 @@ def surface_split(
         .reset_index()
         .sort_values("sessions", ascending=False)
     )
-    if blanked_courses:
-        touched = sessions[sessions["course"].isin(blanked_courses)]["surface"].unique()
-        out["students"] = out["students"].astype(object).where(~out["surface"].isin(touched), None)
+    small = (out["students"] > 0) & (out["students"] < min_cell)
+    touched_surfaces = (
+        sessions[sessions["course"].isin(list(blanked_courses))]["surface"].unique()
+        if len(blanked_courses)
+        else []
+    )
+    if small.any() or len(touched_surfaces):
+        out["students"] = out["students"].astype(object)
+        out["prompts"] = out["prompts"].astype(object)
+        out.loc[:, ["students", "prompts"]] = None
     return out
 
 

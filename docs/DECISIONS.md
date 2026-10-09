@@ -14613,3 +14613,9 @@ of deletions; the combined file excludes them with the rest of their history.
   so. Like-for-like windows, S09 and the term table all use `term_sessions` (single-term assignment). A term's
   registered count includes only enrolments created in its buffered window. The report names the class-size source.
   "Active" before Fall 2026 means any student with a prompt, since registration did not exist.
+- **Per-interface student counts (instructor, after round 2).** The small-cell rule covers the S12 Students column: an
+  interface with 1 to 4 students is blanked, and its prompts are blanked with it, since they describe at most four
+  people. Sessions stay (they are not people), and the caption says so. Because the term's distinct-student total is
+  published elsewhere (S13, S09), a single blanked interface could be worked out by subtraction, so one blanked
+  interface blanks the students and prompts of every interface (complementary suppression). The staff-by-interface table
+  is aggregate-only and unchanged. S14 and the interface chart show sessions only.

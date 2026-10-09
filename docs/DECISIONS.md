@@ -14568,6 +14568,16 @@ of deletions; the combined file excludes them with the rest of their history.
   - In two-file mode someone matched as staff by handle only on the legacy side can end up with two roles, because
     only a current-database staff person is promoted across.
 
+## D-148 — `apps/web`: Danger zones are discreet — a neutral rule and a red heading, not a red box
+
+Every Danger zone (account, organization, course editor, project and course admin screens, platform account admin) had its own copy of `rounded-md border border-danger-600 bg-danger-50 p-4`: a red-tinted, red-bordered block around the whole section, far louder than the rest of the screen.
+
+- **One shared component.** `components/DangerZoneSection.tsx` renders the `aria-label="Danger zone"` section for all six, so they cannot drift apart. It is a thin neutral top rule (`border-t border-neutral-200 pt-6`), no fill, no box. The red accent is the heading text (`text-danger-700`, about 6.5:1 on white, WCAG AA) and the existing outlined `destructive` button, which stays red-outlined and fills solid only on hover. No new button variant was needed: `destructive` already was the "secondary-style destructive" the design asks for.
+- **No dark mode in the app**, so there is one palette to check.
+- **The organization tab opts out of the rule** (`divider={false}`) because `GeneralSettings` already draws one above its Danger zone.
+- **Visual only.** Copy, `data-testid`s, `aria-label`s, heading levels and the confirmation flows are unchanged. `tests/danger-zone-section.test.tsx` fails if any screen reintroduces its own red box instead of the shared component.
+- **The button hugs its content** (`[&>button]:self-start`): a full-width red-outlined button became the loudest element once the box was gone. Only the button shrinks; an error message above it still spans the section.
+
 ## D-149 — `analysis/`: ANLY-11 — "enrolled students" means class size; platform enrolments are "registered users"
 
 - **The problem.** The platform's `enrolments` table is not a class roster: a Discord-role enrolment is created only

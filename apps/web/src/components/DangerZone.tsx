@@ -31,6 +31,7 @@ import { ApiError, softDeleteOrganization } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
 import { DeleteIcon } from '../icons.js'
 import { routeForTab, type Route } from '../routing/route.js'
+import { DangerZoneSection } from './DangerZoneSection.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { useModal } from './modal/ModalProvider.js'
@@ -132,13 +133,7 @@ export function DangerZone({
       <h1 className="text-page-title font-semibold text-neutral-900">
         Danger zone
       </h1>
-      <section
-        aria-label="Danger zone"
-        className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
-      >
-        <h2 className="text-lg font-semibold text-danger-700">
-          Delete this organization
-        </h2>
+      <DangerZoneSection title="Delete this organization" divider={false}>
         {deleteError && <ErrorMessage error={deleteError} />}
         <Button
           variant="destructive"
@@ -148,7 +143,7 @@ export function DangerZone({
         >
           {deleting ? 'Deleting…' : 'Delete organization'}
         </Button>
-      </section>
+      </DangerZoneSection>
     </div>
   )
 }

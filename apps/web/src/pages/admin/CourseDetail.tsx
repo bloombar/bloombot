@@ -33,6 +33,7 @@
 
 import type { AdminCourseDetail } from '../../api/types.js'
 import { AppLink } from '../../components/AppLink.js'
+import { DangerZoneSection } from '../../components/DangerZoneSection.js'
 import { Button } from '../../components/Button.js'
 import {
   LoadingStatus,
@@ -424,13 +425,7 @@ export function CourseDetailView({
 
       {/* WEB-72 — the last section on the screen, visibly separated,
           holding this course's own delete and nothing else. */}
-      <section
-        aria-label="Danger zone"
-        className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
-      >
-        <h3 className="text-section-title font-semibold text-danger-700">
-          Danger zone
-        </h3>
+      <DangerZoneSection title="Danger zone" as="h3">
         <Button
           variant="destructive"
           icon={<DeleteIcon aria-hidden="true" className="size-4" />}
@@ -439,7 +434,7 @@ export function CourseDetailView({
         >
           {deletingId === course.courseId ? 'Deleting…' : 'Delete course'}
         </Button>
-      </section>
+      </DangerZoneSection>
     </div>
   )
 }

@@ -68,6 +68,7 @@ import { useState } from 'react'
 
 import { ApiError, deleteAccount } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
+import { DangerZoneSection } from '../components/DangerZoneSection.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { useModal } from '../components/modal/ModalProvider.js'
@@ -180,18 +181,9 @@ export function Account({
       </section>
 
       {/* WEB-72 — the last section on the screen, visibly separated,
-          holding this account's own delete and nothing else. The same
-          `border-danger-600 bg-danger-50 text-danger-700` shape
-          `components/ErrorMessage.tsx`/`pages/Usage.tsx` already give a
-          danger-scale panel — this app defines no `danger-900`/`danger-200`
-          shade (`style.css`'s own three-shade semantic scale). */}
-      <section
-        aria-label="Danger zone"
-        className="flex flex-col gap-3 rounded-md border border-danger-600 bg-danger-50 p-4"
-      >
-        <h2 className="text-section-title font-semibold text-danger-700">
-          Danger zone
-        </h2>
+          holding this account's own delete and nothing else. Styled by the
+          shared `DangerZoneSection` (discreet, no red box). */}
+      <DangerZoneSection title="Danger zone">
         {deleteError && <ErrorMessage error={deleteError} />}
         <Button
           variant="destructive"
@@ -201,7 +193,7 @@ export function Account({
         >
           {deleting ? 'Deleting…' : 'Delete account'}
         </Button>
-      </section>
+      </DangerZoneSection>
     </div>
   )
 }

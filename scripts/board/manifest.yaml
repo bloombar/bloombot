@@ -5070,3 +5070,20 @@
   phase: 47
   status: In review
   review: false
+- id: ANLY-11
+  title: Enrolled students and registered users are reported separately
+  full: The platform's enrolments table is not a class roster. A Discord-role
+    enrolment is created only when a role holder messages the bot, and no roster
+    is ever imported, so it lists the students who have registered with the bot,
+    not everyone taking the course. The analysis therefore uses two terms
+    consistently. Enrolled students are the official class sizes per course and
+    term, entered by hand in the analysis configuration as headcounts only (no
+    names, no roster). Users (registered users) are the students the platform
+    knows about through an enrolment. The report states, per course and in
+    total, how many enrolled students are registered users and how many were
+    active, both as shares of enrolled…
+  section: §9 Analytics
+  family: ANLY
+  phase: 47
+  status: Backlog
+  review: false

@@ -534,6 +534,18 @@ classifier and the model classifier use the set that matches the session's role.
 include the label set's version, so a label made under the old set is never reused. The topic
 audit records the role of each sampled session, so agreement can be reported for each set.
 
+#### ANLY-11 Enrolled students and registered users are reported separately
+
+The platform's `enrolments` table is not a class roster. A Discord-role enrolment is created only
+when a role holder messages the bot, and no roster is ever imported, so it lists the students who
+have registered with the bot, not everyone taking the course. The analysis therefore uses two
+terms consistently. **Enrolled students** are the official class sizes per course and term,
+entered by hand in the analysis configuration as headcounts only (no names, no roster). **Users**
+(registered users) are the students the platform knows about through an enrolment. The report
+states, per course and in total, how many enrolled students are registered users and how many
+were active, both as shares of enrolled students. Where no class size is configured for a
+course, those shares are shown as unavailable rather than computed against registered users.
+
 ### 10. Operations & Deployment
 
 #### OPS-1 Python environment

@@ -558,4 +558,4 @@ third of real sessions fell outside the nine topic labels. This phase tags every
 role in the course, reports staff usage separately so student figures are students only, and replaces the
 nine labels with a student topic set and a staff purpose set drawn from what people actually ask.
 
-**In scope:** ANLY-9, ANLY-10
+**In scope:** ANLY-9, ANLY-10, ANLY-11

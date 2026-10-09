@@ -237,9 +237,13 @@ class Config:
     terms: dict[str, Term] = field(
         default_factory=lambda: {
             "fall_2026": Term("fall_2026", "Fall 2026", date(2026, 9, 2), date(2026, 12, 15)),
-            # Summer terms: the real dates are not known, so these are the
-            # approximate boundaries of `load.semester_of` (1 Jun - 31 Aug).
-            "summer_2026": Term("summer_2026", "Summer 2026", date(2026, 6, 1), date(2026, 8, 31)),
+            # Summer 2026: the official dates are 2026-05-18 to 2026-08-12; the
+            # window is widened a week either side. It overlaps the end of
+            # Spring 2026 (12 May); `sessions.term_adoption` gives each session
+            # to exactly one term.
+            "summer_2026": Term("summer_2026", "Summer 2026", date(2026, 5, 11), date(2026, 8, 19)),
+            # Summer 2025: dates not known, so the approximate boundaries of
+            # `load.semester_of` (1 Jun - 31 Aug).
             "summer_2025": Term("summer_2025", "Summer 2025", date(2025, 6, 1), date(2025, 8, 31)),
             "fall_2025": Term("fall_2025", "Fall 2025", date(2025, 9, 3), date(2025, 12, 16)),
             "spring_2026": Term("spring_2026", "Spring 2026", date(2026, 1, 20), date(2026, 5, 12)),

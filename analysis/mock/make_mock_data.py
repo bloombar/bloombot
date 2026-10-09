@@ -53,6 +53,9 @@ sys.path.insert(0, str(REPO_ROOT / "analysis"))
 AS_OF = date(2026, 9, 25)
 FALL_2025 = (date(2025, 9, 3), date(2025, 12, 16))
 SPRING_2026 = (date(2026, 1, 20), date(2026, 5, 12))
+# Summer-course traffic starts in mid-May, inside the analysis's widened Summer
+# 2026 window (11 May - 19 Aug) and overlapping the end of Spring (ANLY-11).
+SUMMER_2026_MOCK = (date(2026, 5, 13), date(2026, 6, 20))
 FALL_2026_START = date(2026, 9, 2)
 
 # ANLY-11. Mock class sizes, larger than the registered counts above so the
@@ -65,6 +68,10 @@ MOCK_CLASS_SIZES = {
         "Software Engineering": 50,
         "Agile Software Development & DevOps": 40,
         "Web Design": 35,
+    },
+    "summer_2026": {
+        "Introduction to Programming": 50,
+        "Web Design": 30,
     },
     "spring_2026": {
         "Software Engineering": 55,
@@ -504,6 +511,13 @@ def main() -> None:
         historical += build_sessions(
             rng, active, [c[0] for c in COURSES], start, end, ["discord"]
         )
+    # Summer-course traffic in mid-May 2026: it must be counted under Summer 2026,
+    # not Spring, though `semester_of` calls May Spring. Own generator so the
+    # rest of the mock data is unchanged.
+    historical += build_sessions(
+        random.Random(args.seed + 1), active,
+        ["Introduction to Programming", "Web Design"], *SUMMER_2026_MOCK, ["discord"],
+    )
     # The cutover gap: a few days of September 2026 the importer never picked up.
     cutover = build_sessions(
         rng, active, [c[0] for c in COURSES], FALL_2026_START, date(2026, 9, 8), ["discord"]

@@ -1,17 +1,17 @@
 {
   "dataset": {
-    "legacy_rows": 1508,
-    "current_rows": 1600,
-    "duplicates_dropped": 1388,
+    "legacy_rows": 1602,
+    "current_rows": 1680,
+    "duplicates_dropped": 1468,
     "excluded_account_rows": 4,
     "staff_rows": 50,
-    "student_rows": 1666,
-    "rows": 1716,
+    "student_rows": 1760,
+    "rows": 1810,
     "first_message": "2025-09-04T22:59:00",
     "last_message": "2026-09-25T21:20:16",
-    "sessions": 269,
-    "students": 54,
-    "prompts": 833,
+    "sessions": 285,
+    "students": 55,
+    "prompts": 880,
     "courses": [
       "Agile Software Development & DevOps",
       "Introduction to Programming",
@@ -19,14 +19,14 @@
       "Web Design"
     ],
     "median_prompts": 2.0,
-    "mean_prompts": 3.096654275092937,
+    "mean_prompts": 3.087719298245614,
     "iqr_prompts": [
       2.0,
       4.0
     ],
-    "median_duration": 12.233333333333333,
+    "median_duration": 12.55,
     "iqr_duration": [
-      4.316666666666666,
+      5.333333333333333,
       22.05
     ],
     "as_of": "2026-09-25",
@@ -47,7 +47,7 @@
       "web"
     ]
   },
-  "_written_at": "2026-10-09T11:01:49",
+  "_written_at": "2026-10-09T12:03:37",
   "volume": {
     "elapsed_days": 23,
     "adoption": [
@@ -231,6 +231,28 @@
         "partial": false
       },
       {
+        "term": "summer_2026",
+        "term_label": "Summer 2026",
+        "course": "Introduction to Programming",
+        "enrolled": 50,
+        "registered": null,
+        "registration_existed": false,
+        "active": 6,
+        "active_share": 0.12,
+        "partial": false
+      },
+      {
+        "term": "summer_2026",
+        "term_label": "Summer 2026",
+        "course": "Web Design",
+        "enrolled": 30,
+        "registered": null,
+        "registration_existed": false,
+        "active": null,
+        "active_share": null,
+        "partial": false
+      },
+      {
         "term": "fall_2026",
         "term_label": "Fall 2026",
         "course": "Agile Software Development & DevOps",
@@ -299,51 +321,51 @@
     }
   },
   "shape": {
-    "sessions": 269,
-    "students": 54,
-    "prompts": 833,
+    "sessions": 285,
+    "students": 55,
+    "prompts": 880,
     "courses": 4,
     "median_prompts": 2.0,
-    "mean_prompts": 3.096654275092937,
+    "mean_prompts": 3.087719298245614,
     "iqr_prompts": [
       2.0,
       4.0
     ],
-    "median_duration": 12.233333333333333,
+    "median_duration": 12.55,
     "iqr_duration": [
-      4.316666666666666,
+      5.333333333333333,
       22.05
     ],
     "returns": {
-      "students": 54,
-      "returned": 40,
-      "share": 0.7407407407407407,
+      "students": 55,
+      "returned": 41,
+      "share": 0.7454545454545455,
       "median_active_days": 3.0
     },
-    "after_hours_sessions": 158,
-    "total_sessions": 269,
+    "after_hours_sessions": 167,
+    "total_sessions": 285,
     "sensitivity": [
       {
         "gap_minutes": 15,
-        "sessions": 269,
+        "sessions": 285,
         "median_prompts": 2.0,
-        "median_duration_minutes": 12.233333333333333
+        "median_duration_minutes": 12.55
       },
       {
         "gap_minutes": 30,
-        "sessions": 269,
+        "sessions": 285,
         "median_prompts": 2.0,
-        "median_duration_minutes": 12.233333333333333
+        "median_duration_minutes": 12.55
       },
       {
         "gap_minutes": 60,
-        "sessions": 269,
+        "sessions": 285,
         "median_prompts": 2.0,
-        "median_duration_minutes": 12.233333333333333
+        "median_duration_minutes": 12.55
       }
     ],
-    "single_prompt_sessions": 40,
-    "long_sessions": 47,
+    "single_prompt_sessions": 41,
+    "long_sessions": 49,
     "figures": {
       "prompts": "prompts_per_session.png",
       "duration": "session_duration.png",
@@ -353,16 +375,16 @@
   "topics": {
     "method": "keyword",
     "method_counts": {
-      "keyword": 269
+      "keyword": 285
     },
     "counts": [
       {
         "topic": "Course concepts",
-        "sessions": 38
+        "sessions": 40
       },
       {
         "topic": "Tools, setup & deployment",
-        "sessions": 35
+        "sessions": 39
       },
       {
         "topic": "Team coordination",
@@ -370,7 +392,7 @@
       },
       {
         "topic": "Code & debugging",
-        "sessions": 25
+        "sessions": 26
       },
       {
         "topic": "Project & assignment requirements",
@@ -382,11 +404,15 @@
       },
       {
         "topic": "Git & GitHub workflow",
-        "sessions": 20
+        "sessions": 21
       },
       {
         "topic": "Discord & platform help",
-        "sessions": 19
+        "sessions": 21
+      },
+      {
+        "topic": "Deadlines & schedule",
+        "sessions": 17
       },
       {
         "topic": "Quiz & exam questions",
@@ -397,21 +423,17 @@
         "sessions": 15
       },
       {
-        "topic": "Deadlines & schedule",
-        "sessions": 13
-      },
-      {
         "topic": "Other",
-        "sessions": 13
+        "sessions": 14
       },
       {
         "topic": "Grades & grading",
-        "sessions": 5
+        "sessions": 6
       }
     ],
     "top_topic": "Course concepts",
-    "top_topic_sessions": 38,
-    "other_share": 0.048327137546468404,
+    "top_topic_sessions": 40,
+    "other_share": 0.04912280701754386,
     "by_course": {
       "Agile Software Development & DevOps": {
         "Project & assignment requirements": null,
@@ -433,11 +455,11 @@
         "Deadlines & schedule": null,
         "Grades & grading": null,
         "Course policies": 7.0,
-        "Course concepts": 14.0,
+        "Course concepts": 16.0,
         "Quiz & exam questions": null,
         "Code & debugging": 13.0,
         "Git & GitHub workflow": null,
-        "Tools, setup & deployment": 10.0,
+        "Tools, setup & deployment": 13.0,
         "Team coordination": null,
         "Discord & platform help": null,
         "Greetings & bot questions": null,
@@ -471,10 +493,10 @@
         "Team coordination": null,
         "Discord & platform help": null,
         "Greetings & bot questions": 9.0,
-        "Other": null
+        "Other": 5.0
       }
     },
-    "suppression_note": "38 of 52 cells are suppressed: fewer than 5 distinct students behind them.",
+    "suppression_note": "37 of 52 cells are suppressed: fewer than 5 distinct students behind them.",
     "by_term": {
       "Fall 2025": {
         "Project & assignment requirements": 2,
@@ -534,9 +556,9 @@
         "quote": "Student: how should our group split up the work Bot: That error usually means a missing dependency. Try these three steps in order."
       },
       {
-        "topic": "Project & assignment requirements",
-        "course": "Software Engineering",
-        "quote": "Student: where is the starter code for this assignment Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+        "topic": "Deadlines & schedule",
+        "course": "Web Design",
+        "quote": "Student: is the deadline for the project extended? Bot: Here's what the course materials say about that, and where to look next."
       },
       {
         "topic": "Course policies",
@@ -554,9 +576,9 @@
         "quote": "Student: how do I connect my account Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
       },
       {
-        "topic": "Grades & grading",
+        "topic": "Project & assignment requirements",
         "course": "Software Engineering",
-        "quote": "Student: how much is the final worth of my grade Bot: That error usually means a missing dependency. Try these three steps in order."
+        "quote": "Student: where is the starter code for this assignment Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
       },
       {
         "topic": "Other",
@@ -564,9 +586,9 @@
         "quote": "Student: ok sounds good Bot: The syllabus covers this: the relevant deadline and policy are below."
       },
       {
-        "topic": "Deadlines & schedule",
-        "course": "Agile Software Development & DevOps",
-        "quote": "Student: what time is class on thursday Bot: Good question \u2014 the short answer is yes, with one caveat worth knowing."
+        "topic": "Grades & grading",
+        "course": "Software Engineering",
+        "quote": "Student: how much is the final worth of my grade Bot: That error usually means a missing dependency. Try these three steps in order."
       },
       {
         "topic": "Tools, setup & deployment",
@@ -590,12 +612,12 @@
     "sessions": 18,
     "prompts": 25,
     "staff_people": 1,
-    "all_messages": 1716,
-    "all_sessions": 287,
-    "all_prompts": 858,
-    "message_share": 0.029137529137529136,
-    "session_share": 0.0627177700348432,
-    "prompt_share": 0.029137529137529136,
+    "all_messages": 1810,
+    "all_sessions": 303,
+    "all_prompts": 905,
+    "message_share": 0.027624309392265192,
+    "session_share": 0.0594059405940594,
+    "prompt_share": 0.027624309392265192,
     "purposes": [
       {
         "topic": "Testing the bot",

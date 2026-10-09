@@ -307,7 +307,8 @@ def test_class_sizes_are_configured_by_term_and_pipeline_label():
     assert config.class_sizes_for("summer_2026") == {"Introduction to Programming": 54, "Web Design": 28}
     assert config.class_sizes_for("fall_2026")["Software Engineering"] == 109
     assert config.class_sizes_for("summer_2025") == {}
-    assert config.term("summer_2026").start == date(2026, 6, 1)
+    # Official 18 May - 12 Aug, widened a week either side.
+    assert (config.term("summer_2026").start, config.term("summer_2026").end) == (date(2026, 5, 11), date(2026, 8, 19))
     assert not config.registration_existed("spring_2026") and config.registration_existed("fall_2026")
 
 
@@ -342,6 +343,39 @@ def test_term_adoption_has_no_share_without_a_class_size_and_blanks_small_cells(
     assert summer["active"] == 6 and pd.isna(summer["enrolled"]) and pd.isna(summer["active_share"])
     solo = table[(table["term"] == "fall_2025") & (table["course"] == "Software Engineering")].iloc[0]
     assert pd.isna(solo["active"]) and pd.isna(solo["active_share"])  # 1 < min_cell_students
+
+
+def test_overlapping_term_windows_count_each_session_once():
+    """ANLY-11: 11-12 May sits in Spring and Summer windows; the course's class-size term wins."""
+    config = Config(as_of=date(2026, 10, 9))
+    frame = pd.concat(
+        [_messages(["2026-05-12 10:00"], person="a", course="Web Design"),  # summer course
+         _messages(["2026-05-12 11:00"], person="b", course="Software Engineering"),  # spring course
+         _messages(["2026-05-20 10:00"], person="c", course="Web Design")]
+    )
+    table = sessions.term_adoption(
+        sessions.session_frame(frame), pd.DataFrame(columns=["course", "person_key"]), config
+    )
+    summer = table[(table["term"] == "summer_2026") & (table["course"] == "Web Design")].iloc[0]
+    assert pd.isna(summer["active"])  # 2 active is under the small-cell floor
+    spring_se = table[(table["term"] == "spring_2026") & (table["course"] == "Software Engineering")]
+    assert len(spring_se) == 1
+    # No Web Design row under Spring, and every session is counted in exactly one term.
+    assert table[(table["term"] == "spring_2026") & (table["course"] == "Web Design")].empty
+    tagged = sessions._assign_terms(sessions.session_frame(frame), config)
+    assert sorted(tagged["_term"]) == ["spring_2026", "summer_2026", "summer_2026"]
+
+
+def test_summer_traffic_in_mid_may_is_counted_under_summer_2026():
+    config = Config(as_of=date(2026, 10, 9))
+    frame = pd.concat(
+        [_messages(["2026-05-14 10:00"], person=f"p{i}", course="Web Design") for i in range(6)]
+    )
+    table = sessions.term_adoption(
+        sessions.session_frame(frame), pd.DataFrame(columns=["course", "person_key"]), config
+    )
+    row = table[(table["term"] == "summer_2026") & (table["course"] == "Web Design")].iloc[0]
+    assert row["active"] == 6 and row["active_share"] == pytest.approx(6 / 28)
 
 
 def test_window_active_share_ignores_unsized_courses():
@@ -1264,6 +1298,9 @@ def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
     volume = metrics["volume"]
     assert volume["adoption_total_enrolled"] == 145
     assert volume["adoption_total_registered"] > 0
+    # Mid-May summer-course traffic lands in Summer 2026, not Spring (term windows overlap).
+    summer = [r for r in volume["term_adoption"] if r["term"] == "summer_2026" and r["course"] == "Introduction to Programming"]
+    assert summer and summer[0]["active"] and summer[0]["active"] > 0
     assert any(r["course"] == "Introduction to Programming" and pd.isna(r["enrolled"]) for r in volume["adoption"])
 
     # Every student notebook filters to students: the numbers they wrote match

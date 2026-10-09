@@ -269,6 +269,30 @@ def adoption(
     return out[columns].sort_values("course").reset_index(drop=True)
 
 
+def _assign_terms(sessions: pd.DataFrame, config: Config) -> pd.DataFrame:
+    """
+    Tag each session with the one term it belongs to (`_term`), so term windows
+    that overlap never count a session twice.
+
+    A session falls in every term window that contains its date. If that is
+    several, it goes to the term whose class sizes list its course (Summer
+    courses in the May overlap with Spring); if still several or none do, to
+    the latest-starting one. Sessions outside every window get no term.
+    This uses the `Term` windows, not `load.semester_of`, which calls all of
+    May Spring.
+    """
+    if sessions.empty:
+        return sessions.assign(_term=pd.Series(dtype=object))
+    days = pd.to_datetime(sessions["started_at"]).dt.date
+    ordered = sorted(config.terms.items(), key=lambda kv: kv[1].start, reverse=True)
+    owners = []
+    for day, course in zip(days, sessions["course"]):
+        inside = [(k, t) for k, t in ordered if t.start <= day <= t.end]
+        sized = [k for k, _ in inside if course in config.class_sizes_for(k)]
+        owners.append(sized[0] if sized else (inside[0][0] if inside else None))
+    return sessions.assign(_term=owners)
+
+
 def term_adoption(
     student_sessions: pd.DataFrame,
     enrolments: pd.DataFrame,
@@ -288,10 +312,10 @@ def term_adoption(
     """
     config = config or CONFIG
     rows = []
-    frame = student_sessions
+    frame = _assign_terms(student_sessions, config)
     for key, term in sorted(config.terms.items(), key=lambda kv: kv[1].start):
         sizes = config.class_sizes_for(key)
-        in_this = in_term(frame, term, ts_column="started_at") if not frame.empty else frame
+        in_this = frame[frame["_term"] == key] if not frame.empty else frame
         active = (
             in_this.groupby("course")["person_key"].nunique() if not in_this.empty else pd.Series(dtype=int)
         )

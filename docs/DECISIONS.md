@@ -14587,8 +14587,12 @@ of deletions; the combined file excludes them with the rest of their history.
   with a class size, including those before registration existed. `registered` is NA there ("registration did not
   exist"), not 0. The current term is flagged partial. Active counts of 1 to 4 are blanked (small-cell rule), and the
   share goes with them.
-- **Summer terms.** `summer_2026` and `summer_2025` were added to `config.terms`, using the approximate boundaries of
-  `load.semester_of` (1 June to 31 August); the real dates are not known. `weekly_matrix` zero-fills only terms that
+- **Summer terms.** `summer_2025` was added with the approximate boundaries of `load.semester_of` (1 June to 31 August);
+  its real dates are not known. `summer_2026` has official dates 2026-05-18 to 2026-08-12, and the analysis window is
+  widened a week either side: 2026-05-11 to 2026-08-19. That overlaps Spring 2026 (ends 12 May), so
+  `sessions.term_adoption` assigns each session to exactly one term: if several windows contain its date, the term whose
+  class sizes list its course wins, otherwise the latest-starting one. Per-term tables use these `Term` windows, not
+  `load.semester_of` (which calls all of May Spring and still labels the `semester` column that way). `weekly_matrix` zero-fills only terms that
   have traffic, so a quiet summer still breaks the weekly line. No class sizes exist for Summer 2025, so its share is NA.
 - **Totals.** Shares in the total count only courses that have a class size, in numerator and denominator alike.
   `registered_total` and `active_total` still count every course's users.

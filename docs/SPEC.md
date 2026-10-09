@@ -1860,6 +1860,18 @@ importer reports what it created, what it matched to something already there, an
 could not place, and a message whose course cannot be identified is reported rather than
 dropped silently.
 
+#### MIG-5 Importing a later snapshot whose row ids restart
+
+A later copy of the legacy database comes from a different database lineage: its row ids
+start again at 1, so row 7 of the new copy is not row 7 of the one already imported. The
+importer takes an optional source label, and with one it keeps the two numberings apart; a
+message already present — the same person, second, direction and text — is matched to it
+rather than imported again, and only the genuinely new messages are added, to the person,
+course and conversation they belong to. Without a label it behaves exactly as before, so
+the first import can still be re-run unchanged. The report separates messages created,
+matched by id, matched by content and unplaced, and a message that cannot be placed is
+reported rather than dropped.
+
 ### 30. Conversation Core
 
 #### CORE-1 One answering pipeline for every surface

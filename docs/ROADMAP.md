@@ -550,3 +550,12 @@ the two-file input as an option, and stops the analytics notebook applying its p
 data it no longer describes.
 
 **In scope:** ANLY-8
+
+## Phase 48 — Importing a later legacy snapshot
+
+A later copy of the legacy database restarts its row ids at 1, so the importer's id-based re-run check either
+skips its new messages as already imported or, if the ids are namespaced, imports the overlap twice. This phase
+adds an optional `--source` label that keeps the numberings apart and a content check that recognises a message
+already imported under another id, so only the new messages are added.
+
+**In scope:** MIG-5

@@ -55,7 +55,10 @@ export interface DuplicateCategory {
 /** What `importMessages` created, matched, or could not place. */
 export interface ImportMessagesResult {
   created: number
+  /** Already imported under the same deterministic id (a re-run of the same snapshot, MIG-4). */
   matched: number
+  /** MIG-5 — already present under a *different* id: same person, second, direction and content. */
+  matchedByContent: number
   unplaceable: UnplaceableMessage[]
   duplicateCategories: DuplicateCategory[]
 }
@@ -138,6 +141,65 @@ function loadExistingMessageIds(
 }
 
 /**
+ * MIG-5 — a message's identity independent of any legacy row id: who, when
+ * (whole seconds), which way, and what was said. Seconds, not milliseconds,
+ * because a later snapshot may store the same moment at a different
+ * sub-second precision.
+ */
+function contentFingerprint(
+  personId: string,
+  createdAtMs: number,
+  direction: string,
+  content: string
+): string {
+  return JSON.stringify([
+    personId,
+    Math.floor(createdAtMs / 1000),
+    direction,
+    content.trim(),
+  ])
+}
+
+/**
+ * MIG-5 — how many messages of each fingerprint `organizationId` already
+ * holds in `courses`, read once up front like `loadExistingMessageIds`. A
+ * count, not a set: two genuinely identical messages in one second are two
+ * rows, and each incoming row may consume only one existing copy — so
+ * "A has one, B has two" imports the second, not neither. Only what existed
+ * *before* this run is counted; rows this run creates never hide a later
+ * identical row in the same snapshot.
+ */
+function loadExistingFingerprints(
+  organizationId: string,
+  courses: RoutableCourse[],
+  db: Database
+): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const course of courses) {
+    for (const conversation of conversationsRepo.listConversationsForCourse(
+      organizationId,
+      course.id,
+      db
+    )) {
+      for (const message of conversationsRepo.getTranscript(
+        organizationId,
+        conversation.id,
+        db
+      )) {
+        const key = contentFingerprint(
+          message.personId,
+          message.createdAt,
+          message.direction,
+          message.content
+        )
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+    }
+  }
+  return counts
+}
+
+/**
  * Import `legacyMessages` (already ordered oldest-first by
  * `read-legacy.ts#readLegacyMessages`) into `organizationId`.
  *
@@ -161,20 +223,38 @@ function loadExistingMessageIds(
  * (finding 8), not thrown out of this function uncaught — `created_at` is
  * `NOT NULL` in the legacy schema, so this is bounded, but a corrupted or
  * hand-edited snapshot should still produce a report, not an aborted run.
+ *
+ * MIG-5 — `source` names the legacy database lineage. Two lineages both
+ * number rows from 1, so without it row 7 of a later snapshot would be
+ * mistaken for row 7 of the first. With it the id also hashes `source`;
+ * without it ids are exactly as before (existing imports stay matched). A
+ * message not found by id is then looked up by content (`contentFingerprint`)
+ * so a later snapshot's copy of an already-imported message is
+ * `matchedByContent`, not duplicated. New messages are appended after the
+ * conversation's existing ones (`appendMessage` assigns `sequence` as highest
+ * + 1), whatever their `createdAt` — `lastMessageAt` still takes the max.
  */
 export function importMessages(
   organizationId: string,
   legacyMessages: LegacyMessage[],
   personByLegacyUserId: Map<number, string>,
   courses: RoutableCourse[],
-  db: Database
+  db: Database,
+  source?: string
 ): ImportMessagesResult {
   const { index: categoryIndex, duplicates: duplicateCategories } =
     buildCategoryIndex(courses)
   const existingMessageIds = loadExistingMessageIds(organizationId, courses, db)
 
+  const existingFingerprints = loadExistingFingerprints(
+    organizationId,
+    courses,
+    db
+  )
+
   let created = 0
   let matched = 0
+  let matchedByContent = 0
   const unplaceable: UnplaceableMessage[] = []
 
   for (const legacyMessage of legacyMessages) {
@@ -213,11 +293,19 @@ export function importMessages(
       continue
     }
 
-    const messageId = deterministicId(
-      'legacy-message',
-      organizationId,
-      String(legacyMessage.id)
-    )
+    const messageId =
+      source === undefined
+        ? deterministicId(
+            'legacy-message',
+            organizationId,
+            String(legacyMessage.id)
+          )
+        : deterministicId(
+            'legacy-message',
+            organizationId,
+            source,
+            String(legacyMessage.id)
+          )
     if (existingMessageIds.has(messageId)) {
       matched += 1
       continue
@@ -236,13 +324,27 @@ export function importMessages(
       continue
     }
 
+    const direction =
+      legacyMessage.direction === 'from' ? 'from_person' : 'to_person'
+    const fingerprint = contentFingerprint(
+      personId,
+      createdAt,
+      direction,
+      legacyMessage.content
+    )
+    const remaining = existingFingerprints.get(fingerprint) ?? 0
+    if (remaining > 0) {
+      existingFingerprints.set(fingerprint, remaining - 1)
+      matchedByContent += 1
+      continue
+    }
+
     conversationsRepo.appendMessage(
       organizationId,
       conversation.id,
       {
         id: messageId,
-        direction:
-          legacyMessage.direction === 'from' ? 'from_person' : 'to_person',
+        direction,
         content: legacyMessage.content,
         surface: 'discord',
         channelRef: legacyMessage.channel,
@@ -255,7 +357,13 @@ export function importMessages(
     created += 1
   }
 
-  return { created, matched, unplaceable, duplicateCategories }
+  return {
+    created,
+    matched,
+    matchedByContent,
+    unplaceable,
+    duplicateCategories,
+  }
 }
 
 /** Build `RoutableCourse[]` from a set of course ids, reading each course's categories back through the repos (never the importer's own return value — the same principle the tests hold the importer to). */

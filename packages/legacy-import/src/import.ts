@@ -65,6 +65,8 @@ export interface RunImportOptions {
   db: Database
   /** Forwarded to `importConfig` — see its module comment for the default. */
   projectName?: string
+  /** MIG-5 — label for this legacy database lineage; see `importMessages`. Omit for the original import. */
+  source?: string
 }
 
 /** The full report `runImport` returns — what it created, matched, and could not place (MIG-4). */
@@ -92,7 +94,7 @@ export interface ImportReport {
  * `guard.ts` (MIG-1) and `read-legacy.ts`.
  */
 export function runImport(options: RunImportOptions): ImportReport {
-  const { snapshotPath, yamlPath, db, projectName } = options
+  const { snapshotPath, yamlPath, db, projectName, source } = options
 
   assertLegacySnapshotPath(snapshotPath)
 
@@ -141,7 +143,8 @@ export function runImport(options: RunImportOptions): ImportReport {
     legacyMessages,
     personByLegacyUserId,
     routableCourses,
-    db
+    db,
+    source
   )
 
   const courseConflicts = configResult.courses.filter((outcome) => !outcome.ok)

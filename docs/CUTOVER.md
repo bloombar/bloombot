@@ -289,6 +289,29 @@ source unconditionally regardless of the flag. Read the report the same way as 1
 rehearsal; every count should match what the rehearsal already showed for the same snapshot
 if nothing changed between taking the two copies.
 
+### 2.4a Importing a later snapshot (MIG-5)
+
+If the legacy bot kept running after the first import and a newer copy is taken, do not
+re-run 2.4 against it. A later copy is a different database lineage: its row ids restart at
+1, so without a label the importer would treat its rows as ones already imported and skip
+the new messages. Give the copy a label with `--source`, and **rehearse into `tmp/` first**,
+on a copy of the platform database that already holds the first import:
+
+```bash
+cp data/data.db tmp/rehearsal-platform.db
+DATABASE_PATH=./tmp/rehearsal-platform.db \
+  npm run legacy:import --workspace packages/legacy-import -- \
+  tmp/later-snapshot.db bot_config.yml --source 2026-term2
+```
+
+Read the report: `messages.matchedByContent` should be about the size of the overlap with
+the first import, `messages.created` only the messages sent since, and `messages.unplaceable`
+should be empty. Re-run the same command and every message should read `matched`. Then
+apply it to the real file exactly as in 2.4 (`DATABASE_PATH=./data/data.db`, `--i-know`),
+with the **same** `--source` label — a different label on a re-run would make every new
+message look new again, though the content check still stops duplicates. The first import
+needs no label and must keep being re-run without one.
+
 ### 2.5 Start the platform
 
 ```bash

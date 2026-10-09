@@ -5036,3 +5036,20 @@
   phase: 46
   status: Done
   review: false
+- id: MIG-5
+  title: Importing a later snapshot whose row ids restart
+  full: "A later copy of the legacy database comes from a different database
+    lineage: its row ids start again at 1, so row 7 of the new copy is not row 7
+    of the one already imported. The importer takes an optional source label,
+    and with one it keeps the two numberings apart; a message already present —
+    the same person, second, direction and text — is matched to it rather than
+    imported again, and only the genuinely new messages are added, to the
+    person, course and conversation they belong to. Without a label it behaves
+    exactly as before, so the first import can still be re-run unchanged. The
+    report separates messages created, matched by id, matched by content and
+    unplaced, and a message that cannot…"
+  section: §29 Legacy Import
+  family: MIG
+  phase: 48
+  status: Backlog
+  review: false

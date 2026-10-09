@@ -14514,3 +14514,29 @@ of deletions; the combined file excludes them with the rest of their history.
 - **Hook coverage.** The pre-commit strip lists staged notebooks with `--no-renames` (a `git mv` is otherwise a rename and was skipped) and a case-insensitive pathspec; an old-format (nbformat < 4, `worksheets`) or unparseable notebook is refused rather than passed through, in the strip, the pre-push check and the CI test. A `post-commit` hook re-strips the index, because `git commit <path>` re-stages the working copy (with outputs) after committing. The pre-push check fails closed with an actionable message when the remote's commit is unknown locally, and says so when no remote-tracking refs exist and the whole history was inspected. Its advice for an already-committed notebook is `strip-notebook-outputs.mjs --index` then `git commit --amend --no-edit` (tip commit only), or squash the branch with `git reset --soft <merge-base> && git commit`; a bare `--amend` strips nothing.
 - **Known limits.** Markdown-cell `attachments` (embedded images) are authored content and survive stripping, so a pasted screenshot could still carry student data. `npm run prepare` sets `core.hooksPath` for the repository, overriding any global setting a developer has.
 
+
+## D-150 — `packages/legacy-import`: MIG-5 — a later snapshot is told apart by a source label, and de-duplicated by content
+
+A later legacy snapshot restarts its row ids at 1. The message id (`legacy-message` + organization + legacy id)
+therefore collided with already-imported rows: a new row was counted as `matched` and silently lost.
+
+- **`--source <label>` (`RunImportOptions.source`).** When given, it is added to the id hash. Without it the id is
+  byte-for-byte what it was, so existing imports stay recognised and the first import keeps re-running unchanged.
+  An empty label is refused by `parseCliArgs` (`cli-args.ts`), since it would silently mean "no label".
+- **Content match, not id, finds the overlap.** Namespacing alone would import the overlapping messages a second
+  time. Before inserting, a message is looked up by (person, `created_at` floored to the second, direction, trimmed
+  content), read once up front from the existing transcripts like `loadExistingMessageIds`. Seconds, because the
+  importer stores epoch milliseconds (`parseLegacyTimestamp`) and another snapshot may differ below that.
+  Compared in the same epoch-ms representation, after the id check, so a re-run still reports `matched`.
+- **Counts, not a set.** Each incoming row consumes one existing copy, so two genuinely identical messages in one
+  second import as two rather than collapsing. Rows created during the run are not added: a snapshot's own repeated
+  rows are never hidden from each other. The content check applies with or without a label.
+- **Sequence.** `appendMessage` assigns `sequence` as the conversation's highest plus one, so a later snapshot's new
+  messages sit after the existing ones in a reused conversation, even if some are older than the last existing
+  message (`lastMessageAt` still takes the maximum). Ordering by `createdAt` would need a repo change and was left alone.
+- **Report.** `messages.matchedByContent` is new beside `created`, `matched` and `unplaceable`. The CLI prints it.
+  People and courses already reported created vs. matched.
+- **No wrapping transaction.** The importer never had one: each repo call (`appendMessage`) is its own transaction,
+  and a failed run is repaired by re-running, which MIG-4's idempotency makes safe. MIG-5 keeps that.
+- **Known limit.** A message edited between snapshots, or timestamped differently, is not recognised as the same and
+  imports as new. Use a rehearsal's `matchedByContent` against the expected overlap to catch it.

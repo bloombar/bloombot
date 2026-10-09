@@ -34,3 +34,6 @@ export type {
   ImportMessagesResult,
   RoutableCourse,
 } from './import-messages.js'
+
+export { parseCliArgs } from './cli-args.js'
+export type { CliArgs } from './cli-args.js'

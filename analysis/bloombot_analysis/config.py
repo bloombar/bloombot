@@ -10,6 +10,7 @@ them from its flags), so a run never needs a code edit to read different data.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -71,6 +72,43 @@ def topics_for(role: str) -> list[str]:
 def topic_set_key(role: str) -> str:
     """Versioned label-set name used in cache keys, e.g. 'v2-student'."""
     return f"{TOPIC_SET_VERSION}-{'staff' if role == 'staff' else 'student'}"
+
+
+# ── Class sizes (ANLY-11) ─────────────────────────────────────────────────
+# "Enrolled students" in the report means these official headcounts, per term
+# and per analysis course label (the label `load._course_labels` produces). They
+# are hand-entered numbers from the instructor, not a roster: no names, no ids.
+# The platform's `enrolments` table is *not* a roster (a student appears there
+# only once the bot learns of them), so it is reported as "registered users".
+# A course missing here has no class size and its shares are shown as unavailable.
+CLASS_SIZES: dict[str, dict[str, int]] = {
+    "fall_2025": {
+        "Agile Software Development & DevOps": 120,
+        "Software Engineering": 100,
+    },
+    "spring_2026": {
+        "Agile Software Development & DevOps": 70,
+        "Software Engineering": 124,
+    },
+    # "Intro to Computer Programming" is the platform title; the analysis calls
+    # the same course "Introduction to Programming" (COURSE_MAP "Python").
+    "summer_2026": {
+        "Introduction to Programming": 54,
+        "Web Design": 28,
+    },
+    "fall_2026": {
+        "Agile Software Development & DevOps": 118,
+        "Software Engineering": 109,
+    },
+}
+
+
+def _load_class_sizes() -> dict[str, dict[str, int]]:
+    """CLASS_SIZES, or the JSON file named by BLOOMBOT_ANALYSIS_CLASS_SIZES (mock runs use this)."""
+    path = os.environ.get("BLOOMBOT_ANALYSIS_CLASS_SIZES")
+    if not path:
+        return {term: dict(sizes) for term, sizes in CLASS_SIZES.items()}
+    return json.loads(Path(path).read_text())
 
 
 # Discord category prefix → readable course name, carried over from
@@ -175,6 +213,14 @@ class Config:
     staff_handles: tuple[str, ...] = ("instructor",)
     excluded_handles: tuple[str, ...] = ("testbot", "bloombot-test")
 
+    # ANLY-11. Official class sizes by term, then course label (see CLASS_SIZES).
+    class_sizes: dict[str, dict[str, int]] = field(default_factory=_load_class_sizes)
+
+    # ANLY-11. The platform has recorded registrations (enrolment rows) only
+    # since this term; the old bot had none. Terms starting earlier show
+    # "registration did not exist" rather than a registered count of 0.
+    registration_from_term: str = "fall_2026"
+
     # ── Calendar ──────────────────────────────────────────────────────────
     # `as_of` is the cutoff every "so far this term" number is measured to,
     # and the point the prior-year window is truncated at for a like-for-like
@@ -191,6 +237,10 @@ class Config:
     terms: dict[str, Term] = field(
         default_factory=lambda: {
             "fall_2026": Term("fall_2026", "Fall 2026", date(2026, 9, 2), date(2026, 12, 15)),
+            # Summer terms: the real dates are not known, so these are the
+            # approximate boundaries of `load.semester_of` (1 Jun - 31 Aug).
+            "summer_2026": Term("summer_2026", "Summer 2026", date(2026, 6, 1), date(2026, 8, 31)),
+            "summer_2025": Term("summer_2025", "Summer 2025", date(2025, 6, 1), date(2025, 8, 31)),
             "fall_2025": Term("fall_2025", "Fall 2025", date(2025, 9, 3), date(2025, 12, 16)),
             "spring_2026": Term("spring_2026", "Spring 2026", date(2026, 1, 20), date(2026, 5, 12)),
         }
@@ -224,6 +274,14 @@ class Config:
         if self.input_mode == "combined":
             return f"combined: {show(self.combined_db)}"
         return f"two-file: legacy {show(self.legacy_db)}; current {show(self.current_db)}"
+
+    def registration_existed(self, term_key: str) -> bool:
+        """True when the platform could register students during this term."""
+        return self.term(term_key).start >= self.term(self.registration_from_term).start
+
+    def class_sizes_for(self, term_key: str) -> dict[str, int]:
+        """Class sizes for one term; empty when none are configured."""
+        return dict(self.class_sizes.get(term_key, {}))
 
     def term(self, key: str) -> Term:
         return self.terms[key]

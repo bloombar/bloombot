@@ -254,12 +254,105 @@ def test_term_completeness_reports_a_partial_term():
     assert completeness["comparison_window_end"] == date(2025, 9, 26)
 
 
-def test_adoption_is_unmeasurable_without_enrolments():
-    """A course with no roster comes back as NA, never as a silent 0%."""
+def _registered(course: str, n: int) -> pd.DataFrame:
+    return pd.DataFrame({"course": course, "person_key": [f"p{i}" for i in range(n)]})
+
+
+def test_adoption_is_unmeasurable_without_a_class_size():
+    """ANLY-11: no class size means NA shares, never a share of registered users."""
     session_rows = sessions.session_frame(_messages(["2026-09-10 10:00"]))
-    result = sessions.adoption(session_rows, pd.DataFrame(columns=["course", "person_key"]))
-    assert result.loc[0, "active"] == 1
-    assert pd.isna(result.loc[0, "share"])
+    result = sessions.adoption(session_rows, _registered("Web Design", 1))
+    assert result.loc[0, "active"] == 1 and result.loc[0, "registered"] == 1
+    assert pd.isna(result.loc[0, "enrolled"])
+    assert pd.isna(result.loc[0, "registered_share"]) and pd.isna(result.loc[0, "active_share"])
+
+
+def test_adoption_divides_by_the_class_size_not_by_registered_users():
+    """ANLY-11: 1 active of 3 registered of a class of 10."""
+    rows = sessions.session_frame(_messages(["2026-09-10 10:00"]))
+    result = sessions.adoption(rows, _registered("Web Design", 3), {"Web Design": 10})
+    row = result.iloc[0]
+    assert (row["enrolled"], row["registered"], row["active"]) == (10, 3, 1)
+    assert row["registered_share"] == pytest.approx(0.3)
+    assert row["active_share"] == pytest.approx(0.1)
+
+
+def test_adoption_tolerates_more_registered_than_the_class_size():
+    rows = sessions.session_frame(_messages(["2026-09-10 10:00"]))
+    with pytest.warns(UserWarning, match="more registered users"):
+        result = sessions.adoption(rows, _registered("Web Design", 12), {"Web Design": 10})
+    assert result.loc[0, "registered_share"] == pytest.approx(1.2)
+
+
+def test_adoption_totals_count_only_sized_courses_in_the_shares():
+    rows = pd.concat(
+        [
+            sessions.session_frame(_messages(["2026-09-10 10:00"], person="a", course="Web Design")),
+            sessions.session_frame(_messages(["2026-09-10 10:00"], person="b", course="Other")),
+        ]
+    )
+    enrolments = pd.concat([_registered("Web Design", 2), _registered("Other", 4)])
+    table = sessions.adoption(rows, enrolments, {"Web Design": 10})
+    totals = sessions.adoption_totals(table)
+    assert totals["enrolled_total"] == 10
+    assert totals["registered_total"] == 6 and totals["active_total"] == 2
+    assert totals["registered_share"] == pytest.approx(0.2)
+    assert totals["active_share"] == pytest.approx(0.1)
+    assert totals["courses_without_class_size"] == ["Other"]
+
+
+def test_class_sizes_are_configured_by_term_and_pipeline_label():
+    """ANLY-11: the summer course is keyed by the analysis label, not the platform title."""
+    config = Config()
+    assert config.class_sizes_for("summer_2026") == {"Introduction to Programming": 54, "Web Design": 28}
+    assert config.class_sizes_for("fall_2026")["Software Engineering"] == 109
+    assert config.class_sizes_for("summer_2025") == {}
+    assert config.term("summer_2026").start == date(2026, 6, 1)
+    assert not config.registration_existed("spring_2026") and config.registration_existed("fall_2026")
+
+
+def test_term_adoption_computes_active_share_before_registration_existed():
+    """ANLY-11: a term with class sizes but no registration has registered NA and a real share."""
+    config = Config(as_of=date(2026, 10, 9))
+    times = [f"2025-09-1{i} 10:00" for i in range(6)]
+    frame = pd.concat(
+        [_messages([t], person=f"p{i}", course="Software Engineering") for i, t in enumerate(times)]
+    )
+    rows = sessions.session_frame(frame).rename(columns={})
+    table = sessions.term_adoption(rows, pd.DataFrame(columns=["course", "person_key"]), config)
+    row = table[(table["term"] == "fall_2025") & (table["course"] == "Software Engineering")].iloc[0]
+    assert pd.isna(row["registered"]) and not row["registration_existed"]
+    assert row["enrolled"] == 100 and row["active"] == 6
+    assert row["active_share"] == pytest.approx(0.06)
+    assert not row["partial"]
+    # The current term is flagged partial.
+    assert table[table["term"] == "fall_2026"]["partial"].all()
+
+
+def test_term_adoption_has_no_share_without_a_class_size_and_blanks_small_cells():
+    config = Config(as_of=date(2026, 10, 9))
+    frame = pd.concat(
+        [_messages(["2025-07-10 10:00"], person=f"p{i}", course="Web Design") for i in range(6)]
+        + [_messages(["2025-09-10 10:00"], person="solo", course="Software Engineering")]
+    )
+    table = sessions.term_adoption(
+        sessions.session_frame(frame), pd.DataFrame(columns=["course", "person_key"]), config
+    )
+    summer = table[table["term"] == "summer_2025"].iloc[0]  # no class size configured
+    assert summer["active"] == 6 and pd.isna(summer["enrolled"]) and pd.isna(summer["active_share"])
+    solo = table[(table["term"] == "fall_2025") & (table["course"] == "Software Engineering")].iloc[0]
+    assert pd.isna(solo["active"]) and pd.isna(solo["active_share"])  # 1 < min_cell_students
+
+
+def test_window_active_share_ignores_unsized_courses():
+    window = pd.concat(
+        [
+            _messages(["2026-09-10 10:00"], person="a", course="Web Design"),
+            _messages(["2026-09-10 10:00"], person="b", course="Unsized"),
+        ]
+    ).rename(columns={})
+    result = sessions.window_active_share(sessions.session_frame(window), {"Web Design": 4})
+    assert result == {"active": 1, "enrolled": 4, "share": 0.25}
 
 
 def test_weekly_matrix_leaves_the_summer_empty():
@@ -1134,6 +1227,7 @@ def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
         "BLOOMBOT_ANALYSIS_TOPIC_CACHE": str(mock_dbs / "report_topics.json"),
         "BLOOMBOT_ANALYSIS_OUT_DIR": str(out),
         "BLOOMBOT_ANALYSIS_AS_OF": "2026-09-25",
+        "BLOOMBOT_ANALYSIS_CLASS_SIZES": str(mock_dbs / "class_sizes.json"),
         "MPLBACKEND": "Agg",
     }
     # Execute copies of the notebooks, so the committed ones are never rewritten.
@@ -1149,7 +1243,7 @@ def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
     subprocess.run([sys.executable, "-c", code], check=True, env=env, capture_output=True)
 
     text = (out / "USAGE_REPORT.md").read_text()
-    assert "## S22 · Staff use it too, and it is counted separately" in text
+    assert "## S23 · Staff use it too, and it is counted separately" in text
     assert "What staff used it for" in text
     assert "Testing the bot" in text and "Quiz & exam questions" in text
     metrics = json.loads((out / "metrics.json").read_text())
@@ -1158,6 +1252,19 @@ def test_mock_report_has_a_staff_section_and_student_only_figures(mock_dbs):
     # Student figures are students only: the staff session count is not in them.
     assert dataset["sessions"] == staff["all_sessions"] - staff["sessions"]
     assert "quote" not in json.dumps(staff).lower()
+
+    # ANLY-11: S09 reports enrolled students and registered users apart, and
+    # "enrolled" never stands in for registered users anywhere in the report.
+    s09 = text.split("## S09", 1)[1].split("\n## S", 1)[0]
+    assert "enrolled students" in s09 and "registered" in s09
+    assert "of 145 enrolled students" in s09  # mock class sizes 60 + 45 + 40
+    for phrase in ("enrolled students used", "enrolled students tried"):
+        assert phrase not in text
+    assert "registration did not exist" in text  # the term-by-term slide
+    volume = metrics["volume"]
+    assert volume["adoption_total_enrolled"] == 145
+    assert volume["adoption_total_registered"] > 0
+    assert any(r["course"] == "Introduction to Programming" and pd.isna(r["enrolled"]) for r in volume["adoption"])
 
     # Every student notebook filters to students: the numbers they wrote match
     # a student-only recount of the tidy files, and differ from an all-roles one.

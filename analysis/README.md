@@ -95,6 +95,17 @@ caption that states its n, the figure's own data table, `**Speaker notes:**`, an
 `**Confidence:**` field — `measured`, `indicative` or `speculative`. The confidence field is
 validated when the slide is built, so a typo fails the run rather than reaching a deck.
 
+## Enrolled students and users (ANLY-11)
+
+The report uses two terms and never mixes them. **Enrolled students** are the official class sizes, held as
+hand-entered headcounts in `CLASS_SIZES` in `bloombot_analysis/config.py`, keyed by term and by the analysis course
+label (no names, no roster). **Users** are the students the platform knows through an `enrolments` row, staff
+excluded. The bot learns of a student only when they first message it or join, so users are a subset of the class.
+Shares (registered, active) are always of enrolled students; a course or term with no class size shows no share.
+Before Fall 2026 there was no registration, so only the active share can be computed. To change a class size, edit
+`CLASS_SIZES`; mock runs read their own sizes from `tmp/analysis/class_sizes.json` through
+`BLOOMBOT_ANALYSIS_CLASS_SIZES`.
+
 ## Privacy
 
 - Notebook **outputs never reach GitHub**: a pre-commit hook strips them from the staged copy, a pre-push hook
@@ -116,8 +127,8 @@ validated when the slide is built, so a typo fails the run rather than reaching 
 
 `tests/test_analysis.py` (pytest, part of the repository's Python suite) covers the rules a reader
 of the report is trusting: duplicate reconciliation across the two databases, the timezone
-alignment that makes that possible, session splitting, the like-for-like truncation, adoption with
-no roster, small-cell suppression, quote scrubbing and the report's own structure. For the combined
+alignment that makes that possible, session splitting, the like-for-like truncation, adoption against
+class sizes (and NA without one), small-cell suppression, quote scrubbing and the report's own structure. For the combined
 database (ANLY-8) they also check that an imported legacy message is labelled exactly as the legacy loader
 labels it, that reading a WAL-mode file leaves nothing beside it, and that `analytics.ipynb` runs end to end
 on synthetic data (keyword topics, never the network).

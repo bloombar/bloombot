@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import random
 import shutil
 import sqlite3
@@ -53,6 +54,29 @@ AS_OF = date(2026, 9, 25)
 FALL_2025 = (date(2025, 9, 3), date(2025, 12, 16))
 SPRING_2026 = (date(2026, 1, 20), date(2026, 5, 12))
 FALL_2026_START = date(2026, 9, 2)
+
+# ANLY-11. Mock class sizes, larger than the registered counts above so the
+# report shows the gap between enrolled students and registered users.
+# "Introduction to Programming" is left out on purpose: no class size, so its
+# shares must come out as unavailable. Written beside the databases and read
+# through the config's BLOOMBOT_ANALYSIS_CLASS_SIZES override.
+MOCK_CLASS_SIZES = {
+    "fall_2025": {
+        "Software Engineering": 50,
+        "Agile Software Development & DevOps": 40,
+        "Web Design": 35,
+    },
+    "spring_2026": {
+        "Software Engineering": 55,
+        "Agile Software Development & DevOps": 38,
+        "Web Design": 36,
+    },
+    "fall_2026": {
+        "Software Engineering": 60,
+        "Agile Software Development & DevOps": 45,
+        "Web Design": 40,
+    },
+}
 
 COURSES = [
     ("Software Engineering", "Software Engineering", 34),
@@ -728,6 +752,8 @@ def main() -> None:
     )
     current.commit()
     current.close()
+
+    (out_dir / "class_sizes.json").write_text(json.dumps(MOCK_CLASS_SIZES, indent=2))
 
     combined_path = out_dir / "combined.db"
     imported = write_combined(legacy_path, current_path, combined_path)

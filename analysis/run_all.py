@@ -127,6 +127,8 @@ def main() -> int:
         subprocess.run(
             [sys.executable, str(ANALYSIS_DIR / "mock" / "make_mock_data.py")], check=True
         )
+        # ANLY-11: the mock's own class sizes (set after generation, which writes the file).
+        os.environ["BLOOMBOT_ANALYSIS_CLASS_SIZES"] = str(mock_dir / "class_sizes.json")
 
     sys.path.insert(0, str(ANALYSIS_DIR))
     try:  # imported late: env vars must be set first

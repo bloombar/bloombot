@@ -15,6 +15,8 @@ within the gap is one session, not two — which is how it reads to the student.
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Mapping
 from datetime import date
 
 import numpy as np
@@ -217,38 +219,155 @@ def gap_sensitivity(
     return pd.DataFrame(rows)
 
 
-def adoption(sessions: pd.DataFrame, enrolments: pd.DataFrame) -> pd.DataFrame:
+def adoption(
+    sessions: pd.DataFrame,
+    enrolments: pd.DataFrame,
+    class_sizes: Mapping[str, int] | None = None,
+) -> pd.DataFrame:
     """
-    Per course: enrolled, used at least once, and the share.
+    Per course: enrolled students, registered users, active users, and both shares (ANLY-11).
 
-    Adoption is the honest headline when volume is small — it has a denominator
-    that means something, where a raw message count does not. Courses with no
-    enrolment data (everything before Fall 2026) come back with `enrolled` as
-    NA rather than zero, so they are visibly unmeasurable instead of silently
-    reported as 0%.
+    The words mean different things and are never mixed:
+      * `enrolled`   - the official class size, a hand-entered headcount from
+                       `CONFIG.class_sizes` (NA when none is configured).
+      * `registered` - users: students the platform knows through an enrolment row.
+      * `active`     - users who sent at least one prompt in `sessions`.
+    Both shares are of *enrolled* students. A course with no class size gets NA
+    shares - never a share of registered users, which would read as near-100% adoption
+    and say nothing about the class. Registered may exceed the class size (a late
+    drop, a typo in the config); that is shown as it is, with a warning.
     """
-    if sessions.empty and enrolments.empty:
-        return pd.DataFrame(columns=["course", "enrolled", "active", "share"])
+    columns = ["course", "enrolled", "registered", "active", "registered_share", "active_share"]
+    sizes = dict(class_sizes or {})
+    if sessions.empty and enrolments.empty and not sizes:
+        return pd.DataFrame(columns=columns)
 
     active = (
         sessions.groupby("course")["person_key"].nunique().rename("active")
         if not sessions.empty
         else pd.Series(dtype=int, name="active")
     )
-    enrolled = (
-        enrolments.groupby("course")["person_key"].nunique().rename("enrolled")
+    registered = (
+        enrolments.groupby("course")["person_key"].nunique().rename("registered")
         if not enrolments.empty
-        else pd.Series(dtype=int, name="enrolled")
+        else pd.Series(dtype=int, name="registered")
     )
-    out = pd.concat([enrolled, active], axis=1).reset_index().rename(columns={"index": "course"})
+    enrolled = pd.Series(sizes, dtype="Int64", name="enrolled")
+    out = pd.concat([enrolled, registered, active], axis=1)
+    out.index.name = "course"
+    out = out.reset_index()
+    out["registered"] = out["registered"].fillna(0).astype(int)
     out["active"] = out["active"].fillna(0).astype(int)
     out["enrolled"] = out["enrolled"].astype("Int64")
-    out["share"] = np.where(
-        out["enrolled"].notna() & (out["enrolled"] > 0),
-        out["active"] / out["enrolled"].astype(float),
-        np.nan,
-    )
-    return out.sort_values("course").reset_index(drop=True)
+    has_size = out["enrolled"].notna() & (out["enrolled"] > 0)
+    denominator = out["enrolled"].astype(float)
+    out["registered_share"] = np.where(has_size, out["registered"] / denominator, np.nan)
+    out["active_share"] = np.where(has_size, out["active"] / denominator, np.nan)
+    over = out[has_size & (out["registered"] > out["enrolled"].fillna(0))]
+    for course in over["course"]:
+        warnings.warn(f"{course}: more registered users than the configured class size", stacklevel=2)
+    return out[columns].sort_values("course").reset_index(drop=True)
+
+
+def term_adoption(
+    student_sessions: pd.DataFrame,
+    enrolments: pd.DataFrame,
+    config: Config | None = None,
+) -> pd.DataFrame:
+    """
+    Per term and course: enrolled, registered, active, and the active share (ANLY-11).
+
+    Active share (active users / enrolled students) is computable for any term
+    with a class size, because it needs only the sessions. Registration exists
+    only from `config.registration_from_term`; earlier terms get `registered` NA,
+    and `registration_existed` False so the report can say so instead of "0".
+    The current term is flagged `partial` (data runs only to `as_of`), and an
+    active count of 1 to `min_cell_students - 1` is blanked (small-cell rule);
+    the blanked row's share goes with it. A course with no class size has NA
+    enrolled and NA share.
+    """
+    config = config or CONFIG
+    rows = []
+    frame = student_sessions
+    for key, term in sorted(config.terms.items(), key=lambda kv: kv[1].start):
+        sizes = config.class_sizes_for(key)
+        in_this = in_term(frame, term, ts_column="started_at") if not frame.empty else frame
+        active = (
+            in_this.groupby("course")["person_key"].nunique() if not in_this.empty else pd.Series(dtype=int)
+        )
+        registered = (
+            enrolments.groupby("course")["person_key"].nunique()
+            if config.registration_existed(key) and not enrolments.empty
+            else pd.Series(dtype=int)
+        )
+        existed = config.registration_existed(key)
+        for course in sorted(set(sizes) | set(active.index)):
+            enrolled = sizes.get(course)
+            n_active = int(active.get(course, 0))
+            blanked = 0 < n_active < config.min_cell_students
+            rows.append(
+                {
+                    "term": key,
+                    "term_label": term.label,
+                    "course": course,
+                    "enrolled": enrolled,
+                    "registered": int(registered.get(course, 0)) if existed else None,
+                    "registration_existed": existed,
+                    "active": None if blanked else n_active,
+                    "active_share": (
+                        n_active / enrolled if enrolled and not blanked else float("nan")
+                    ),
+                    "partial": term.start <= config.as_of < term.end,
+                }
+            )
+    out = pd.DataFrame(rows)
+    for column in ("enrolled", "registered", "active"):
+        out[column] = out[column].astype("Int64")
+    return out
+
+
+def window_active_share(window: pd.DataFrame, class_sizes: Mapping[str, int]) -> dict:
+    """
+    Active users / enrolled students over one like-for-like window (ANLY-11).
+
+    Only courses that have a class size count, in numerator and denominator
+    alike, so an unsized course cannot inflate the share.
+    """
+    sized = window[window["course"].isin(class_sizes)] if not window.empty else window
+    active = int(sized.groupby("course")["person_key"].nunique().sum()) if not sized.empty else 0
+    enrolled = int(sum(class_sizes.values()))
+    return {
+        "active": active,
+        "enrolled": enrolled,
+        "share": active / enrolled if enrolled else float("nan"),
+    }
+
+
+def adoption_totals(table: pd.DataFrame) -> dict:
+    """
+    Totals across courses for the headline (ANLY-11).
+
+    `enrolled_total` sums the configured class sizes. The two shares count only
+    courses that have one, so a course with no class size cannot inflate the
+    numerator against a denominator that leaves it out. `registered_total` and
+    `active_total` still count every course's users.
+    """
+    sized = table[table["enrolled"].notna()] if not table.empty else table
+    enrolled = int(sized["enrolled"].sum()) if not sized.empty else 0
+    registered_sized = int(sized["registered"].sum()) if not sized.empty else 0
+    active_sized = int(sized["active"].sum()) if not sized.empty else 0
+    return {
+        "enrolled_total": enrolled,
+        "registered_total": int(table["registered"].sum()) if not table.empty else 0,
+        "active_total": int(table["active"].sum()) if not table.empty else 0,
+        "registered_sized": registered_sized,
+        "active_sized": active_sized,
+        "registered_share": registered_sized / enrolled if enrolled else float("nan"),
+        "active_share": active_sized / enrolled if enrolled else float("nan"),
+        "courses_without_class_size": [
+            str(c) for c in (table.loc[table["enrolled"].isna(), "course"] if not table.empty else [])
+        ],
+    }
 
 
 def return_rate(sessions: pd.DataFrame) -> dict:
@@ -305,7 +424,12 @@ def weekly_matrix(sessions: pd.DataFrame, config: Config | None = None, by: str 
 
     in_any_term = pd.Series(False, index=wide.index)
     for term in config.terms.values():
-        in_any_term |= (wide.index.date >= term.start) & (wide.index.date <= term.end)
+        inside = (wide.index.date >= term.start) & (wide.index.date <= term.end)
+        # A term with no traffic at all in this data (a summer term the bot was
+        # not used in) stays empty, so the line still breaks there.
+        if not wide[inside].notna().any().any():
+            continue
+        in_any_term |= inside
     # Zero only where a term was actually running.
     for column in wide.columns:
         wide[column] = wide[column].where(~(in_any_term & wide[column].isna()), 0.0)

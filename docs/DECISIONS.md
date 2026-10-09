@@ -14567,3 +14567,34 @@ of deletions; the combined file excludes them with the rest of their history.
     override catches them.
   - In two-file mode someone matched as staff by handle only on the legacy side can end up with two roles, because
     only a current-database staff person is promoted across.
+
+## D-149 — `analysis/`: ANLY-11 — "enrolled students" means class size; platform enrolments are "registered users"
+
+- **The problem.** The platform's `enrolments` table is not a class roster: a Discord-role enrolment is created only
+  when a role holder messages the bot, and no roster is imported. The old adoption figure ("15 of 24 enrolled
+  students") therefore divided by registered users and made a minority look like a whole class.
+- **Definitions.** *Enrolled students*: the official class size per course and term. *Users* (registered users):
+  students with an `enrolments` row, staff excluded. *Active users*: users (or, before Fall 2026, any student) with a
+  prompt in the period. The report, metrics and column names keep these apart: `enrolled` only ever means class size.
+- **Where class sizes come from.** `CLASS_SIZES` in `config.py`, entered by hand from headcounts the instructor
+  supplied (Fall 2025, Spring 2026, Summer 2026, Fall 2026). Headcounts only, no names. Keys are the pipeline's own course
+  labels, e.g. "Intro to Computer Programming" is "Introduction to Programming". A course or term with no entry has NA
+  shares; the code never falls back to dividing by registered users.
+- **Mock runs.** `make_mock_data.py` writes `class_sizes.json` (larger than the registered counts, and one course left
+  out to exercise the NA path); `run_all.py --mock` points `BLOOMBOT_ANALYSIS_CLASS_SIZES` at it. A real run uses
+  `CLASS_SIZES`. The env var is a path to a JSON file of the same shape.
+- **Per-term active share.** Active users / enrolled students needs only sessions, so it is computed for every term
+  with a class size, including those before registration existed. `registered` is NA there ("registration did not
+  exist"), not 0. The current term is flagged partial. Active counts of 1 to 4 are blanked (small-cell rule), and the
+  share goes with them.
+- **Summer terms.** `summer_2026` and `summer_2025` were added to `config.terms`, using the approximate boundaries of
+  `load.semester_of` (1 June to 31 August); the real dates are not known. `weekly_matrix` zero-fills only terms that
+  have traffic, so a quiet summer still breaks the weekly line. No class sizes exist for Summer 2025, so its share is NA.
+- **Totals.** Shares in the total count only courses that have a class size, in numerator and denominator alike.
+  `registered_total` and `active_total` still count every course's users.
+- **Metrics keys.** `adoption_total_enrolled` now means the class-size total (it used to count registrations);
+  added `adoption_total_registered`, `adoption_registered_sized`, `adoption_active_sized`, `adoption_registered_share`,
+  `adoption_active_share`, `comparison_active_share`, `term_adoption`.
+- **Report.** S09 rewritten, a new slide after it for the term-by-term table (so later slide numbers moved up by one),
+  definitions added to the method slide, and the roster wording reworded in the role, "what it cannot tell you" and
+  conclusion slides. Per-student cost wording became per active user.

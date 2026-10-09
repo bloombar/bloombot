@@ -47,37 +47,53 @@
       "web"
     ]
   },
-  "_written_at": "2026-10-08T17:03:07",
+  "_written_at": "2026-10-09T11:01:49",
   "volume": {
     "elapsed_days": 23,
     "adoption": [
       {
         "course": "Agile Software Development & DevOps",
-        "enrolled": 21,
+        "enrolled": 45,
+        "registered": 21,
         "active": 5,
-        "share": 0.23809523809523808
+        "registered_share": 0.4666666666666667,
+        "active_share": 0.1111111111111111
       },
       {
         "course": "Introduction to Programming",
-        "enrolled": 46,
+        "enrolled": null,
+        "registered": 46,
         "active": 9,
-        "share": 0.1956521739130435
+        "registered_share": null,
+        "active_share": null
       },
       {
         "course": "Software Engineering",
-        "enrolled": 34,
+        "enrolled": 60,
+        "registered": 34,
         "active": 9,
-        "share": 0.2647058823529412
+        "registered_share": 0.5666666666666667,
+        "active_share": 0.15
       },
       {
         "course": "Web Design",
-        "enrolled": 23,
+        "enrolled": 40,
+        "registered": 23,
         "active": 4,
-        "share": 0.17391304347826086
+        "registered_share": 0.575,
+        "active_share": 0.1
       }
     ],
     "adoption_total_active": 27,
-    "adoption_total_enrolled": 124,
+    "adoption_total_registered": 124,
+    "adoption_total_enrolled": 145,
+    "adoption_registered_sized": 78,
+    "adoption_active_sized": 18,
+    "adoption_registered_share": 0.5379310344827586,
+    "adoption_active_share": 0.12413793103448276,
+    "adoption_courses_without_class_size": [
+      "Introduction to Programming"
+    ],
     "surface_split": [
       {
         "surface": "discord",
@@ -113,6 +129,152 @@
         "Prompts": 136
       }
     },
+    "comparison_active_share": {
+      "Fall 2025": {
+        "active": 17,
+        "enrolled": 125,
+        "share": 0.136
+      },
+      "Fall 2026": {
+        "active": 18,
+        "enrolled": 145,
+        "share": 0.12413793103448276
+      }
+    },
+    "term_adoption": [
+      {
+        "term": "fall_2025",
+        "term_label": "Fall 2025",
+        "course": "Agile Software Development & DevOps",
+        "enrolled": 40,
+        "registered": null,
+        "registration_existed": false,
+        "active": 11,
+        "active_share": 0.275,
+        "partial": false
+      },
+      {
+        "term": "fall_2025",
+        "term_label": "Fall 2025",
+        "course": "Introduction to Programming",
+        "enrolled": null,
+        "registered": null,
+        "registration_existed": false,
+        "active": 13,
+        "active_share": null,
+        "partial": false
+      },
+      {
+        "term": "fall_2025",
+        "term_label": "Fall 2025",
+        "course": "Software Engineering",
+        "enrolled": 50,
+        "registered": null,
+        "registration_existed": false,
+        "active": 10,
+        "active_share": 0.2,
+        "partial": false
+      },
+      {
+        "term": "fall_2025",
+        "term_label": "Fall 2025",
+        "course": "Web Design",
+        "enrolled": 35,
+        "registered": null,
+        "registration_existed": false,
+        "active": 5,
+        "active_share": 0.14285714285714285,
+        "partial": false
+      },
+      {
+        "term": "spring_2026",
+        "term_label": "Spring 2026",
+        "course": "Agile Software Development & DevOps",
+        "enrolled": 38,
+        "registered": null,
+        "registration_existed": false,
+        "active": 11,
+        "active_share": 0.2894736842105263,
+        "partial": false
+      },
+      {
+        "term": "spring_2026",
+        "term_label": "Spring 2026",
+        "course": "Introduction to Programming",
+        "enrolled": null,
+        "registered": null,
+        "registration_existed": false,
+        "active": 7,
+        "active_share": null,
+        "partial": false
+      },
+      {
+        "term": "spring_2026",
+        "term_label": "Spring 2026",
+        "course": "Software Engineering",
+        "enrolled": 55,
+        "registered": null,
+        "registration_existed": false,
+        "active": 14,
+        "active_share": 0.2545454545454545,
+        "partial": false
+      },
+      {
+        "term": "spring_2026",
+        "term_label": "Spring 2026",
+        "course": "Web Design",
+        "enrolled": 36,
+        "registered": null,
+        "registration_existed": false,
+        "active": 6,
+        "active_share": 0.16666666666666666,
+        "partial": false
+      },
+      {
+        "term": "fall_2026",
+        "term_label": "Fall 2026",
+        "course": "Agile Software Development & DevOps",
+        "enrolled": 45,
+        "registered": 21,
+        "registration_existed": true,
+        "active": 5,
+        "active_share": 0.1111111111111111,
+        "partial": true
+      },
+      {
+        "term": "fall_2026",
+        "term_label": "Fall 2026",
+        "course": "Introduction to Programming",
+        "enrolled": null,
+        "registered": 46,
+        "registration_existed": true,
+        "active": 9,
+        "active_share": null,
+        "partial": true
+      },
+      {
+        "term": "fall_2026",
+        "term_label": "Fall 2026",
+        "course": "Software Engineering",
+        "enrolled": 60,
+        "registered": 34,
+        "registration_existed": true,
+        "active": 9,
+        "active_share": 0.15,
+        "partial": true
+      },
+      {
+        "term": "fall_2026",
+        "term_label": "Fall 2026",
+        "course": "Web Design",
+        "enrolled": 40,
+        "registered": 23,
+        "registration_existed": true,
+        "active": null,
+        "active_share": null,
+        "partial": true
+      }
+    ],
     "comparison_by_surface": {
       "Fall 2025": {
         "Discord": 35,
@@ -129,6 +291,7 @@
     "weekly_peak_sessions": 16,
     "figures": {
       "adoption": "adoption_by_course.png",
+      "term_adoption": "adoption_by_term.png",
       "weekly": "weekly_sessions_by_course.png",
       "surfaces": "sessions_by_surface.png",
       "comparison": "term_comparison.png",

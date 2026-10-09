@@ -5051,7 +5051,7 @@
   section: §9 Analytics
   family: ANLY
   phase: 47
-  status: In review
+  status: Done
   review: false
 - id: ANLY-10
   title: Topic sets that fit the questions people actually ask
@@ -5068,7 +5068,7 @@
   section: §9 Analytics
   family: ANLY
   phase: 47
-  status: In review
+  status: Done
   review: false
 - id: ANLY-11
   title: Enrolled students and registered users are reported separately
@@ -5085,7 +5085,7 @@
   section: §9 Analytics
   family: ANLY
   phase: 47
-  status: In review
+  status: Done
   review: false
 - id: MIG-5
   title: Importing a later snapshot whose row ids restart
@@ -5102,5 +5102,5 @@
   section: §29 Legacy Import
   family: MIG
   phase: 48
-  status: Backlog
+  status: In review
   review: false

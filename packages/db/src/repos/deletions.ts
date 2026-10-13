@@ -50,6 +50,7 @@ import {
   courseCategories,
   courseChannels,
   courseInstructionRevisions,
+  courseInvitations,
   courseJoinLinks,
   courseSelfEnrolmentIntents,
   courseWebSources,
@@ -417,6 +418,16 @@ function emptyCourse(
       and(
         eq(rosterImportAcknowledgements.organizationId, organizationId),
         eq(rosterImportAcknowledgements.courseId, courseId)
+      )
+    )
+    .run()
+  // ROST-21: a course's invitations (open or accepted) do not outlive it, and
+  // are a real foreign key to `courses.id` the delete below would trip on.
+  tx.delete(courseInvitations)
+    .where(
+      and(
+        eq(courseInvitations.organizationId, organizationId),
+        eq(courseInvitations.courseId, courseId)
       )
     )
     .run()

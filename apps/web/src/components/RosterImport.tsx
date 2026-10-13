@@ -95,6 +95,13 @@ export interface RosterImportProps {
   /** ROST-15: the course's own title — this component's own base-name field defaults to `${courseTitle} - STUDENTS`, CFG-4's own convention. */
   courseTitle: string
   /**
+   * ROST-21: whether the course uses Discord, default `true`. A course
+   * without it invites students by email, so the format shown needs only
+   * `Email` (no Discord handle), there are no channel options, and the
+   * report counts invitations rather than people and channels.
+   */
+  discordEnabled?: boolean
+  /**
    * Rework finding (cheap-fix): the signed-in account's own id, the same
    * `viewerAccountId` shape `components/Team.tsx` already takes
    * (`pages/Shell.tsx`'s own module comment on ENRL-11) — this component has
@@ -150,6 +157,7 @@ export function RosterImport({
   organizationId,
   courseId,
   courseTitle,
+  discordEnabled = true,
   viewerAccountId,
   stillQueuedHintAfterMs = DEFAULT_STILL_QUEUED_HINT_AFTER_MS,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
@@ -307,36 +315,68 @@ export function RosterImport({
 
   return (
     <div className="flex flex-col gap-3" data-testid="roster-import">
-      <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-700">
-        <p className="font-medium text-neutral-900">Roster file format</p>
-        <p className="mt-1">
-          A CSV with exactly these five column headers, spelled and capitalized
-          this way:
-        </p>
-        {/* WEB-48: `break-all` — a comma-separated header row has no space
+      {!discordEnabled ? (
+        // ROST-21: a course without Discord has no use for a handle — a row
+        // is an invitation for its email address.
+        <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-700">
+          <p className="font-medium text-neutral-900">Roster file format</p>
+          <p className="mt-1">
+            A CSV with these column headers, spelled and capitalized this way:
+          </p>
+          <p className="mt-1 break-all font-mono text-xs">
+            First,Last,Email,GitHub
+          </p>
+          <ul className="mt-2 list-disc pl-5">
+            <li>
+              <strong>Email</strong> is required in every row — it must contain
+              &quot;@&quot; with something before it. Each student is added to
+              the course when they sign in to Bloombot with this address. No
+              email is sent — let your students know to sign in.
+            </li>
+            <li>
+              <strong>First</strong>, <strong>Last</strong> and{' '}
+              <strong>GitHub</strong> may be left blank. A{' '}
+              <strong>Discord</strong> column is not needed, and ignored if
+              present.
+            </li>
+          </ul>
+          <p className="mt-2">Example row:</p>
+          <p className="break-all font-mono text-xs">
+            Ada,Lovelace,ada@example.edu,adalovelace-gh
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-700">
+          <p className="font-medium text-neutral-900">Roster file format</p>
+          <p className="mt-1">
+            A CSV with exactly these five column headers, spelled and
+            capitalized this way:
+          </p>
+          {/* WEB-48: `break-all` — a comma-separated header row has no space
             for the browser's own default word-break to land on, so at
             375px this line (and the example row below) simply ran past
             the edge of the panel rather than wrapping, unlike every plain-
             English `<p>` around it. */}
-        <p className="mt-1 break-all font-mono text-xs">
-          First,Last,Email,Discord,GitHub
-        </p>
-        <ul className="mt-2 list-disc pl-5">
-          <li>
-            <strong>Email</strong> and <strong>Discord</strong> are required in
-            every row — Discord is a row&apos;s own identity, and Email must
-            contain &quot;@&quot; with something before it.
-          </li>
-          <li>
-            <strong>First</strong>, <strong>Last</strong> and{' '}
-            <strong>GitHub</strong> may be left blank.
-          </li>
-        </ul>
-        <p className="mt-2">Example row:</p>
-        <p className="break-all font-mono text-xs">
-          Ada,Lovelace,ada@example.edu,adalovelace,adalovelace-gh
-        </p>
-      </div>
+          <p className="mt-1 break-all font-mono text-xs">
+            First,Last,Email,Discord,GitHub
+          </p>
+          <ul className="mt-2 list-disc pl-5">
+            <li>
+              <strong>Email</strong> and <strong>Discord</strong> are required
+              in every row — Discord is a row&apos;s own identity, and Email
+              must contain &quot;@&quot; with something before it.
+            </li>
+            <li>
+              <strong>First</strong>, <strong>Last</strong> and{' '}
+              <strong>GitHub</strong> may be left blank.
+            </li>
+          </ul>
+          <p className="mt-2">Example row:</p>
+          <p className="break-all font-mono text-xs">
+            Ada,Lovelace,ada@example.edu,adalovelace,adalovelace-gh
+          </p>
+        </div>
+      )}
 
       {/* ROST-19: above the drop zone, unticked on every mount — this
           component's own module comment has the reasoning for why it does
@@ -373,7 +413,11 @@ export function RosterImport({
 
       <FileDropZone
         label="Roster CSV"
-        help="Up to 10 MB — the five columns described above."
+        help={
+          discordEnabled
+            ? 'Up to 10 MB — the five columns described above.'
+            : 'Up to 10 MB — the columns described above.'
+        }
         accept=".csv,text/csv"
         maxBytes={MAX_ROSTER_BYTES}
         selectedFile={selectedFile}
@@ -381,38 +425,43 @@ export function RosterImport({
         onFileChosen={chooseFile}
       />
 
-      {/* ROST-15: requirement 1 — offered here, checked by default, with a
+      {/* ROST-21: no Discord, no categories to create. */}
+      {discordEnabled && (
+        <>
+          {/* ROST-15: requirement 1 — offered here, checked by default, with a
           base name field an instructor can override for a course that does
           not follow CFG-4's own `<title> - STUDENTS` convention. */}
-      <div className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3">
-        <label className="flex items-center gap-2 text-sm text-neutral-800">
-          <input
-            type="checkbox"
-            checked={createStudentCategories}
-            disabled={importing || (job !== undefined && !settled)}
-            onChange={(event) =>
-              setCreateStudentCategories(event.target.checked)
-            }
-          />
-          Create student categories if they don&apos;t exist
-        </label>
-        {createStudentCategories && (
-          <FormField
-            label="Base name for new categories"
-            help="Created as <base name> 01, <base name> 02, and so on."
-          >
-            <input
-              type="text"
-              value={studentCategoryBaseName}
-              disabled={importing || (job !== undefined && !settled)}
-              onChange={(event) =>
-                setStudentCategoryBaseName(event.target.value)
-              }
-              className="rounded-md border border-neutral-300 px-2 py-1 text-base sm:text-sm"
-            />
-          </FormField>
-        )}
-      </div>
+          <div className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3">
+            <label className="flex items-center gap-2 text-sm text-neutral-800">
+              <input
+                type="checkbox"
+                checked={createStudentCategories}
+                disabled={importing || (job !== undefined && !settled)}
+                onChange={(event) =>
+                  setCreateStudentCategories(event.target.checked)
+                }
+              />
+              Create student categories if they don&apos;t exist
+            </label>
+            {createStudentCategories && (
+              <FormField
+                label="Base name for new categories"
+                help="Created as <base name> 01, <base name> 02, and so on."
+              >
+                <input
+                  type="text"
+                  value={studentCategoryBaseName}
+                  disabled={importing || (job !== undefined && !settled)}
+                  onChange={(event) =>
+                    setStudentCategoryBaseName(event.target.value)
+                  }
+                  className="rounded-md border border-neutral-300 px-2 py-1 text-base sm:text-sm"
+                />
+              </FormField>
+            )}
+          </div>
+        </>
+      )}
 
       <div>
         <Button
@@ -466,11 +515,77 @@ export function RosterImport({
           data-testid="roster-import-report"
         >
           <p className="font-medium text-neutral-900">Import report</p>
-          <p className="text-neutral-700">
-            {report.peopleCreated.length} added, {report.peopleMerged.length}{' '}
-            merged, {report.channelsCreated.length} channels created,{' '}
-            {report.channelsAlreadyPresent.length} channels already present.
-          </p>
+          {discordEnabled ? (
+            <p className="text-neutral-700">
+              {report.peopleCreated.length} added, {report.peopleMerged.length}{' '}
+              merged, {report.channelsCreated.length} channels created,{' '}
+              {report.channelsAlreadyPresent.length} channels already present.
+            </p>
+          ) : (
+            // ROST-21: a course without Discord invites by email. Older
+            // reports predate these fields, hence the `?? 0`.
+            <p className="text-neutral-700">
+              {report.invitationsCreated ?? 0} invited,{' '}
+              {report.invitationsUpdated ?? 0} already invited (updated),{' '}
+              {
+                (report.invitationsAccepted ?? []).filter(
+                  (entry) => entry.outcome === 'enrolled'
+                ).length
+              }{' '}
+              enrolled straight away because they had already signed in.
+            </p>
+          )}
+          {(report.invitationDuplicateRows ?? []).length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Rows repeating an address used earlier in this file — ignored:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {(report.invitationDuplicateRows ?? []).map((entry) => (
+                  <li key={`duplicate-${entry.line}`}>
+                    Line {entry.line}: {entry.email} (already on line{' '}
+                    {entry.firstLine})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(report.invitationsPreviouslyRemoved ?? []).length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Previously removed — no invitation made. Reinstate them from the
+                People tab if they should be back:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {(report.invitationsPreviouslyRemoved ?? []).map((entry) => (
+                  <li key={`removed-${entry.line}`}>
+                    Line {entry.line}: {entry.email}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(report.invitationsAccepted ?? []).some(
+            (entry) => entry.outcome !== 'enrolled'
+          ) && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Students who had already signed in, where nothing new happened:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {(report.invitationsAccepted ?? [])
+                  .filter((entry) => entry.outcome !== 'enrolled')
+                  .map((entry) => (
+                    <li key={`accepted-${entry.line}-${entry.email}`}>
+                      Line {entry.line}: {entry.email} —{' '}
+                      {entry.outcome === 'already_enrolled'
+                        ? 'already enrolled'
+                        : 'their enrolment was ended earlier, and a roster does not bring it back (reinstate them from the People tab)'}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
 
           {report.parseErrors.length > 0 && (
             <div>

@@ -35,6 +35,7 @@ import {
   courseCategories,
   courseChannels,
   courseInstructionRevisions,
+  courseInvitations,
   courseJoinLinks,
   courseSelfEnrolmentIntents,
   courseWebSources,
@@ -488,6 +489,11 @@ export function deleteOrganizationData(
     // `deletions.ts#emptyCourse`'s own identical line).
     tx.delete(rosterImportAcknowledgements)
       .where(eq(rosterImportAcknowledgements.organizationId, organizationId))
+      .run()
+    // ROST-21 — invitations reference both `courses` and `people`, so they
+    // go ahead of either.
+    tx.delete(courseInvitations)
+      .where(eq(courseInvitations.organizationId, organizationId))
       .run()
     tx.delete(enrolments)
       .where(eq(enrolments.organizationId, organizationId))

@@ -18,6 +18,7 @@ export {
 
 export {
   parseRosterCsv,
+  type ParseRosterCsvOptions,
   rosterRowSchema,
   type RosterParseError,
   type RosterParseResult,

@@ -187,7 +187,13 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    live on `accounts`, not `memberships`, so deleting (or restoring) an
 //    account is account-wide, not scoped to one organization, the identical
 //    reasoning `disableAccount`'s own comment gives for `disabled_at`.
+//  - course-invitations.ts#claimInvitationsForAccount: ROST-21, keyed on a
+//    proven account like `accounts.ts#getAccountById`. An account can be
+//    invited to courses in several organizations, so the claim finds every
+//    open invitation for its address; each is then handled strictly inside
+//    its own invitation's organization, never one the caller names.
 const ALLOWLIST: Record<string, string[]> = {
+  'course-invitations.ts': ['claimInvitationsForAccount'],
   'accounts.ts': [
     'getAccountByEmail',
     'getAccountById',
@@ -387,7 +393,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the thirty-one repo files this test is written against', () => {
+  it('found the thirty-three repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -398,6 +404,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'course-approval.ts',
         'course-attachments.ts',
         'course-instruction-revisions.ts',
+        'course-invitations.ts',
         'course-join-links.ts',
         'course-web-sources.ts',
         'courses.ts',
@@ -423,6 +430,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'transcript-access.ts',
         'transcript-exports.ts',
         'usage.ts',
+        'web-person.ts',
       ].sort()
     )
   })

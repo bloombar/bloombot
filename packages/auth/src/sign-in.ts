@@ -15,6 +15,7 @@ import BetterSqlite3 from 'better-sqlite3'
 
 import {
   accounts as accountsRepo,
+  courseInvitations as courseInvitationsRepo,
   memberships as membershipsRepo,
   organizations as organizationsRepo,
   people as peopleRepo,
@@ -40,6 +41,35 @@ import {
 } from './sessions.js'
 
 type Account = accountsRepo.Account
+
+/** What a sign-in flow may be given besides its credentials. */
+export interface SignInOptions {
+  /** Where an invitation that could not be accepted at sign-in is reported (ROST-21). Sign-in goes ahead regardless. Any pino-style logger fits. */
+  logger?: { warn: (fields: Record<string, unknown>, message: string) => void }
+}
+
+/** ROST-21: the claim's error hook, logging ids and the error message only. */
+function claimOptions(options: SignInOptions) {
+  const logger = options.logger
+  if (!logger) return {}
+  return {
+    onError: (
+      error: unknown,
+      invitation: {
+        invitationId: string
+        organizationId: string
+        courseId: string
+      }
+    ) =>
+      logger.warn(
+        {
+          ...invitation,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'sign-in: a course invitation could not be accepted and was left open'
+      ),
+  }
+}
 
 /** The outcome of any of this file's sign-in flows: a session, and whether it required creating a new account. */
 export interface SignInResult {
@@ -522,7 +552,8 @@ export async function requestSignInLink(
  */
 export function redeemSignInLink(
   token: string,
-  db: Database
+  db: Database,
+  options: SignInOptions = {}
 ): SignInResult | undefined {
   return writeTransaction(db, (tx) => {
     const consumed = consumeSignInToken(token, tx)
@@ -542,6 +573,15 @@ export function redeemSignInLink(
       // comment has the full account).
       healWebPersonForReturningAccount(account.id, tx)
     }
+
+    // ROST-21: the emailed link proved this address, so any roster
+    // invitation addressed to it is accepted now. Never throws and never
+    // blocks sign-in (`claimInvitationsForAccount`'s own doc comment).
+    courseInvitationsRepo.claimInvitationsForAccount(
+      account.id,
+      tx,
+      claimOptions(options)
+    )
 
     const session = createSession(account.id, tx)
     return {
@@ -581,7 +621,8 @@ export function redeemSignInLink(
  */
 export function signInWithGoogle(
   identity: GoogleIdentity,
-  db: Database
+  db: Database,
+  options: SignInOptions = {}
 ): SignInResult | undefined {
   return writeTransaction(db, (tx) => {
     const existing = accountsRepo.getAccountByEmail(identity.email, tx)
@@ -617,6 +658,15 @@ export function signInWithGoogle(
     // account may already have one or more connected people (LINK-10) with
     // roster or earlier-Google names to leave alone.
     fillNamesFromGoogleIdentity(identity, account.id, tx)
+
+    // ROST-21: Google asserted this address as verified (an unverified one
+    // was rejected above), so roster invitations for it are accepted now.
+    // After the name fill, so a roster's name (ROST-18) lands last.
+    courseInvitationsRepo.claimInvitationsForAccount(
+      account.id,
+      tx,
+      claimOptions(options)
+    )
 
     const session = createSession(account.id, tx)
     // AUTH-6: Google sign-in never leaves the tab it started in

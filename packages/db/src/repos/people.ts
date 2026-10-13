@@ -26,6 +26,7 @@ import type {
 import { writeTransaction } from '../client.js'
 import {
   conversations,
+  courseInvitations,
   courseSelfEnrolmentIntents,
   enrolments,
   messages,
@@ -803,7 +804,7 @@ export function overwriteRosterFields(
   organizationId: string,
   personId: string,
   fields: RosterFields,
-  db: Database
+  db: Executor
 ): Person | undefined {
   const existing = getPerson(organizationId, personId, db)
   if (!existing) return undefined
@@ -1698,6 +1699,17 @@ export function permanentlyDeletePerson(
         and(
           eq(enrolments.organizationId, organizationId),
           eq(enrolments.personId, personId)
+        )
+      )
+      .run()
+    // ROST-21 — an accepted invitation names the person it enrolled; the
+    // invitation is a record of the roster row, so it stays and forgets who.
+    tx.update(courseInvitations)
+      .set({ acceptedPersonId: null })
+      .where(
+        and(
+          eq(courseInvitations.organizationId, organizationId),
+          eq(courseInvitations.acceptedPersonId, personId)
         )
       )
       .run()

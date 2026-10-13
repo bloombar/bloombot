@@ -82,6 +82,15 @@
  * call in it, rather than calling `navigate` bare. Both lists link
  * identically — ending an enrolment never deleted the transcript (ENRL-6),
  * and reading it afterwards is the point.
+ *
+ * **WEB-82: students invited by a roster but not signed in yet.** A roster
+ * for a course without Discord (ROST-21) makes invitations, not people, so
+ * those students are in no enrolment list yet. When there are any, a third
+ * list, "Invited — not signed in yet", shows each one's name and address and
+ * when they were invited, with a "Remove invitation" button (confirmed, as
+ * ending an enrolment is) for correcting a mistyped address. It is absent
+ * when nobody is invited. Once the student signs in, the invitation becomes
+ * an ordinary enrolment (source "Roster import") and leaves this list.
  */
 
 import { useCallback, useEffect, useState, type MouseEvent } from 'react'
@@ -90,9 +99,11 @@ import {
   ApiError,
   endCourseEnrolment,
   listCourseEnrolments,
+  listCourseInvitations,
   reinstateCourseEnrolment,
+  revokeCourseInvitation,
 } from '../api/client.js'
-import type { CourseEnrolment } from '../api/types.js'
+import type { CourseEnrolment, CourseInvitation } from '../api/types.js'
 import { buildPath, type Route } from '../routing/route.js'
 import { useNavigationGuard } from '../hooks/navigation-guard.js'
 import { DisableIcon, RestoreIcon } from '../icons.js'
@@ -121,6 +132,19 @@ function fullName(entry: CourseEnrolment): string | undefined {
     (part): part is string => part !== null && part !== ''
   )
   return parts.length > 0 ? parts.join(' ') : undefined
+}
+
+/** WEB-82: the name a roster gave an invitation, `undefined` when it gave none. */
+function invitationName(invitation: CourseInvitation): string | undefined {
+  const parts = [invitation.firstName, invitation.lastName].filter(
+    (part): part is string => part !== null && part !== ''
+  )
+  return parts.length > 0 ? parts.join(' ') : undefined
+}
+
+/** WEB-82: what a confirmation or aria-label calls an invitation — the name, else the address. */
+function invitationLabel(invitation: CourseInvitation): string {
+  return invitationName(invitation) ?? invitation.email
 }
 
 /** One labelled fact a row shows — `Name: Jane Doe`, `Email: jane@x.edu`, `Joined: Roster import — 16 Sep 2026, 14:03`, and so on. Always rendered as `${label}: ${value}` — a label is never separated from its own value. */
@@ -270,24 +294,51 @@ export function CoursePeople({
   const [statusMessage, setStatusMessage] = useState<string | undefined>(
     undefined
   )
+  // WEB-82 — open invitations, loaded alongside the enrolments. A failure
+  // here shows its own message and never hides the enrolment lists.
+  const [invitations, setInvitations] = useState<CourseInvitation[]>([])
+  const [invitationError, setInvitationError] = useState<ApiError | undefined>(
+    undefined
+  )
+  const [removingInvitationId, setRemovingInvitationId] = useState<
+    string | undefined
+  >(undefined)
   const { confirm } = useModal()
   // WEB-16/WEB-36 — this file's own module comment on why the transcript
   // link routes through this rather than calling `navigate` bare.
   const { guardedNavigate } = useNavigationGuard()
 
-  const refresh = useCallback(
+  const refreshInvitations = useCallback(
     () =>
-      listCourseEnrolments(organizationId, courseId).then(
+      listCourseInvitations(organizationId, courseId).then(
         (list) => {
-          setEntries(list)
-          setLoadError(undefined)
+          setInvitations(list)
+          setInvitationError(undefined)
         },
         (caught: unknown) => {
-          if (caught instanceof ApiError) setLoadError(caught)
+          if (caught instanceof ApiError) setInvitationError(caught)
           else throw caught
         }
       ),
     [organizationId, courseId]
+  )
+
+  const refresh = useCallback(
+    () =>
+      Promise.all([
+        listCourseEnrolments(organizationId, courseId).then(
+          (list) => {
+            setEntries(list)
+            setLoadError(undefined)
+          },
+          (caught: unknown) => {
+            if (caught instanceof ApiError) setLoadError(caught)
+            else throw caught
+          }
+        ),
+        refreshInvitations(),
+      ]).then(() => undefined),
+    [organizationId, courseId, refreshInvitations]
   )
 
   useEffect(() => {
@@ -338,6 +389,38 @@ export function CoursePeople({
       else throw caught
     } finally {
       setReinstatingId(undefined)
+    }
+  }
+
+  // WEB-82: removing an invitation is irreversible (the instructor would
+  // have to re-import), so it confirms first, the same as ending an enrolment.
+  const handleRemoveInvitation = async (invitation: CourseInvitation) => {
+    setInvitationError(undefined)
+    setStatusMessage(undefined)
+    const label = invitationLabel(invitation)
+    const confirmed = await confirm({
+      title: `Remove the invitation for ${label}?`,
+      description:
+        'They will no longer be enrolled when they sign in with this address. Nobody already enrolled is affected.',
+      confirmLabel: 'Remove invitation',
+      destructive: true,
+    })
+    if (!confirmed) return
+
+    setRemovingInvitationId(invitation.id)
+    try {
+      await revokeCourseInvitation(organizationId, invitation.id)
+      setStatusMessage(`Removed the invitation for ${label}.`)
+      await refresh()
+    } catch (caught) {
+      if (caught instanceof ApiError) {
+        // The invitation may have been accepted or removed meanwhile, so
+        // show what is true now alongside the error.
+        await refresh()
+        setInvitationError(caught)
+      } else throw caught
+    } finally {
+      setRemovingInvitationId(undefined)
     }
   }
 
@@ -409,6 +492,50 @@ export function CoursePeople({
         )}
         {endError && <ErrorMessage error={endError} />}
       </div>
+
+      {(invitations.length > 0 || invitationError) && (
+        <div className="flex flex-col gap-2" data-testid="course-invitations">
+          <h3 className="text-sm font-semibold text-neutral-900">
+            Invited — not signed in yet ({invitations.length})
+          </h3>
+          {invitations.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {invitations.map((invitation) => (
+                <li
+                  key={invitation.id}
+                  className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-neutral-900">
+                      {invitationName(invitation) ?? invitation.email}
+                    </p>
+                    <p className="text-sm text-neutral-500">
+                      {[
+                        ...(invitationName(invitation) !== undefined
+                          ? [`Email: ${invitation.email}`]
+                          : []),
+                        `Invited: ${new Date(invitation.createdAt).toLocaleString()}`,
+                      ].join(' · ')}
+                    </p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    aria-label={`Remove the invitation for ${invitationLabel(invitation)}`}
+                    icon={<DisableIcon aria-hidden="true" className="size-4" />}
+                    onClick={() => void handleRemoveInvitation(invitation)}
+                    disabled={removingInvitationId === invitation.id}
+                  >
+                    {removingInvitationId === invitation.id
+                      ? 'Removing…'
+                      : 'Remove invitation'}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {invitationError && <ErrorMessage error={invitationError} />}
+        </div>
+      )}
 
       <div className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold text-neutral-900">

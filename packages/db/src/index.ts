@@ -35,6 +35,7 @@ export * as courseInstructionRevisions from './repos/course-instruction-revision
 export * as costLedger from './repos/cost-ledger.js'
 export * as enrolments from './repos/enrolments.js'
 export * as selfEnrolment from './repos/self-enrolment.js'
+export * as courseInvitations from './repos/course-invitations.js'
 export * as courseJoinLinks from './repos/course-join-links.js'
 export * as courseWebSources from './repos/course-web-sources.js'
 export * as rosterChannelAssignments from './repos/roster-channel-assignments.js'

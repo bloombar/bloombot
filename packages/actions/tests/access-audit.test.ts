@@ -197,6 +197,13 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // `createRevealCourseJoinLinkAction`), reused rather than duplicated so
   // the two gates cannot drift apart under a future edit to either alone.
   'courseJoinLinks.reveal': { resource: 'courseJoinLink', access: 'write' },
+  // WEB-82: a read of the course's own open invitations, the same shape as
+  // `courseJoinLinks.list` above.
+  'courseInvitations.list': { resource: 'course', access: 'read' },
+  // WEB-82: resolves the open invitation itself, write — one belonging to
+  // another organization, or already accepted or removed, resolves to
+  // nothing (TEN-5).
+  'courseInvitations.revoke': { resource: 'courseInvitation', access: 'write' },
   // FILE-6/WEB-31: resolves the course itself, write — a course belonging
   // to another organization resolves to nothing (TEN-5), the same as
   // `courseAttachments.attach`'s own identical descriptor above.

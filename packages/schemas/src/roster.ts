@@ -59,7 +59,22 @@ export const rosterRowSchema = z.object({
   github: z.string().trim().default(''),
 })
 
+/**
+ * ROST-21: a course without Discord has no use for the handle column, so a
+ * row there is the same shape with `discord` allowed to be blank. Derived
+ * from `rosterRowSchema` so the email rules cannot drift between the two.
+ */
+const rosterRowSchemaDiscordIgnored = rosterRowSchema.extend({
+  discord: z.string().trim().default(''),
+})
+
 export type RosterRow = z.output<typeof rosterRowSchema>
+
+/** How `parseRosterCsv` treats the `Discord` column (ROST-21). */
+export interface ParseRosterCsvOptions {
+  /** `'required'` (the default, ROST-10): a handle is needed on every row. `'ignored'`: the column may be missing and cells blank. */
+  discord?: 'required' | 'ignored'
+}
 
 /** The exact header row `roster_create_channels.py` reads (`row.get('First'|'Last'|'Email'|'Discord'|'GitHub')`) — case-sensitive, the same as the Python `csv.DictReader` this mirrors. */
 const REQUIRED_HEADERS = [
@@ -225,7 +240,17 @@ function parseCsvRows(text: string): {
  * in `errors` instead, and parsing continues with the rest of the file, so
  * one bad row never costs an instructor the whole roster.
  */
-export function parseRosterCsv(text: string): RosterParseResult {
+export function parseRosterCsv(
+  text: string,
+  options: ParseRosterCsvOptions = {}
+): RosterParseResult {
+  const discordIgnored = options.discord === 'ignored'
+  const rowSchema = discordIgnored
+    ? rosterRowSchemaDiscordIgnored
+    : rosterRowSchema
+  const requiredHeaders = discordIgnored
+    ? REQUIRED_HEADERS.filter((header) => header !== 'Discord')
+    : REQUIRED_HEADERS
   // Rework finding 2: Excel's "CSV UTF-8" export — the default a
   // registrar's file goes through — writes a leading byte-order mark
   // (U+FEFF). Left in place, it silently becomes part of the first
@@ -260,7 +285,7 @@ export function parseRosterCsv(text: string): RosterParseResult {
     result.errors.push({ line: 1, message: 'The roster file is empty.' })
     return result
   }
-  const missingHeaders = REQUIRED_HEADERS.filter(
+  const missingHeaders = requiredHeaders.filter(
     (header) => !headerRow.includes(header)
   )
   if (missingHeaders.length > 0) {
@@ -299,7 +324,7 @@ export function parseRosterCsv(text: string): RosterParseResult {
       rowRecord[header] = values[index] ?? ''
     })
 
-    const parsed = rosterRowSchema.safeParse({
+    const parsed = rowSchema.safeParse({
       first: rowRecord['First'],
       last: rowRecord['Last'],
       email: rowRecord['Email'],

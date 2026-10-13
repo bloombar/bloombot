@@ -183,6 +183,7 @@ export function buildApp(deps: ServerDependencies): Express {
       emailSender: deps.emailSender,
       buildSignInLink: deps.buildSignInLink,
       googleVerifier: deps.googleVerifier,
+      logger: deps.logger,
       ...(deps.supportContact !== undefined
         ? { supportContact: deps.supportContact }
         : {}),

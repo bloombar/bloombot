@@ -288,6 +288,13 @@
       "when": 1791857780519,
       "tag": "0040_rapid_baron_strucker",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1791899385296,
+      "tag": "0041_powerful_titanium_man",
+      "breakpoints": true
     }
   ]
 }

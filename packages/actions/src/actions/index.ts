@@ -67,6 +67,10 @@ import {
 } from './roster.js'
 import { organizationUsageAction, setSpendingCapAction } from './cost-ledger.js'
 import {
+  listCourseInvitationsAction,
+  revokeCourseInvitationAction,
+} from './course-invitations.js'
+import {
   createCourseJoinLinkAction,
   createRevealCourseJoinLinkAction,
   listCourseJoinLinksAction,
@@ -173,6 +177,11 @@ export {
   type OrganizationUsageReport,
   type SetSpendingCapResult,
 } from './cost-ledger.js'
+export {
+  listCourseInvitationsAction,
+  revokeCourseInvitationAction,
+  type CourseInvitationSummary,
+} from './course-invitations.js'
 export {
   createCourseJoinLinkAction,
   createRevealCourseJoinLinkAction,
@@ -322,6 +331,8 @@ export function createPlatformRegistry(options?: {
   registry.register(
     createRevealCourseJoinLinkAction(options?.joinLinkEncryptionKey)
   )
+  registry.register(listCourseInvitationsAction)
+  registry.register(revokeCourseInvitationAction)
   registry.register(addCourseWebSourceAction)
   registry.register(listCourseWebSourcesAction)
   registry.register(removeCourseWebSourceAction)

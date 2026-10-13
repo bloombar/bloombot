@@ -14,12 +14,14 @@ import { randomUUID } from 'node:crypto'
 
 import {
   accounts,
+  courseInvitations,
   courses,
   discordServers,
   enrolments,
   jobs,
   organizations,
   people,
+  projects,
   rosterChannelAssignments,
 } from '@bloombot/db'
 import {
@@ -3744,21 +3746,45 @@ describe('roster.import handler', () => {
       expect(report.channelsNotCreated).toHaveLength(3)
     })
   })
-  // TEN-11 — a roster import of a course that uses no Discord still enrols
-  // every student, but touches no guild: no member lookup, no role created,
-  // no category or channel. Fails without the handler's own branch: the
-  // course would fall back to the organization's bound server and build
-  // roles and channels in it.
-  describe('a course that uses no Discord (TEN-11)', () => {
-    it('enrols the students and makes no Discord call, role or channel', async () => {
+  // TEN-11 / ROST-21 — a roster import of a course that uses no Discord
+  // makes invitations by email, not handle-keyed people, and touches no
+  // guild: no member lookup, no role created, no category or channel.
+  // Fails without the handler's own branch: the course would fall back to
+  // the organization's bound server and build roles and channels in it, and
+  // a CSV with no Discord column would be rejected.
+  describe('a course that uses no Discord (TEN-11, ROST-21)', () => {
+    const NO_DISCORD_HEADER = 'First,Last,Email,GitHub'
+
+    /** A student who has already signed in (an account with a connected personal org). */
+    function signedInStudent(email: string) {
+      const personalOrg = randomUUID()
+      organizations.createOrganization(
+        personalOrg,
+        { name: email, isPersonal: true },
+        testDb.db
+      )
+      return accounts.createAccount(
+        personalOrg,
+        { email, displayName: email, role: 'owner' },
+        testDb.db
+      )
+    }
+
+    async function seedOff() {
       testDb = createTestDatabase()
       discordServer = await FakeDiscordGuildServer.start()
       const seeded = seedCourseWithStudentCategory()
       turnDiscordOff(seeded.organizationId, seeded.courseId)
+      return seeded
+    }
+
+    it('invites by email, accepts a missing Discord column, and makes no Discord call, role or channel', async () => {
+      const seeded = await seedOff()
 
       const csv = [
-        HEADER,
-        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+        NO_DISCORD_HEADER,
+        'Ada,Lovelace,Ada@Example.edu,adal',
+        'Alan,Turing,alan@example.edu,aturing',
       ].join('\n')
       const report = await runImport(
         seeded.organizationId,
@@ -3768,21 +3794,308 @@ describe('roster.import handler', () => {
       )
 
       expect(discordServer.requests).toHaveLength(0)
+      expect(report.parseErrors).toEqual([])
       expect(report.guildId).toBeNull()
       expect(report.rolesCreated).toEqual([])
       expect(report.channelsCreated).toEqual([])
       expect(report.categoriesCreated).toEqual([])
       expect(report.unresolvedHandles).toEqual([])
-      expect(report.peopleCreated).toHaveLength(1)
+      expect(report.peopleCreated).toEqual([])
+      expect(report.invitationsCreated).toBe(2)
+      expect(report.invitationsUpdated).toBe(0)
+      expect(report.invitationsAccepted).toEqual([])
+      expect(report.limitations[0]).toContain('invitation')
 
-      const personId = report.peopleCreated[0]?.personId as string
+      const open = courseInvitations.listOpenInvitationsForCourse(
+        seeded.organizationId,
+        seeded.courseId,
+        testDb.db
+      )
+      expect(open.map((i) => i.email).sort()).toEqual([
+        'ada@example.edu',
+        'alan@example.edu',
+      ])
+      // Invitations are not people, and nobody is enrolled yet.
+      expect(
+        people.listPeople(seeded.organizationId, testDb.db).map((p) => p.email)
+      ).not.toContain('ada@example.edu')
+    })
+
+    it('also accepts a Discord column left blank', async () => {
+      const seeded = await seedOff()
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Ada,Lovelace,ada@example.edu,,adal'].join('\n'),
+        {}
+      )
+
+      expect(report.parseErrors).toEqual([])
+      expect(report.invitationsCreated).toBe(1)
+    })
+
+    it('enrols an existing account immediately and reports the acceptance', async () => {
+      const seeded = await seedOff()
+      const bob = signedInStudent('bob@example.edu')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [
+          NO_DISCORD_HEADER,
+          'Bob,Builder,bob@example.edu,bobb',
+          'Ada,Lovelace,ada@example.edu,adal',
+        ].join('\n'),
+        {}
+      )
+
+      expect(report.invitationsCreated).toBe(2)
+      expect(report.invitationsAccepted).toEqual([
+        { line: 2, email: 'bob@example.edu', outcome: 'enrolled' },
+      ])
+      const person = people.resolveIdentity(
+        seeded.organizationId,
+        { surface: 'web', externalId: bob.id },
+        testDb.db
+      )
+      expect(person?.firstName).toBe('Bob')
+      expect(
+        enrolments.getActiveEnrolment(
+          seeded.organizationId,
+          seeded.courseId,
+          person?.id ?? '',
+          testDb.db
+        )?.source
+      ).toBe('roster')
+      // Only Ada's invitation is still open.
+      expect(
+        courseInvitations
+          .listOpenInvitationsForCourse(
+            seeded.organizationId,
+            seeded.courseId,
+            testDb.db
+          )
+          .map((i) => i.email)
+      ).toEqual(['ada@example.edu'])
+    })
+
+    it('re-importing updates the open invitation instead of duplicating it', async () => {
+      const seeded = await seedOff()
+      const csv = [NO_DISCORD_HEADER, 'Ada,Lovelace,ada@example.edu,adal'].join(
+        '\n'
+      )
+      await runImport(seeded.organizationId, seeded.courseId, csv, {})
+
+      const again = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv,
+        {}
+      )
+
+      expect(again.invitationsCreated).toBe(0)
+      expect(again.invitationsUpdated).toBe(1)
+      expect(
+        courseInvitations.listOpenInvitationsForCourse(
+          seeded.organizationId,
+          seeded.courseId,
+          testDb.db
+        )
+      ).toHaveLength(1)
+    })
+
+    it('reports a student an instructor removed, makes no invitation, and does not revive them', async () => {
+      const seeded = await seedOff()
+      const bob = signedInStudent('bob@example.edu')
+      const csv = [NO_DISCORD_HEADER, 'Bob,Builder,bob@example.edu,bobb'].join(
+        '\n'
+      )
+      await runImport(seeded.organizationId, seeded.courseId, csv, {})
+      const person = people.resolveIdentity(
+        seeded.organizationId,
+        { surface: 'web', externalId: bob.id },
+        testDb.db
+      )
       const enrolment = enrolments.getActiveEnrolment(
         seeded.organizationId,
         seeded.courseId,
-        personId,
+        person?.id ?? '',
         testDb.db
       )
-      expect(enrolment?.source).toBe('roster')
+      enrolments.endEnrolment(
+        seeded.organizationId,
+        enrolment?.id ?? '',
+        testDb.db
+      )
+
+      const again = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv,
+        {}
+      )
+
+      expect(again.invitationsPreviouslyRemoved).toEqual([
+        { line: 2, email: 'bob@example.edu' },
+      ])
+      expect(again.invitationsCreated).toBe(0)
+      expect(again.invitationsAccepted).toEqual([])
+      expect(
+        enrolments.getActiveEnrolment(
+          seeded.organizationId,
+          seeded.courseId,
+          person?.id ?? '',
+          testDb.db
+        )
+      ).toBeUndefined()
+      expect(
+        courseInvitations.listOpenInvitationsForCourse(
+          seeded.organizationId,
+          seeded.courseId,
+          testDb.db
+        )
+      ).toEqual([])
     })
+
+    it('reports an address repeated within one file as a duplicate row, not an update', async () => {
+      const seeded = await seedOff()
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [
+          NO_DISCORD_HEADER,
+          'Ada,Lovelace,ada@example.edu,',
+          'Ada,L,ADA@example.edu,',
+        ].join('\n'),
+        {}
+      )
+
+      expect(report.invitationsCreated).toBe(1)
+      expect(report.invitationsUpdated).toBe(0)
+      expect(report.invitationDuplicateRows).toEqual([
+        { line: 3, email: 'ada@example.edu', firstLine: 2 },
+      ])
+    })
+
+    it("leaves a disabled account's invitation open", async () => {
+      const seeded = await seedOff()
+      const dora = signedInStudent('dora@example.edu')
+      accounts.disableAccount(dora.id, testDb.db)
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [NO_DISCORD_HEADER, 'Dora,D,dora@example.edu,'].join('\n'),
+        {}
+      )
+
+      expect(report.invitationsAccepted).toEqual([])
+      expect(
+        courseInvitations.listOpenInvitationsForCourse(
+          seeded.organizationId,
+          seeded.courseId,
+          testDb.db
+        )
+      ).toHaveLength(1)
+    })
+
+    it("does not accept the same address's invitations in another organization (TEN-2)", async () => {
+      const seeded = await seedOff()
+      const bob = signedInStudent('bob@example.edu')
+      // A second organization with its own no-Discord course, already
+      // inviting the same address.
+      const otherOrg = randomUUID()
+      organizations.createOrganization(
+        otherOrg,
+        { name: 'Other', isPersonal: false },
+        testDb.db
+      )
+      const otherProject = projects.createProject(
+        otherOrg,
+        { name: 'Other term' },
+        testDb.db
+      )
+      const otherCourse = courses.createCourse(
+        otherOrg,
+        {
+          projectId: otherProject.id,
+          title: 'Other course',
+          enabled: true,
+          adminsRole: null,
+          studentsRole: null,
+          categories: [],
+          discordEnabled: false,
+        },
+        testDb.db
+      )
+      if (!otherCourse || !otherCourse.ok) throw new Error('setup failed')
+      courseInvitations.upsertInvitation(
+        otherOrg,
+        { courseId: otherCourse.course.id, email: 'bob@example.edu' },
+        testDb.db
+      )
+
+      await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [NO_DISCORD_HEADER, 'Bob,Builder,bob@example.edu,'].join('\n'),
+        {}
+      )
+
+      expect(
+        courseInvitations.listOpenInvitationsForCourse(
+          otherOrg,
+          otherCourse.course.id,
+          testDb.db
+        )
+      ).toHaveLength(1)
+      expect(
+        people.resolveIdentity(
+          otherOrg,
+          { surface: 'web', externalId: bob.id },
+          testDb.db
+        )
+      ).toBeUndefined()
+    })
+
+    it('still reports a row with no valid email', async () => {
+      const seeded = await seedOff()
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [NO_DISCORD_HEADER, 'Ada,Lovelace,not-an-email,adal'].join('\n'),
+        {}
+      )
+
+      expect(report.parseErrors).toHaveLength(1)
+      expect(report.invitationsCreated).toBe(0)
+    })
+  })
+
+  // ROST-21: a course WITH Discord is unchanged — no invitations.
+  it('a course with Discord makes no invitations', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedCourseWithStudentCategory()
+
+    const report = await runImport(
+      seeded.organizationId,
+      seeded.courseId,
+      [HEADER, 'Ada,Lovelace,ada@example.edu,adalovelace,adal'].join('\n'),
+      {}
+    )
+
+    expect(report.invitationsCreated).toBe(0)
+    expect(report.peopleCreated).toHaveLength(1)
+    expect(
+      courseInvitations.listOpenInvitationsForCourse(
+        seeded.organizationId,
+        seeded.courseId,
+        testDb.db
+      )
+    ).toEqual([])
   })
 })

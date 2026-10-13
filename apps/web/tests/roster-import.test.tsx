@@ -129,6 +129,7 @@ function renderRosterImport(
     pollIntervalMs?: number
     stillQueuedHintAfterMs?: number
     viewerAccountId?: string
+    discordEnabled?: boolean
   } = {}
 ) {
   return render(
@@ -910,5 +911,99 @@ describe('ROST-20 — the roster acknowledgement is recorded, and readable after
         callsBeforeImport
       )
     )
+  })
+})
+
+// ROST-21 — a course without Discord invites by email.
+describe('RosterImport for a course without Discord (ROST-21)', () => {
+  it('says only Email is required, shows no Discord column, and hides the category options', () => {
+    renderRosterImport({ discordEnabled: false })
+
+    expect(screen.getByText('First,Last,Email,GitHub')).toBeInTheDocument()
+    expect(screen.queryByText('First,Last,Email,Discord,GitHub')).toBeNull()
+    expect(
+      screen.getByText(/is required in every row/, { exact: false })
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Discord and Email|Discord is a row/)).toBeNull()
+    expect(screen.queryByText(/Create student categories/)).toBeNull()
+  })
+
+  it('a Discord course keeps the five-column format and the category option', () => {
+    renderRosterImport()
+
+    expect(
+      screen.getByText('First,Last,Email,Discord,GitHub')
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Create student categories/)).toBeInTheDocument()
+  })
+
+  it('the report counts invitations, and names an invitation that enrolled nobody new', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          invitationsCreated: 3,
+          invitationsUpdated: 1,
+          invitationsAccepted: [
+            { line: 2, email: 'bob@example.edu', outcome: 'enrolled' },
+            { line: 4, email: 'eve@example.edu', outcome: 'refused_ended' },
+          ],
+        }),
+      })
+    )
+
+    renderRosterImport({ discordEnabled: false })
+    chooseFile(rosterFile('First,Last,Email,GitHub\n'))
+    acknowledge()
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent(
+      '3 invited, 1 already invited (updated), 1 enrolled straight away'
+    )
+    expect(report).toHaveTextContent('Line 4: eve@example.edu')
+    expect(report).not.toHaveTextContent('bob@example.edu')
+    expect(report).not.toHaveTextContent('channels created')
+  })
+
+  it('says nobody is emailed, counts only students actually enrolled, and shows duplicate and removed rows', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          invitationsCreated: 1,
+          invitationsUpdated: 0,
+          invitationsAccepted: [
+            { line: 2, email: 'bob@example.edu', outcome: 'enrolled' },
+            { line: 3, email: 'amy@example.edu', outcome: 'already_enrolled' },
+          ],
+          invitationDuplicateRows: [
+            { line: 5, email: 'bob@example.edu', firstLine: 2 },
+          ],
+          invitationsPreviouslyRemoved: [
+            { line: 4, email: 'gone@example.edu' },
+          ],
+        }),
+      })
+    )
+
+    renderRosterImport({ discordEnabled: false })
+    expect(screen.getByText(/No email is sent/)).toBeInTheDocument()
+    chooseFile(rosterFile('First,Last,Email,GitHub\n'))
+    acknowledge()
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent('1 enrolled straight away')
+    expect(report).toHaveTextContent(
+      'Line 3: amy@example.edu — already enrolled'
+    )
+    expect(report).toHaveTextContent(
+      'Line 5: bob@example.edu (already on line 2)'
+    )
+    expect(report).toHaveTextContent('Previously removed')
+    expect(report).toHaveTextContent('Line 4: gone@example.edu')
   })
 })

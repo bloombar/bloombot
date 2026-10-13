@@ -2465,13 +2465,15 @@ export function CourseEditor({
                     Roster
                   </h2>
                   <p className="text-sm text-neutral-600">
-                    Import a class roster to enrol every student and create
-                    their private Discord channel.
+                    {baseline.discordEnabled
+                      ? 'Import a class roster to enrol every student and create their private Discord channel.'
+                      : 'Import a class roster to add students by email address. Each student is added to the course when they sign in to Bloombot with the address on the roster. No email is sent — let your students know to sign in.'}
                   </p>
                   <RosterImport
                     organizationId={organizationId}
                     courseId={courseId}
                     courseTitle={form.title}
+                    discordEnabled={baseline.discordEnabled}
                     {...(viewerAccountId !== undefined
                       ? { viewerAccountId }
                       : {})}

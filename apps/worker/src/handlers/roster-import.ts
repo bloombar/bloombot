@@ -166,6 +166,8 @@
 import { createHash } from 'node:crypto'
 
 import {
+  accounts,
+  courseInvitations,
   courses,
   discordServers,
   enrolments,
@@ -174,7 +176,11 @@ import {
   rosterChannelAssignments,
 } from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
-import { parseRosterCsv, type RosterParseError } from '@bloombot/schemas'
+import {
+  parseRosterCsv,
+  type ParseRosterCsvOptions,
+  type RosterParseError,
+} from '@bloombot/schemas'
 import {
   allowBotOverwrite,
   allowMemberOverwrite,
@@ -358,6 +364,14 @@ export interface RosterFieldsDeclinedEntry {
   fields: string[]
 }
 
+/** ROST-21: one invitation an existing account accepted at import. */
+export interface InvitationAcceptedEntry {
+  line: number
+  email: string
+  /** `enrolled`; `already_enrolled` (nothing changed); or `refused_ended` (an instructor ended this person's enrolment, which an invitation never revives, ENRL-6). */
+  outcome: 'enrolled' | 'already_enrolled' | 'refused_ended'
+}
+
 /** ROST-9..12's own report — what `@bloombot/actions`' `jobs.get` read action hands back once an import job succeeds. */
 export interface RosterImportReport {
   courseId: string
@@ -365,6 +379,16 @@ export interface RosterImportReport {
   guildId: string | null
   /** ROST-9: a row that did not parse, with its own line number. */
   parseErrors: RosterParseError[]
+  /** ROST-21: invitations newly made this run (a course without Discord only; zero otherwise). */
+  invitationsCreated: number
+  /** ROST-21: an invitation for the same address was already open, and this run updated its names instead of duplicating it. */
+  invitationsUpdated: number
+  /** ROST-21: invitations accepted straight away because an account that proved the address already exists, and what accepting did. */
+  invitationsAccepted: InvitationAcceptedEntry[]
+  /** ROST-21: a later row repeating an address an earlier row already used — ignored. */
+  invitationDuplicateRows: { line: number; email: string; firstLine: number }[]
+  /** ROST-21: a row whose address belongs to somebody an instructor removed from this course — no invitation made; reinstate them from People (ENRL-9). */
+  invitationsPreviouslyRemoved: { line: number; email: string }[]
   /** A row whose handle matched nobody yet in this organization — a new person (and identity) was created for it (ROST-10). */
   peopleCreated: PersonReportEntry[]
   /** A row whose handle matched an existing person — the roster's fields were merged onto them (ROST-10, PPL-4). */
@@ -462,7 +486,7 @@ export interface RosterImportReport {
 
 /** TEN-11 — what a roster import of a course with no Discord says it did not do. */
 const NO_DISCORD_LIMITATION =
-  'This course uses no Discord: students were enrolled, but no Discord roles, categories or private channels were created or checked.'
+  'This course uses no Discord: each row became an invitation for its email address, accepted when that student signs in (or straight away if they already have), and no Discord roles, categories or private channels were created or checked.'
 
 /** Rework finding 13's own text for `limitations` — one entry today (ROST-6's pinned welcome message), kept as a named constant so the report and `docs/DECISIONS.md` can be grepped for the same wording. */
 const WELCOME_MESSAGE_NOT_SENT =
@@ -827,11 +851,14 @@ function importRosterRowPerson(
 }
 
 /** Parses the CSV and tags each row with its line, the shape both import paths loop over. */
-function parseRosterRows(csvText: string): {
+function parseRosterRows(
+  csvText: string,
+  options?: ParseRosterCsvOptions
+): {
   rows: RosterRowWithLine[]
   parseErrors: RosterParseError[]
 } {
-  const { rows, errors } = parseRosterCsv(csvText)
+  const { rows, errors } = parseRosterCsv(csvText, options)
   return {
     rows: rows.map(({ line, row }) => ({ line, ...row })),
     parseErrors: errors,
@@ -849,6 +876,11 @@ function newRosterImportReport(
     courseId,
     guildId,
     parseErrors,
+    invitationsCreated: 0,
+    invitationsUpdated: 0,
+    invitationsAccepted: [],
+    invitationDuplicateRows: [],
+    invitationsPreviouslyRemoved: [],
     peopleCreated: [],
     peopleMerged: [],
     rosterFieldsDeclined: [],
@@ -1349,6 +1381,101 @@ function loadStudentCategoryStates(
 }
 
 /**
+ * ROST-21: the import of a course without Discord. Each valid row becomes
+ * (or refreshes) an invitation for its address, all in one transaction; then,
+ * for an address that already belongs to an enabled account (which proved it
+ * by signing in), this course's invitation is accepted straight away so that
+ * student is enrolled now rather than at their next sign-in.
+ *
+ * - A re-import updates, never duplicates (the repo's one-open-invitation-
+ *   per-address rule). An address repeated inside one CSV is reported as a
+ *   duplicate row and only its first row is used.
+ * - Somebody an instructor removed from the course (ENRL-6) gets no
+ *   invitation; the row is reported so the instructor can reinstate them
+ *   (ENRL-9) deliberately.
+ * - The claim is limited to this job's organization and course (TEN-2), and
+ *   skips a disabled account, as sign-in refuses one before it ever claims.
+ *
+ * Rows still respect ROST-19 acknowledgement, checked at the action layer
+ * before this job is queued.
+ */
+function importRosterAsInvitations(
+  context: JobContext,
+  course: CourseWithCategories,
+  csvText: string
+): RosterImportReport {
+  const { rows, parseErrors } = parseRosterRows(csvText, {
+    discord: 'ignored',
+  })
+  const report = newRosterImportReport(course.id, null, parseErrors, [
+    NO_DISCORD_LIMITATION,
+  ])
+
+  // Only the first row for an address is used; later ones are reported.
+  const firstLineByEmail = new Map<string, number>()
+  const usable: RosterRowWithLine[] = []
+  for (const row of rows) {
+    const email = row.email.trim().toLowerCase()
+    const firstLine = firstLineByEmail.get(email)
+    if (firstLine !== undefined) {
+      report.invitationDuplicateRows.push({ line: row.line, email, firstLine })
+      continue
+    }
+    firstLineByEmail.set(email, row.line)
+    usable.push(row)
+  }
+
+  const results = courseInvitations.upsertInvitations(
+    context.organizationId,
+    course.id,
+    usable.map((row) => ({
+      email: row.email,
+      firstName: row.first,
+      lastName: row.last,
+    })),
+    context.db
+  )
+  // The course was loaded from this organization moments ago.
+  if (!results) {
+    throw new Error(
+      `roster.import: course "${course.id}" disappeared while inviting`
+    )
+  }
+
+  const lineByEmail = new Map<string, number>()
+  results.forEach((result, index) => {
+    const row = usable[index]
+    if (!row) return
+    const email = row.email.trim().toLowerCase()
+    if (result.status === 'previously_removed') {
+      report.invitationsPreviouslyRemoved.push({ line: row.line, email })
+      return
+    }
+    if (result.status === 'created') report.invitationsCreated++
+    else report.invitationsUpdated++
+    lineByEmail.set(email, row.line)
+  })
+
+  for (const [email, line] of lineByEmail) {
+    const account = accounts.getAccountByEmail(email, context.db)
+    if (!account || account.disabledAt !== null) continue
+    const claimed = courseInvitations.claimInvitationsForAccount(
+      account.id,
+      context.db,
+      { organizationId: context.organizationId, courseId: course.id }
+    )
+    for (const entry of claimed) {
+      report.invitationsAccepted.push({
+        line,
+        email: entry.email,
+        outcome: entry.outcome,
+      })
+    }
+  }
+  return report
+}
+
+/**
  * Runs one roster import. Loads the course and its bound guild through the
  * usual organization-scoped repo functions (TEN-2) — a payload naming
  * another organization's course resolves to nothing here exactly as it does
@@ -1388,27 +1515,13 @@ export function createRosterImportHandler(
     const studentCategoryBaseName =
       payload.studentCategoryBaseName ?? `${course.title} - STUDENTS`
 
-    // TEN-11 — a course with no Discord is still enrolled from a roster,
-    // but nothing here may touch a guild: no member lookup, no role
-    // created or looked up, no student category or private channel. Every
-    // row is resolved by its (synthetic) handle identity exactly as an
-    // unresolved Discord handle is, merged and enrolled by the same
-    // `importRosterRowPerson` the Discord path uses.
+    // TEN-11 / ROST-21 — a course with no Discord never sees a Discord
+    // handle, so a row is an invitation for its email address, not a person
+    // (a handle-keyed person was never the one who later signed in on the
+    // web). Nothing here may touch a guild: no member lookup, role,
+    // category or private channel.
     if (!course.discordEnabled) {
-      const { rows, parseErrors } = parseRosterRows(payload.csvText)
-      const report = newRosterImportReport(course.id, null, parseErrors, [
-        NO_DISCORD_LIMITATION,
-      ])
-      for (const row of rows) {
-        importRosterRowPerson(
-          context,
-          course,
-          row,
-          { kind: 'unresolved' },
-          report
-        )
-      }
-      return report
+      return importRosterAsInvitations(context, course, payload.csvText)
     }
 
     // TEN-9 — resolved through the course's own server, not "the

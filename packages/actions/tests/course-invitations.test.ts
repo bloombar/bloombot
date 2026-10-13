@@ -179,4 +179,29 @@ describe('courseInvitations.revoke (WEB-82)', () => {
       )
     ).toHaveLength(1)
   })
+
+  it('refuses, rather than claim success, when the invitation was accepted or removed after the policy read it', () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const invitation = invite(organizationId, course.id, 'ada@example.edu')
+    // The policy resolved `invitation` as open; then somebody else removed it.
+    invitationsRepo.revokeInvitation(
+      organizationId,
+      invitation.id,
+      ownerId,
+      testDb.db
+    )
+
+    expect(() =>
+      revokeCourseInvitationAction.execute({
+        organizationId,
+        input: { invitationId: invitation.id },
+        entity: invitation,
+        accountId: ownerId,
+        db: testDb.db,
+      })
+    ).toThrow(ActionRefusedError)
+  })
 })

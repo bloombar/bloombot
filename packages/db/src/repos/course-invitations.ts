@@ -18,21 +18,41 @@
 
 import { and, asc, eq, isNull } from 'drizzle-orm'
 
-import type { Database, TransactingExecutor } from '../client.js'
+import type { Database, Executor, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
 import { getAccountById } from './accounts.js'
 import { getCourse } from './courses.js'
 import * as enrolments from './enrolments.js'
-import { mergeRosterFields, overwriteRosterFields } from './people.js'
+import {
+  findPeopleByEmail,
+  mergeRosterFields,
+  overwriteRosterFields,
+} from './people.js'
 import { findOrCreateWebPersonForAccount } from './web-person.js'
 import {
   courseInvitations,
   courses,
+  personIdentities,
   projects,
   type CourseInvitationOutcome,
 } from '../schema.js'
 
 export type CourseInvitation = typeof courseInvitations.$inferSelect
+
+/** Narrows a claim (an import claims only for its own organization and course) and says where to report a swallowed error. */
+export interface ClaimOptions {
+  organizationId?: string
+  courseId?: string
+  /** Called with the error from an invitation that could not be claimed and was left open; ids only, no personal data. */
+  onError?: (
+    error: unknown,
+    invitation: {
+      invitationId: string
+      organizationId: string
+      courseId: string
+    }
+  ) => void
+}
 
 /** What accepting one invitation did, for the caller's report. */
 export interface ClaimedInvitation {
@@ -77,55 +97,133 @@ export function upsertInvitation(
 ): { invitation: CourseInvitation; created: boolean } | undefined {
   return writeTransaction(db, (tx) => {
     if (!getCourse(organizationId, input.courseId, tx)) return undefined
+    return upsertOne(organizationId, input, tx)
+  })
+}
 
-    const email = normalizeEmail(input.email)
-    const firstName = nameOrNull(input.firstName)
-    const lastName = nameOrNull(input.lastName)
-    const now = Date.now()
+/** One upsert inside a transaction whose course has already been checked. */
+function upsertOne(
+  organizationId: string,
+  input: {
+    courseId: string
+    email: string
+    firstName?: string | null
+    lastName?: string | null
+  },
+  tx: TransactingExecutor
+): { invitation: CourseInvitation; created: boolean } {
+  const email = normalizeEmail(input.email)
+  const firstName = nameOrNull(input.firstName)
+  const lastName = nameOrNull(input.lastName)
+  const now = Date.now()
 
-    const open = tx
-      .select()
-      .from(courseInvitations)
-      .where(
-        and(
-          eq(courseInvitations.organizationId, organizationId),
-          eq(courseInvitations.courseId, input.courseId),
-          eq(courseInvitations.email, email),
-          isNull(courseInvitations.acceptedAt),
-          isNull(courseInvitations.revokedAt)
-        )
+  const open = tx
+    .select()
+    .from(courseInvitations)
+    .where(
+      and(
+        eq(courseInvitations.organizationId, organizationId),
+        eq(courseInvitations.courseId, input.courseId),
+        eq(courseInvitations.email, email),
+        isNull(courseInvitations.acceptedAt),
+        isNull(courseInvitations.revokedAt)
       )
-      .get()
+    )
+    .get()
 
-    if (open) {
-      const updated = tx
-        .update(courseInvitations)
-        .set({
-          firstName: firstName ?? open.firstName,
-          lastName: lastName ?? open.lastName,
-          updatedAt: now,
-        })
-        .where(eq(courseInvitations.id, open.id))
-        .returning()
-        .get()
-      return { invitation: updated, created: false }
-    }
-
-    const invitation = tx
-      .insert(courseInvitations)
-      .values({
-        id: crypto.randomUUID(),
-        organizationId,
-        courseId: input.courseId,
-        email,
-        firstName,
-        lastName,
-        createdAt: now,
+  if (open) {
+    const updated = tx
+      .update(courseInvitations)
+      .set({
+        firstName: firstName ?? open.firstName,
+        lastName: lastName ?? open.lastName,
         updatedAt: now,
       })
+      .where(eq(courseInvitations.id, open.id))
       .returning()
       .get()
-    return { invitation, created: true }
+    return { invitation: updated, created: false }
+  }
+
+  const invitation = tx
+    .insert(courseInvitations)
+    .values({
+      id: crypto.randomUUID(),
+      organizationId,
+      courseId: input.courseId,
+      email,
+      firstName,
+      lastName,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning()
+    .get()
+  return { invitation, created: true }
+}
+
+/**
+ * ROST-21: has somebody at `email` been removed from this course? True when a
+ * person in the organization with that address has an ended enrolment in the
+ * course and none of the people with that address is actively enrolled (an
+ * account that signed in later has its own enrolled person under the same
+ * address, which settles it). The same ended-enrolment test the claim uses.
+ */
+export function wasRemovedFromCourse(
+  organizationId: string,
+  courseId: string,
+  email: string,
+  db: Executor
+): boolean {
+  const matches = findPeopleByEmail(organizationId, normalizeEmail(email), db)
+  if (
+    matches.some((match) =>
+      enrolments.getActiveEnrolment(organizationId, courseId, match.id, db)
+    )
+  ) {
+    return false
+  }
+  return matches.some((match) =>
+    enrolments.hasEndedEnrolment(organizationId, courseId, match.id, db)
+  )
+}
+
+/** One row's result in `upsertInvitations`. */
+export type UpsertRowResult =
+  | { status: 'created' | 'updated'; invitation: CourseInvitation }
+  | { status: 'previously_removed' }
+
+/**
+ * ROST-21: `upsertInvitation` for a whole roster in one transaction, with
+ * the course looked up once. A row whose address belongs to somebody an
+ * instructor removed from this course (ENRL-6) makes no invitation and is
+ * reported `previously_removed`, since accepting it could never enrol them;
+ * reinstating is the instructor's call (ENRL-9). `undefined` when the course
+ * is not a live course in `organizationId`.
+ */
+export function upsertInvitations(
+  organizationId: string,
+  courseId: string,
+  rows: {
+    email: string
+    firstName?: string | null
+    lastName?: string | null
+  }[],
+  db: Database
+): UpsertRowResult[] | undefined {
+  return writeTransaction(db, (tx) => {
+    if (!getCourse(organizationId, courseId, tx)) return undefined
+    return rows.map((row): UpsertRowResult => {
+      if (wasRemovedFromCourse(organizationId, courseId, row.email, tx)) {
+        return { status: 'previously_removed' }
+      }
+      const { invitation, created } = upsertOne(
+        organizationId,
+        { ...row, courseId },
+        tx
+      )
+      return { status: created ? 'created' : 'updated', invitation }
+    })
   })
 }
 
@@ -222,7 +320,8 @@ export function revokeInvitation(
  */
 export function claimInvitationsForAccount(
   accountId: string,
-  db: TransactingExecutor
+  db: TransactingExecutor,
+  options: ClaimOptions = {}
 ): ClaimedInvitation[] {
   const account = getAccountById(accountId, db)
   if (!account) return []
@@ -238,7 +337,15 @@ export function claimInvitationsForAccount(
         isNull(courseInvitations.acceptedAt),
         isNull(courseInvitations.revokedAt),
         isNull(courses.deletedAt),
-        isNull(projects.deletedAt)
+        isNull(projects.deletedAt),
+        // TEN-2: an import claims only inside the organization (and course)
+        // it ran for; sign-in leaves both unset and claims everything.
+        ...(options.organizationId !== undefined
+          ? [eq(courseInvitations.organizationId, options.organizationId)]
+          : []),
+        ...(options.courseId !== undefined
+          ? [eq(courseInvitations.courseId, options.courseId)]
+          : [])
       )
     )
     .orderBy(asc(courseInvitations.createdAt))
@@ -250,11 +357,68 @@ export function claimInvitationsForAccount(
       claimed.push(
         writeTransaction(db, (tx) => claimOne(invitation, accountId, tx))
       )
-    } catch {
-      // Left open: a later sign-in or import retries it.
+    } catch (error) {
+      // Left open: a later sign-in or import retries it. Taken by someone
+      // else meanwhile is routine and not worth a log line.
+      if (!(error instanceof InvitationNoLongerOpenError)) {
+        options.onError?.(error, {
+          invitationId: invitation.id,
+          organizationId: invitation.organizationId,
+          courseId: invitation.courseId,
+        })
+      }
     }
   }
   return claimed
+}
+
+/** Thrown inside a claim's savepoint to roll it back when the invitation was accepted or removed in the meantime. */
+class InvitationNoLongerOpenError extends Error {}
+
+/**
+ * ROST-21: an enrolment the earlier discord-off roster path made for a
+ * placeholder person (identified only by a synthetic `handle:` Discord
+ * identity, never connected to anyone) can never be used by the student who
+ * signs in, so it is ended when the real person is enrolled in the same
+ * course. A person with any other identity, or ever connected, is left alone.
+ */
+function endPlaceholderEnrolments(
+  organizationId: string,
+  courseId: string,
+  email: string,
+  keepPersonId: string,
+  tx: TransactingExecutor
+): void {
+  for (const match of findPeopleByEmail(organizationId, email, tx)) {
+    if (match.id === keepPersonId || match.connectedAt !== null) continue
+    const identities = tx
+      .select()
+      .from(personIdentities)
+      .where(
+        and(
+          eq(personIdentities.organizationId, organizationId),
+          eq(personIdentities.personId, match.id)
+        )
+      )
+      .all()
+    const isPlaceholder =
+      identities.length > 0 &&
+      identities.every(
+        (identity) =>
+          identity.surface === 'discord' &&
+          identity.externalId.startsWith('handle:')
+      )
+    if (!isPlaceholder) continue
+    const enrolment = enrolments.getActiveEnrolment(
+      organizationId,
+      courseId,
+      match.id,
+      tx
+    )
+    if (enrolment?.source === 'roster') {
+      enrolments.endEnrolment(organizationId, enrolment.id, tx)
+    }
+  }
 }
 
 /** One invitation's claim; throws on anything unexpected so its savepoint rolls back. */
@@ -264,12 +428,13 @@ function claimOne(
   tx: TransactingExecutor
 ): ClaimedInvitation {
   const { organizationId, courseId } = invitation
-  const person = findOrCreateWebPersonForAccount(
+  const resolved = findOrCreateWebPersonForAccount(
     organizationId,
     courseId,
     accountId,
     tx
   )
+  const person = resolved?.person
 
   let outcome: CourseInvitationOutcome
   if (!person) {
@@ -295,6 +460,17 @@ function claimOne(
       )
     }
     outcome = 'enrolled'
+    // A newly made person may stand in for a placeholder an older roster
+    // import enrolled for this same address (see the helper).
+    if (resolved?.created) {
+      endPlaceholderEnrolments(
+        organizationId,
+        courseId,
+        invitation.email,
+        person.id,
+        tx
+      )
+    }
   }
 
   // Names and email go onto the person only when the roster's enrolment
@@ -314,15 +490,26 @@ function claimOne(
     )
   }
 
-  tx.update(courseInvitations)
+  // Only an invitation still open may be accepted; if it was accepted or
+  // removed since it was read, undo everything above.
+  const now = Date.now()
+  const result = tx
+    .update(courseInvitations)
     .set({
-      acceptedAt: Date.now(),
+      acceptedAt: now,
       acceptedPersonId: person?.id ?? null,
       outcome,
-      updatedAt: Date.now(),
+      updatedAt: now,
     })
-    .where(eq(courseInvitations.id, invitation.id))
+    .where(
+      and(
+        eq(courseInvitations.id, invitation.id),
+        isNull(courseInvitations.acceptedAt),
+        isNull(courseInvitations.revokedAt)
+      )
+    )
     .run()
+  if (result.changes === 0) throw new InvitationNoLongerOpenError()
 
   return {
     invitationId: invitation.id,

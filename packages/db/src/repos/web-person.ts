@@ -31,16 +31,19 @@ import {
  * removal. This is a refusal, not a merge: nothing is combined (PPL-4).
  * A person the account already holds is returned as-is; their own ended
  * enrolment is the enrolment layer's business.
+ *
+ * `created` says whether this call made the person, so a caller can do
+ * one-off work for a newcomer (ROST-21's placeholder clean-up).
  */
 export function findOrCreateWebPersonForAccount(
   organizationId: string,
   courseId: string,
   accountId: string,
   db: TransactingExecutor
-): Person | undefined {
+): { person: Person; created: boolean } | undefined {
   const identity = { surface: 'web' as const, externalId: accountId }
   const existing = resolveIdentity(organizationId, identity, db)
-  if (existing) return existing
+  if (existing) return { person: existing, created: false }
 
   const account = getAccountById(accountId, db)
   if (account) {
@@ -64,5 +67,5 @@ export function findOrCreateWebPersonForAccount(
   }
   // AUTH-7: carry over whatever names an earlier Google sign-in recorded.
   fillPersonNamesFromAccount(organizationId, created.id, accountId, db)
-  return created
+  return { person: created, created: true }
 }

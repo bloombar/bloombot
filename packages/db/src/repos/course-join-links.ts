@@ -366,13 +366,14 @@ export function redeemJoinLinkForWebAccount(
     // ENRL-6/ENRL-8 rework — see this function's own doc comment. The shared
     // helper creates and connects the person, and refuses (`undefined`) when
     // the account's verified address names somebody already removed here.
-    const person = findOrCreateWebPersonForAccount(
+    const resolved = findOrCreateWebPersonForAccount(
       link.organizationId,
       link.courseId,
       accountId,
       tx
     )
-    if (!person) return undefined
+    if (!resolved) return undefined
+    const person = resolved.person
 
     // WEB-25 — read before `enrolViaJoinLink`, not after; see this
     // function's own doc comment on why the enrolment it returns cannot

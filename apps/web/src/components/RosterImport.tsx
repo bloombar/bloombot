@@ -329,8 +329,9 @@ export function RosterImport({
           <ul className="mt-2 list-disc pl-5">
             <li>
               <strong>Email</strong> is required in every row — it must contain
-              &quot;@&quot; with something before it. Each student is invited at
-              this address and enrolled when they sign in with it.
+              &quot;@&quot; with something before it. Each student is added to
+              the course when they sign in to Bloombot with this address. No
+              email is sent — let your students know to sign in.
             </li>
             <li>
               <strong>First</strong>, <strong>Last</strong> and{' '}
@@ -526,17 +527,50 @@ export function RosterImport({
             <p className="text-neutral-700">
               {report.invitationsCreated ?? 0} invited,{' '}
               {report.invitationsUpdated ?? 0} already invited (updated),{' '}
-              {(report.invitationsAccepted ?? []).length} enrolled straight away
-              because they had already signed in.
+              {
+                (report.invitationsAccepted ?? []).filter(
+                  (entry) => entry.outcome === 'enrolled'
+                ).length
+              }{' '}
+              enrolled straight away because they had already signed in.
             </p>
+          )}
+          {(report.invitationDuplicateRows ?? []).length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Rows repeating an address used earlier in this file — ignored:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {(report.invitationDuplicateRows ?? []).map((entry) => (
+                  <li key={`duplicate-${entry.line}`}>
+                    Line {entry.line}: {entry.email} (already on line{' '}
+                    {entry.firstLine})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(report.invitationsPreviouslyRemoved ?? []).length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Previously removed — no invitation made. Reinstate them from the
+                People tab if they should be back:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {(report.invitationsPreviouslyRemoved ?? []).map((entry) => (
+                  <li key={`removed-${entry.line}`}>
+                    Line {entry.line}: {entry.email}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           {(report.invitationsAccepted ?? []).some(
             (entry) => entry.outcome !== 'enrolled'
           ) && (
             <div>
               <p className="font-medium text-warning-700">
-                Invitations an account had already signed in for, that enrolled
-                nobody new:
+                Students who had already signed in, where nothing new happened:
               </p>
               <ul className="list-disc pl-5 text-neutral-700">
                 {(report.invitationsAccepted ?? [])
@@ -546,7 +580,7 @@ export function RosterImport({
                       Line {entry.line}: {entry.email} —{' '}
                       {entry.outcome === 'already_enrolled'
                         ? 'already enrolled'
-                        : 'their enrolment was ended earlier, and an invitation does not bring it back (reinstate them from the People tab)'}
+                        : 'their enrolment was ended earlier, and a roster does not bring it back (reinstate them from the People tab)'}
                     </li>
                   ))}
               </ul>

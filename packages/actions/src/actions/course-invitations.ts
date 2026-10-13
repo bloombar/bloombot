@@ -89,7 +89,16 @@ export const revokeCourseInvitationAction: Action<
   },
   execute: ({ organizationId, entity, accountId, db }) => {
     if (!accountId) throw new ActionRefusedError()
-    courseInvitations.revokeInvitation(organizationId, entity.id, accountId, db)
+    // The policy read the invitation moments ago; if it was accepted or
+    // removed since, nothing changed and the caller is told "not found",
+    // never a false success.
+    const revoked = courseInvitations.revokeInvitation(
+      organizationId,
+      entity.id,
+      accountId,
+      db
+    )
+    if (!revoked) throw new ActionRefusedError()
     return { revoked: true }
   },
 }

@@ -21,6 +21,7 @@ import {
   jobs,
   organizations,
   people,
+  projects,
   rosterChannelAssignments,
 } from '@bloombot/db'
 import {
@@ -3879,14 +3880,37 @@ describe('roster.import handler', () => {
       ).toEqual(['ada@example.edu'])
     })
 
-    it('re-importing updates the open invitation instead of duplicating it, and does not revive an ended enrolment', async () => {
+    it('re-importing updates the open invitation instead of duplicating it', async () => {
+      const seeded = await seedOff()
+      const csv = [NO_DISCORD_HEADER, 'Ada,Lovelace,ada@example.edu,adal'].join(
+        '\n'
+      )
+      await runImport(seeded.organizationId, seeded.courseId, csv, {})
+
+      const again = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv,
+        {}
+      )
+
+      expect(again.invitationsCreated).toBe(0)
+      expect(again.invitationsUpdated).toBe(1)
+      expect(
+        courseInvitations.listOpenInvitationsForCourse(
+          seeded.organizationId,
+          seeded.courseId,
+          testDb.db
+        )
+      ).toHaveLength(1)
+    })
+
+    it('reports a student an instructor removed, makes no invitation, and does not revive them', async () => {
       const seeded = await seedOff()
       const bob = signedInStudent('bob@example.edu')
-      const csv = [
-        NO_DISCORD_HEADER,
-        'Bob,Builder,bob@example.edu,bobb',
-        'Ada,Lovelace,ada@example.edu,adal',
-      ].join('\n')
+      const csv = [NO_DISCORD_HEADER, 'Bob,Builder,bob@example.edu,bobb'].join(
+        '\n'
+      )
       await runImport(seeded.organizationId, seeded.courseId, csv, {})
       const person = people.resolveIdentity(
         seeded.organizationId,
@@ -3912,12 +3936,11 @@ describe('roster.import handler', () => {
         {}
       )
 
-      // Bob's first invitation was accepted, so his row is new; Ada's updates.
-      expect(again.invitationsCreated).toBe(1)
-      expect(again.invitationsUpdated).toBe(1)
-      expect(again.invitationsAccepted).toEqual([
-        { line: 2, email: 'bob@example.edu', outcome: 'refused_ended' },
+      expect(again.invitationsPreviouslyRemoved).toEqual([
+        { line: 2, email: 'bob@example.edu' },
       ])
+      expect(again.invitationsCreated).toBe(0)
+      expect(again.invitationsAccepted).toEqual([])
       expect(
         enrolments.getActiveEnrolment(
           seeded.organizationId,
@@ -3932,7 +3955,109 @@ describe('roster.import handler', () => {
           seeded.courseId,
           testDb.db
         )
+      ).toEqual([])
+    })
+
+    it('reports an address repeated within one file as a duplicate row, not an update', async () => {
+      const seeded = await seedOff()
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [
+          NO_DISCORD_HEADER,
+          'Ada,Lovelace,ada@example.edu,',
+          'Ada,L,ADA@example.edu,',
+        ].join('\n'),
+        {}
+      )
+
+      expect(report.invitationsCreated).toBe(1)
+      expect(report.invitationsUpdated).toBe(0)
+      expect(report.invitationDuplicateRows).toEqual([
+        { line: 3, email: 'ada@example.edu', firstLine: 2 },
+      ])
+    })
+
+    it("leaves a disabled account's invitation open", async () => {
+      const seeded = await seedOff()
+      const dora = signedInStudent('dora@example.edu')
+      accounts.disableAccount(dora.id, testDb.db)
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [NO_DISCORD_HEADER, 'Dora,D,dora@example.edu,'].join('\n'),
+        {}
+      )
+
+      expect(report.invitationsAccepted).toEqual([])
+      expect(
+        courseInvitations.listOpenInvitationsForCourse(
+          seeded.organizationId,
+          seeded.courseId,
+          testDb.db
+        )
       ).toHaveLength(1)
+    })
+
+    it("does not accept the same address's invitations in another organization (TEN-2)", async () => {
+      const seeded = await seedOff()
+      const bob = signedInStudent('bob@example.edu')
+      // A second organization with its own no-Discord course, already
+      // inviting the same address.
+      const otherOrg = randomUUID()
+      organizations.createOrganization(
+        otherOrg,
+        { name: 'Other', isPersonal: false },
+        testDb.db
+      )
+      const otherProject = projects.createProject(
+        otherOrg,
+        { name: 'Other term' },
+        testDb.db
+      )
+      const otherCourse = courses.createCourse(
+        otherOrg,
+        {
+          projectId: otherProject.id,
+          title: 'Other course',
+          enabled: true,
+          adminsRole: null,
+          studentsRole: null,
+          categories: [],
+          discordEnabled: false,
+        },
+        testDb.db
+      )
+      if (!otherCourse || !otherCourse.ok) throw new Error('setup failed')
+      courseInvitations.upsertInvitation(
+        otherOrg,
+        { courseId: otherCourse.course.id, email: 'bob@example.edu' },
+        testDb.db
+      )
+
+      await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [NO_DISCORD_HEADER, 'Bob,Builder,bob@example.edu,'].join('\n'),
+        {}
+      )
+
+      expect(
+        courseInvitations.listOpenInvitationsForCourse(
+          otherOrg,
+          otherCourse.course.id,
+          testDb.db
+        )
+      ).toHaveLength(1)
+      expect(
+        people.resolveIdentity(
+          otherOrg,
+          { surface: 'web', externalId: bob.id },
+          testDb.db
+        )
+      ).toBeUndefined()
     })
 
     it('still reports a row with no valid email', async () => {

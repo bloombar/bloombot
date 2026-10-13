@@ -14728,6 +14728,7 @@ now carries an explicit `discord_enabled` flag (migration `0040_rapid_baron_stru
   deliberately never merges or links people on an address match (PPL-4; a join-link redemption refuses on one), so a
   person created from a roster with no identity could not later be claimed by that student's web sign-in. Needs its own
   slice.
+  (Resolved by D-152: a roster for a course without Discord now invites by email.)
 
 - WEB-81 reverses WEB-80's disabling of the self-enrolment checkbox. The same
   setting enrols instructors and assistants on their first ask through web chat
@@ -14777,3 +14778,28 @@ false` is now an **invitation** (table `course_invitations`, migration `0041_pow
   required.
 - **Unchanged.** Courses with Discord (ROST-10), the enrolment source enum, ROST-19 acknowledgement (at the action
   layer). No email is sent to an invited student. Email aliases are not matched.
+
+### D-152 rework round 1
+
+- **Scope of an import's claim (TEN-2).** `claimInvitationsForAccount` takes `{ organizationId, courseId }`; an import passes
+  its own job's organization and course, so it never writes into another organization. Sign-in passes neither and claims
+  everything, as before. An import skips a disabled account (sign-in refuses one before claiming), leaving the invitation
+  open. This supersedes the "accepts all that account's open invitations" note above.
+- **A failed claim never blocks sign-in, and is logged.** The per-invitation catch is load-bearing: an account whose web
+  person in the organization was soft-deleted (DATA-7) still holds the identity, so minting a new person fails. The
+  invitation stays open and the error is logged with ids only through the optional logger given to `redeemSignInLink` /
+  `signInWithGoogle` (the API passes its own).
+- **Accepting is atomic.** The acceptance `UPDATE` requires the invitation to be still open; if it changed since it was
+  read, that invitation's savepoint is rolled back. `courseInvitations.revoke` refuses as not found when nothing changed.
+- **Placeholders from the earlier discord-off path (PR #540).** That path enrolled handle-keyed people no student could
+  ever be. When a claim creates the account's web person and an email-matched person in the organization has an active
+  `roster` enrolment in the same course, only `handle:` Discord identities and was never connected, that enrolment is
+  ended in the same claim. Nobody was ever admitted through it, so nothing is lost. A person with any connected identity
+  is never touched.
+- **Removed students are told at import.** A row whose address belongs to a person with an ended enrolment in the course
+  (and no actively enrolled person at that address) makes no invitation and is reported "previously removed"; the
+  instructor reinstates them (ENRL-9). The claim's `refused_ended` stays as a backstop.
+- **Duplicates and batching.** An address repeated in one CSV is reported as a duplicate row (first row wins) rather than
+  counted as an update. The invitation upserts run in one transaction with the course looked up once.
+- **Copy.** Nothing is emailed to an invited student; the roster screens say so and tell the instructor to let students
+  know to sign in.

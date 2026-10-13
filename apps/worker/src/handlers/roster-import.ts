@@ -385,6 +385,10 @@ export interface RosterImportReport {
   invitationsUpdated: number
   /** ROST-21: invitations accepted straight away because an account that proved the address already exists, and what accepting did. */
   invitationsAccepted: InvitationAcceptedEntry[]
+  /** ROST-21: a later row repeating an address an earlier row already used — ignored. */
+  invitationDuplicateRows: { line: number; email: string; firstLine: number }[]
+  /** ROST-21: a row whose address belongs to somebody an instructor removed from this course — no invitation made; reinstate them from People (ENRL-9). */
+  invitationsPreviouslyRemoved: { line: number; email: string }[]
   /** A row whose handle matched nobody yet in this organization — a new person (and identity) was created for it (ROST-10). */
   peopleCreated: PersonReportEntry[]
   /** A row whose handle matched an existing person — the roster's fields were merged onto them (ROST-10, PPL-4). */
@@ -875,6 +879,8 @@ function newRosterImportReport(
     invitationsCreated: 0,
     invitationsUpdated: 0,
     invitationsAccepted: [],
+    invitationDuplicateRows: [],
+    invitationsPreviouslyRemoved: [],
     peopleCreated: [],
     peopleMerged: [],
     rosterFieldsDeclined: [],
@@ -1376,13 +1382,22 @@ function loadStudentCategoryStates(
 
 /**
  * ROST-21: the import of a course without Discord. Each valid row becomes
- * (or refreshes) an invitation for its address; then, for an address that
- * already belongs to an account (which proved it by signing in), the
- * invitation is accepted straight away so that student is enrolled now rather
- * than at their next sign-in. A re-import updates, never duplicates (the
- * repo's one-open-invitation-per-address rule); an enrolment an instructor
- * ended stays ended (ENRL-6). Rows still respect ROST-19 acknowledgement,
- * checked at the action layer before this job is queued.
+ * (or refreshes) an invitation for its address, all in one transaction; then,
+ * for an address that already belongs to an enabled account (which proved it
+ * by signing in), this course's invitation is accepted straight away so that
+ * student is enrolled now rather than at their next sign-in.
+ *
+ * - A re-import updates, never duplicates (the repo's one-open-invitation-
+ *   per-address rule). An address repeated inside one CSV is reported as a
+ *   duplicate row and only its first row is used.
+ * - Somebody an instructor removed from the course (ENRL-6) gets no
+ *   invitation; the row is reported so the instructor can reinstate them
+ *   (ENRL-9) deliberately.
+ * - The claim is limited to this job's organization and course (TEN-2), and
+ *   skips a disabled account, as sign-in refuses one before it ever claims.
+ *
+ * Rows still respect ROST-19 acknowledgement, checked at the action layer
+ * before this job is queued.
  */
 function importRosterAsInvitations(
   context: JobContext,
@@ -1396,50 +1411,65 @@ function importRosterAsInvitations(
     NO_DISCORD_LIMITATION,
   ])
 
-  // The last CSV line each address appeared on, for the acceptance report.
-  const lineByEmail = new Map<string, number>()
+  // Only the first row for an address is used; later ones are reported.
+  const firstLineByEmail = new Map<string, number>()
+  const usable: RosterRowWithLine[] = []
   for (const row of rows) {
-    const result = courseInvitations.upsertInvitation(
-      context.organizationId,
-      {
-        courseId: course.id,
-        email: row.email,
-        firstName: row.first,
-        lastName: row.last,
-      },
-      context.db
-    )
-    // The course was loaded from this organization moments ago.
-    if (!result) {
-      throw new Error(
-        `roster.import: course "${course.id}" disappeared while inviting`
-      )
+    const email = row.email.trim().toLowerCase()
+    const firstLine = firstLineByEmail.get(email)
+    if (firstLine !== undefined) {
+      report.invitationDuplicateRows.push({ line: row.line, email, firstLine })
+      continue
     }
-    if (result.created) report.invitationsCreated++
-    else report.invitationsUpdated++
-    lineByEmail.set(result.invitation.email, row.line)
+    firstLineByEmail.set(email, row.line)
+    usable.push(row)
   }
+
+  const results = courseInvitations.upsertInvitations(
+    context.organizationId,
+    course.id,
+    usable.map((row) => ({
+      email: row.email,
+      firstName: row.first,
+      lastName: row.last,
+    })),
+    context.db
+  )
+  // The course was loaded from this organization moments ago.
+  if (!results) {
+    throw new Error(
+      `roster.import: course "${course.id}" disappeared while inviting`
+    )
+  }
+
+  const lineByEmail = new Map<string, number>()
+  results.forEach((result, index) => {
+    const row = usable[index]
+    if (!row) return
+    const email = row.email.trim().toLowerCase()
+    if (result.status === 'previously_removed') {
+      report.invitationsPreviouslyRemoved.push({ line: row.line, email })
+      return
+    }
+    if (result.status === 'created') report.invitationsCreated++
+    else report.invitationsUpdated++
+    lineByEmail.set(email, row.line)
+  })
 
   for (const [email, line] of lineByEmail) {
     const account = accounts.getAccountByEmail(email, context.db)
-    if (!account) continue
+    if (!account || account.disabledAt !== null) continue
     const claimed = courseInvitations.claimInvitationsForAccount(
       account.id,
-      context.db
+      context.db,
+      { organizationId: context.organizationId, courseId: course.id }
     )
     for (const entry of claimed) {
-      // The account may also have had invitations to other courses; they
-      // are accepted (as a sign-in would) but belong to other imports' reports.
-      if (
-        entry.organizationId === context.organizationId &&
-        entry.courseId === course.id
-      ) {
-        report.invitationsAccepted.push({
-          line,
-          email: entry.email,
-          outcome: entry.outcome,
-        })
-      }
+      report.invitationsAccepted.push({
+        line,
+        email: entry.email,
+        outcome: entry.outcome,
+      })
     }
   }
   return report

@@ -1273,4 +1273,68 @@ describe('sign-in accepts roster invitations (ROST-21)', () => {
       courseInvitations.listOpenInvitationsForCourse(orgId, courseId, testDb.db)
     ).toHaveLength(1)
   })
+
+  // ROST-21: an invitation that cannot be accepted must never block signing
+  // in. Reachable state: the account's web person in the organization was
+  // soft-deleted (DATA-7) and still holds the identity, so minting a new
+  // person for the invitation fails inside the claim.
+  describe('a claim that fails does not block sign-in', () => {
+    function stuckInvitation(email: string) {
+      const first = redeemSignInLink(
+        issueSignInToken(email, testDb.db).token,
+        testDb.db
+      )
+      const { orgId, courseId } = seedInvitation('someone-else@example.edu')
+      const person = people.createPerson(orgId, {}, testDb.db)
+      people.connectIdentity(
+        orgId,
+        person.id,
+        { surface: 'web', externalId: first!.account.id },
+        testDb.db
+      )
+      people.softDeletePerson(orgId, person.id, first!.account.id, testDb.db)
+      courseInvitations.upsertInvitation(orgId, { courseId, email }, testDb.db)
+      return { orgId, courseId }
+    }
+
+    it('a magic-link sign-in still returns a session, leaves the invitation open and logs it', () => {
+      testDb = createTestDatabase()
+      const { orgId, courseId } = stuckInvitation('ada@example.edu')
+      const warn = vi.fn()
+
+      const result = redeemSignInLink(
+        issueSignInToken('ada@example.edu', testDb.db).token,
+        testDb.db,
+        { logger: { warn } }
+      )
+
+      expect(result?.session).toBeDefined()
+      expect(
+        courseInvitations
+          .listOpenInvitationsForCourse(orgId, courseId, testDb.db)
+          .filter((invitation) => invitation.email === 'ada@example.edu')
+      ).toHaveLength(1)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(warn.mock.calls[0])).not.toContain(
+        'ada@example.edu'
+      )
+    })
+
+    it('a Google sign-in still returns a session and leaves the invitation open', () => {
+      testDb = createTestDatabase()
+      const { orgId, courseId } = stuckInvitation('ada@example.edu')
+
+      const result = signInWithGoogle(
+        verifiedGoogleIdentity({ email: 'ada@example.edu' }),
+        testDb.db
+      )
+
+      expect(result?.session).toBeDefined()
+      expect(
+        courseInvitations
+          .listOpenInvitationsForCourse(orgId, courseId, testDb.db)
+          .filter((invitation) => invitation.email === 'ada@example.edu')
+      ).toHaveLength(1)
+    })
+  })
 })

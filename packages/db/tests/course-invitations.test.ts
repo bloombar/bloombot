@@ -622,3 +622,278 @@ describe('course-invitations repo — nothing blocks a deletion (TEN-10, DATA-8,
     expect(rows.every((r) => r.revokedByAccountId === null)).toBe(true)
   })
 })
+
+describe('course-invitations repo — rework round 1', () => {
+  it('a scoped claim touches only its own organization and course (TEN-2)', () => {
+    testDb = createTestDatabase()
+    const a = seed(testDb)
+    const b = seed(testDb)
+    const ada = student(testDb, 'ada@example.edu')
+    invite(testDb, a.orgId, a.course.id, 'ada@example.edu')
+    invite(testDb, b.orgId, b.course.id, 'ada@example.edu')
+
+    const claimed = courseInvitations.claimInvitationsForAccount(
+      ada.id,
+      testDb.db,
+      { organizationId: a.orgId, courseId: a.course.id }
+    )
+
+    expect(claimed.map((c) => c.organizationId)).toEqual([a.orgId])
+    expect(webPerson(testDb, b.orgId, ada.id)).toBeUndefined()
+    expect(
+      courseInvitations.listOpenInvitationsForCourse(
+        b.orgId,
+        b.course.id,
+        testDb.db
+      )
+    ).toHaveLength(1)
+  })
+
+  it('does not throw when a claim fails, leaves the invitation open and reports it by ids', () => {
+    testDb = createTestDatabase()
+    const { orgId, owner, course } = seed(testDb)
+    const ada = student(testDb, 'ada@example.edu')
+    // The account's web person here was soft-deleted and still holds the
+    // identity, so making a new one is refused.
+    const old = people.createPerson(orgId, {}, testDb.db)
+    people.connectIdentity(
+      orgId,
+      old.id,
+      { surface: 'web', externalId: ada.id },
+      testDb.db
+    )
+    people.softDeletePerson(orgId, old.id, owner.id, testDb.db)
+    invite(testDb, orgId, course.id, 'ada@example.edu')
+    const errors: unknown[][] = []
+
+    const claimed = courseInvitations.claimInvitationsForAccount(
+      ada.id,
+      testDb.db,
+      { onError: (error, ids) => errors.push([error, ids]) }
+    )
+
+    expect(claimed).toEqual([])
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.[1]).toMatchObject({ organizationId: orgId })
+    expect(
+      courseInvitations.listOpenInvitationsForCourse(
+        orgId,
+        course.id,
+        testDb.db
+      )
+    ).toHaveLength(1)
+  })
+
+  it('a claim scoped to an organization alone claims all its courses and nothing elsewhere', () => {
+    testDb = createTestDatabase()
+    const a = seed(testDb)
+    const b = seed(testDb)
+    const ada = student(testDb, 'ada@example.edu')
+    invite(testDb, a.orgId, a.course.id, 'ada@example.edu')
+    invite(testDb, b.orgId, b.course.id, 'ada@example.edu')
+
+    const claimed = courseInvitations.claimInvitationsForAccount(
+      ada.id,
+      testDb.db,
+      { organizationId: a.orgId }
+    )
+
+    expect(claimed.map((c) => c.organizationId)).toEqual([a.orgId])
+  })
+
+  it('rolls an invitation back when it stops being open while it is being accepted', () => {
+    testDb = createTestDatabase()
+    const { orgId, course } = seed(testDb)
+    const ada = student(testDb, 'ada@example.edu')
+    invite(testDb, orgId, course.id, 'ada@example.edu')
+    // A concurrent removal, simulated: it lands the moment the claim makes
+    // the account's person, before the claim marks the invitation accepted.
+    testDb.db.$client.exec(`
+      CREATE TRIGGER remove_during_claim AFTER INSERT ON people
+      BEGIN
+        UPDATE course_invitations SET accepted_at = 1;
+      END`)
+
+    const claimed = courseInvitations.claimInvitationsForAccount(
+      ada.id,
+      testDb.db
+    )
+
+    // Nothing is left half done: no person, no enrolment.
+    expect(claimed).toEqual([])
+    expect(webPerson(testDb, orgId, ada.id)).toBeUndefined()
+  })
+
+  describe('a placeholder from the earlier discord-off roster path', () => {
+    function placeholder(orgId: string, courseId: string, email: string) {
+      const person = people.resolvePersonByIdentity(
+        orgId,
+        { surface: 'discord', externalId: 'handle:ada' },
+        testDb.db
+      )
+      people.mergeRosterFields(orgId, person.id, { email }, testDb.db)
+      enrolments.enrolViaRoster(
+        orgId,
+        { courseId, personId: person.id },
+        testDb.db
+      )
+      return person
+    }
+
+    it('has its enrolment ended when the real person is enrolled', () => {
+      testDb = createTestDatabase()
+      const { orgId, course } = seed(testDb)
+      const ada = student(testDb, 'ada@example.edu')
+      const stub = placeholder(orgId, course.id, 'ada@example.edu')
+      invite(testDb, orgId, course.id, 'ada@example.edu')
+
+      const claimed = courseInvitations.claimInvitationsForAccount(
+        ada.id,
+        testDb.db
+      )
+
+      expect(claimed[0]?.outcome).toBe('enrolled')
+      expect(
+        enrolments.getActiveEnrolment(orgId, course.id, stub.id, testDb.db)
+      ).toBeUndefined()
+      const real = webPerson(testDb, orgId, ada.id)
+      expect(
+        enrolments.getActiveEnrolment(
+          orgId,
+          course.id,
+          real?.id ?? '',
+          testDb.db
+        )
+      ).toBeDefined()
+      // Ending the stand-in does not read as "removed" to a re-import.
+      expect(
+        courseInvitations.wasRemovedFromCourse(
+          orgId,
+          course.id,
+          'ada@example.edu',
+          testDb.db
+        )
+      ).toBe(false)
+    })
+
+    it('never touches a person marked connected, even with only handle identities', () => {
+      testDb = createTestDatabase()
+      const { orgId, course } = seed(testDb)
+      const ada = student(testDb, 'ada@example.edu')
+      const stub = placeholder(orgId, course.id, 'ada@example.edu')
+      testDb.db.$client
+        .prepare('UPDATE people SET connected_at = 1 WHERE id = ?')
+        .run(stub.id)
+      invite(testDb, orgId, course.id, 'ada@example.edu')
+
+      courseInvitations.claimInvitationsForAccount(ada.id, testDb.db)
+
+      expect(
+        enrolments.getActiveEnrolment(orgId, course.id, stub.id, testDb.db)
+      ).toBeDefined()
+    })
+
+    it('never touches a person who has a connected identity', () => {
+      testDb = createTestDatabase()
+      const { orgId, course } = seed(testDb)
+      const ada = student(testDb, 'ada@example.edu')
+      const discordAda = placeholder(orgId, course.id, 'ada@example.edu')
+      people.connectIdentity(
+        orgId,
+        discordAda.id,
+        { surface: 'discord', externalId: '1234567890' },
+        testDb.db
+      )
+      invite(testDb, orgId, course.id, 'ada@example.edu')
+
+      courseInvitations.claimInvitationsForAccount(ada.id, testDb.db)
+
+      expect(
+        enrolments.getActiveEnrolment(
+          orgId,
+          course.id,
+          discordAda.id,
+          testDb.db
+        )
+      ).toBeDefined()
+    })
+  })
+
+  describe('upsertInvitations', () => {
+    it('reports an address removed from the course and makes no invitation for it', () => {
+      testDb = createTestDatabase()
+      const { orgId, course } = seed(testDb)
+      const gone = people.createPerson(
+        orgId,
+        { email: 'gone@example.edu' },
+        testDb.db
+      )
+      const enrolment = enrolments.enrolViaRoster(
+        orgId,
+        { courseId: course.id, personId: gone.id },
+        testDb.db
+      )
+      enrolments.endEnrolment(orgId, enrolment?.id ?? '', testDb.db)
+
+      const results = courseInvitations.upsertInvitations(
+        orgId,
+        course.id,
+        [{ email: 'Gone@example.edu' }, { email: 'new@example.edu' }],
+        testDb.db
+      )
+
+      expect(results?.map((r) => r.status)).toEqual([
+        'previously_removed',
+        'created',
+      ])
+      expect(
+        courseInvitations
+          .listOpenInvitationsForCourse(orgId, course.id, testDb.db)
+          .map((i) => i.email)
+      ).toEqual(['new@example.edu'])
+    })
+
+    it('is not fooled when the same address is also actively enrolled', () => {
+      testDb = createTestDatabase()
+      const { orgId, course } = seed(testDb)
+      const email = 'ada@example.edu'
+      const old = people.createPerson(orgId, { email }, testDb.db)
+      const oldEnrolment = enrolments.enrolViaRoster(
+        orgId,
+        { courseId: course.id, personId: old.id },
+        testDb.db
+      )
+      enrolments.endEnrolment(orgId, oldEnrolment?.id ?? '', testDb.db)
+      const current = people.createPerson(orgId, { email }, testDb.db)
+      enrolments.enrolViaRoster(
+        orgId,
+        { courseId: course.id, personId: current.id },
+        testDb.db
+      )
+
+      const results = courseInvitations.upsertInvitations(
+        orgId,
+        course.id,
+        [{ email }],
+        testDb.db
+      )
+
+      expect(results?.[0]?.status).toBe('created')
+    })
+
+    it('refuses a course of another organization', () => {
+      testDb = createTestDatabase()
+      const { course } = seed(testDb)
+      const other = seed(testDb)
+
+      expect(
+        courseInvitations.upsertInvitations(
+          other.orgId,
+          course.id,
+          [{ email: 'a@example.edu' }],
+          testDb.db
+        )
+      ).toBeUndefined()
+    })
+  })
+})

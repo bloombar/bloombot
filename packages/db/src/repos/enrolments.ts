@@ -503,7 +503,7 @@ export function listEnrolmentsForPeople(
 export function endEnrolment(
   organizationId: string,
   enrolmentId: string,
-  db: Database
+  db: Executor
 ): number {
   const result = db
     .update(enrolments)

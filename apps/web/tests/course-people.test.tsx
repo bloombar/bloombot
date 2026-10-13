@@ -805,4 +805,35 @@ describe('CoursePeople — invitations (WEB-82)', () => {
     expect(revokeCourseInvitation).not.toHaveBeenCalled()
     expect(screen.getByText('Grace Hopper')).toBeInTheDocument()
   })
+
+  it('still refreshes both lists when a removal is refused (it was taken meanwhile)', async () => {
+    listCourseEnrolments.mockResolvedValue([])
+    listCourseInvitations
+      .mockResolvedValueOnce([invitation()])
+      .mockResolvedValue([])
+    revokeCourseInvitation.mockRejectedValue(
+      new ApiError(404, { error: 'action_refused' })
+    )
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Remove the invitation for Grace Hopper',
+      })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Remove invitation' })
+    )
+
+    await waitFor(() => expect(listCourseInvitations).toHaveBeenCalledTimes(2))
+    expect(listCourseEnrolments).toHaveBeenCalledTimes(2)
+  })
 })

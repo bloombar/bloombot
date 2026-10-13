@@ -23,6 +23,7 @@ import {
   type GoogleIdTokenVerifier,
 } from '@bloombot/auth'
 import { accounts, memberships, people, type Database } from '@bloombot/db'
+import type { Logger } from '@bloombot/logger'
 
 import { clearSessionCookie, setSessionCookie } from '../middleware/session.js'
 
@@ -35,6 +36,8 @@ export interface AuthRouterDependencies {
   googleVerifier: GoogleIdTokenVerifier
   /** COST-8/SURF-10 — `CONFIG.SUPPORT_CONTACT`, returned on every `/me` response (`account` or not — this is deployment-wide, not account-specific) so `pages/CourseEditor.tsx`'s own pending-approval banner can name it, the same contact every decline notice already names. Defaults to `''` when omitted, matching that variable's own unset default. */
   supportContact?: string
+  /** Where an invitation that could not be accepted at sign-in is logged (ROST-21). */
+  logger?: Pick<Logger, 'warn'>
 }
 
 // Must-fix 3 of the API-1..6 rework: `z.string().min(1)` let a syntactically
@@ -108,7 +111,9 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
       return
     }
     try {
-      const result = redeemSignInLink(parsed.data.token, deps.db)
+      const result = redeemSignInLink(parsed.data.token, deps.db, {
+        ...(deps.logger ? { logger: deps.logger } : {}),
+      })
       if (!result) {
         res.status(401).json({ error: 'invalid_token' })
         return
@@ -141,7 +146,9 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
           res.status(401).json({ error: 'invalid_token' })
           return
         }
-        const result = signInWithGoogle(verification.identity, deps.db)
+        const result = signInWithGoogle(verification.identity, deps.db, {
+          ...(deps.logger ? { logger: deps.logger } : {}),
+        })
         if (!result) {
           res.status(401).json({ error: 'invalid_token' })
           return

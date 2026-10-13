@@ -960,10 +960,50 @@ describe('RosterImport for a course without Discord (ROST-21)', () => {
 
     const report = await screen.findByTestId('roster-import-report')
     expect(report).toHaveTextContent(
-      '3 invited, 1 already invited (updated), 2 enrolled straight away'
+      '3 invited, 1 already invited (updated), 1 enrolled straight away'
     )
     expect(report).toHaveTextContent('Line 4: eve@example.edu')
     expect(report).not.toHaveTextContent('bob@example.edu')
     expect(report).not.toHaveTextContent('channels created')
+  })
+
+  it('says nobody is emailed, counts only students actually enrolled, and shows duplicate and removed rows', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          invitationsCreated: 1,
+          invitationsUpdated: 0,
+          invitationsAccepted: [
+            { line: 2, email: 'bob@example.edu', outcome: 'enrolled' },
+            { line: 3, email: 'amy@example.edu', outcome: 'already_enrolled' },
+          ],
+          invitationDuplicateRows: [
+            { line: 5, email: 'bob@example.edu', firstLine: 2 },
+          ],
+          invitationsPreviouslyRemoved: [
+            { line: 4, email: 'gone@example.edu' },
+          ],
+        }),
+      })
+    )
+
+    renderRosterImport({ discordEnabled: false })
+    expect(screen.getByText(/No email is sent/)).toBeInTheDocument()
+    chooseFile(rosterFile('First,Last,Email,GitHub\n'))
+    acknowledge()
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent('1 enrolled straight away')
+    expect(report).toHaveTextContent(
+      'Line 3: amy@example.edu — already enrolled'
+    )
+    expect(report).toHaveTextContent(
+      'Line 5: bob@example.edu (already on line 2)'
+    )
+    expect(report).toHaveTextContent('Previously removed')
+    expect(report).toHaveTextContent('Line 4: gone@example.edu')
   })
 })

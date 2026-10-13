@@ -537,6 +537,9 @@ export interface RosterImportReport {
   invitationsCreated?: number
   invitationsUpdated?: number
   /** ROST-21: invitations an existing account accepted straight away, and what accepting did. */
+  /** ROST-21: rows ignored for repeating an earlier row's address, and rows whose address was removed from the course earlier (no invitation made). */
+  invitationDuplicateRows?: { line: number; email: string; firstLine: number }[]
+  invitationsPreviouslyRemoved?: { line: number; email: string }[]
   invitationsAccepted?: {
     line: number
     email: string

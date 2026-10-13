@@ -411,10 +411,14 @@ export function CoursePeople({
     try {
       await revokeCourseInvitation(organizationId, invitation.id)
       setStatusMessage(`Removed the invitation for ${label}.`)
-      await refreshInvitations()
+      await refresh()
     } catch (caught) {
-      if (caught instanceof ApiError) setInvitationError(caught)
-      else throw caught
+      if (caught instanceof ApiError) {
+        // The invitation may have been accepted or removed meanwhile, so
+        // show what is true now alongside the error.
+        await refresh()
+        setInvitationError(caught)
+      } else throw caught
     } finally {
       setRemovingInvitationId(undefined)
     }

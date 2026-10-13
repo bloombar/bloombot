@@ -275,6 +275,39 @@ describe('Usage (COST-3/COST-4)', () => {
     )
   })
 
+  // D-153 — the load must never overwrite an edit the owner already began.
+  // The deferred promise pins the order: the owner types while the report is
+  // still in flight, then the report lands. (Before the fix a passive effect
+  // reseeded the field from the loaded cap, so Save sent `null` — a clear.)
+  it('a report that lands after the owner started typing does not overwrite the typed cap', async () => {
+    let resolveReport!: (value: OrganizationUsageReport) => void
+    fetchOrganizationUsage.mockReturnValue(
+      new Promise<OrganizationUsageReport>((resolve) => {
+        resolveReport = resolve
+      })
+    )
+    setSpendingCap.mockResolvedValue({
+      organizationId: 'org-1',
+      spendingCapMicros: 12_500_000,
+    })
+
+    renderWithModal(
+      <Usage organizationId="org-1" isOwner={true} navigate={noopNavigate} />
+    )
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '12.50' },
+    })
+
+    resolveReport(report())
+    await screen.findByText(/No spending cap set/)
+
+    expect(screen.getByLabelText('Spending cap ($)')).toHaveValue('12.50')
+    fireEvent.click(screen.getByRole('button', { name: 'Save cap' }))
+    await waitFor(() =>
+      expect(setSpendingCap).toHaveBeenCalledWith('org-1', 12.5)
+    )
+  })
+
   // COST-3's own text: clearing must be possible, and distinguishable from
   // 0 — this is the "Clear cap" control's own proof, distinct from typing
   // 0 into the field and saving (which would call `setSpendingCap` with

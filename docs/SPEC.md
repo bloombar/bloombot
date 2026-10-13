@@ -3713,3 +3713,23 @@ the organization's whole spend, never a filtered part of it, because that is wha
 
 Each course named under **Usage by course** in an organization's settings links to that course's own
 settings, opened at its Usage tab.
+
+### 51. Courses Without Discord
+
+#### TEN-11 A course may have no Discord server at all
+
+A course that is taught only through web chat or an AI assistant has no use for Discord, but an unset Discord
+server currently means "the organization's only server", not "none": the course still routes in that server,
+still takes part in PROJ-3's name checks there, and is pinned to it the moment a second server is installed.
+A course therefore records explicitly whether it uses Discord. A course that does not is never reached by a
+Discord message, is never scaffolded, has no Discord roles assigned by a roster import, takes no part in
+category or role name checks, is left alone when a second server is installed, and is never refused
+enablement for lacking a server. It still answers on every other surface. Its stored roles and categories are
+kept, so turning Discord back on restores them. Every existing course keeps using Discord exactly as before.
+
+#### WEB-80 The Discord server is chosen first, and everything Discord-specific waits for it
+
+The Discord server selector is always shown, at the top of a course's Discord settings, with "No Discord"
+as one of its choices. A new course starts with no Discord server selected. While no server is selected,
+every other Discord setting — roles, categories and channels, Discord self-enrolment, and creating the
+channels — is shown but disabled.

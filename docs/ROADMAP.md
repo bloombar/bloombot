@@ -568,3 +568,12 @@ adds an optional `--source` label that keeps the numberings apart and a content 
 already imported under another id, so only the new messages are added.
 
 **In scope:** MIG-5
+
+## Phase 49 — Courses without Discord
+
+An instructor who teaches only through web chat or an AI assistant still had to have a Discord server behind
+every course, because an unset server meant "the organization's only one". This phase lets a course say it
+uses no Discord at all, and puts the server choice at the top of the course's Discord settings, with every
+Discord-specific setting disabled until a server is chosen.
+
+**In scope:** TEN-11, WEB-80

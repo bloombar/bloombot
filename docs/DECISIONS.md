@@ -14803,3 +14803,17 @@ false` is now an **invitation** (table `course_invitations`, migration `0041_pow
   counted as an update. The invitation upserts run in one transaction with the course looked up once.
 - **Copy.** Nothing is emailed to an invited student; the roster screens say so and tell the instructor to let students
   know to sign in.
+
+## D-153 — Usage screen: the cap field is derived, not reseeded by an effect
+
+`usage.test.tsx` failed intermittently under load, a different test each time, always with the typed cap gone and a
+clear sent (`setSpendingCap('org-1', null)`). Cause: `pages/Usage.tsx` copied the loaded cap into the input from a
+passive effect. If the owner typed before the report arrived — or in the gap between the report rendering and that
+effect running, which a loaded machine widens — the effect then overwrote the typed text with the stored value, and
+Save sent `null`. A slow network could do the same to a real owner.
+
+- **Fix.** The component stores only what the owner has typed (`capEdit`, `undefined` until they touch the field); the
+  field shows that, else the loaded cap. Nothing reseeds it, so a late report, a filter or a refresh cannot overwrite an
+  edit. A successful save or clear, and Discard, drop the edit.
+- **Kept behaviour.** An unsaved edit and its WEB-69 dirty flag still survive applying a filter.
+- **Test.** A deferred fetch types before the report lands, then resolves it (`usage.test.tsx`); it fails without the fix.

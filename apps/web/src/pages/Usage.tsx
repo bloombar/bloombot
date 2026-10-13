@@ -113,7 +113,12 @@ export function Usage({
     refresh: refreshReport,
   } = useOrganizationUsageReport(organizationId, appliedFilters)
 
-  const [capInput, setCapInput] = useState('')
+  // D-153 — what the owner has typed, or `undefined` while they have not
+  // touched the field. The field shows `capEdit` when there is one and the
+  // loaded cap otherwise (`capInput`, below), so a report landing late (first
+  // load, filter, refresh) can never overwrite an edit already begun — a
+  // reseeding effect did, and Save then sent `null`, clearing the cap.
+  const [capEdit, setCapEdit] = useState<string | undefined>(undefined)
   const [capParseError, setCapParseError] = useState(false)
   const [saving, setSaving] = useState(false)
   // WEB-69 — read synchronously by `isSaving`, below (`TabDirtyActions`'s
@@ -129,16 +134,11 @@ export function Usage({
     undefined
   )
 
-  // `capInput`'s own starting value tracks the loaded (or refreshed)
-  // report's own *cap*, not the report object itself (round 2, must-fix 1):
-  // applying a filter fetches a fresh `report` with the identical cap, and
-  // the old `[report]` dependency reseeded `capInput` from it every time,
-  // silently discarding an owner's own unsaved edit (and the WEB-69 dirty
-  // flag with it) the moment a filter was applied. `spendingCapMicros`
-  // itself only ever changes on a real save/clear.
-  useEffect(() => {
-    if (report) setCapInput(capInputFromReport(report))
-  }, [report?.spendingCapMicros])
+  // Applying a filter fetches a fresh `report` with the identical cap; since
+  // the field is derived rather than reseeded, an unsaved edit (and the
+  // WEB-69 dirty flag) survives that.
+  const capInput =
+    capEdit ?? (report !== undefined ? capInputFromReport(report) : '')
 
   // WEB-69: returns whether the cap actually saved, so a caller that saves
   // on the way somewhere else (`pages/OrganizationSettings.tsx`'s own tab
@@ -162,6 +162,7 @@ export function Usage({
           : `Spending cap set to ${formatMicros(Math.round(parsed.value * 1_000_000))}.`
       )
       await refreshReport()
+      setCapEdit(undefined)
       return true
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
@@ -183,6 +184,7 @@ export function Usage({
       await setSpendingCap(organizationId, null)
       setStatusMessage('Spending cap cleared.')
       await refreshReport()
+      setCapEdit(undefined)
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
       else throw caught
@@ -203,10 +205,10 @@ export function Usage({
   }, [isDirty, onDirtyChange])
 
   const discard = useCallback(() => {
-    if (report) setCapInput(capInputFromReport(report))
+    setCapEdit(undefined)
     setCapParseError(false)
     setSaveError(undefined)
-  }, [report])
+  }, [])
 
   useEffect(() => {
     if (!onRegisterActions) return
@@ -316,7 +318,7 @@ export function Usage({
                   inputMode="decimal"
                   value={capInput}
                   onChange={(event) => {
-                    setCapInput(event.target.value)
+                    setCapEdit(event.target.value)
                     setCapParseError(false)
                   }}
                   className={textInputClasses}

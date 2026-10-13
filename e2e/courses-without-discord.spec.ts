@@ -87,9 +87,8 @@ test('a course with no Discord is saved and enabled in a two-server organization
   await expect(
     page.getByRole('button', { name: 'Add category' })
   ).toBeDisabled()
-  await expect(
-    page.getByLabel('Students can enrol themselves by messaging this course')
-  ).toBeDisabled()
+  // WEB-81 — self-enrolment still applies to staff on web chat and MCP.
+  await expect(page.getByLabel('Enrol staff who ask this course')).toBeEnabled()
 
   // Saved enabled: a Discord course in this organization would be refused
   // as ambiguous, a course with no Discord is not.

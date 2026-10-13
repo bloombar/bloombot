@@ -1704,15 +1704,21 @@ export function CourseEditor({
     </div>
   )
 
-  /** ENRL-13 — whether a student's own message enrols them. */
+  /**
+   * ENRL-13 — whether a message enrols its sender. WEB-81: always editable.
+   * Without Discord it still governs web chat and the AI assistant, where it
+   * enrols the organization's instructors and assistants on first ask
+   * (ENRL-16), so only the wording follows the selected server.
+   */
+  const selfEnrolLabel = serverChosen
+    ? 'Enrol people who message this course'
+    : 'Enrol staff who ask this course'
   const selfEnrolControl = (
     <div className="flex flex-col gap-1">
       <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
         <input
           type="checkbox"
-          aria-label="Students can enrol themselves by messaging this course"
-          // WEB-80 — a Discord setting, so it waits for a server.
-          disabled={!serverChosen}
+          aria-label={selfEnrolLabel}
           checked={form.selfEnrolFromDiscord}
           onChange={(event) =>
             setForm((current) => ({
@@ -1722,11 +1728,13 @@ export function CourseEditor({
           }
           className={checkboxClasses}
         />
-        Students can enrol themselves by messaging this course
+        {selfEnrolLabel}
       </label>
       <p className="text-sm text-neutral-600">
         {/* WEB-46: maintainer-reported copy correction. */}
-        Students who message the bot will be added to the course roster.
+        {serverChosen
+          ? 'Anyone who messages this course on Discord is added to its roster. Instructors and assistants asking through web chat or an AI assistant are added the same way.'
+          : 'Without Discord this applies only to instructors and assistants: they are added to the roster the first time they ask through web chat or an AI assistant. Students join through a join link.'}
       </p>
     </div>
   )

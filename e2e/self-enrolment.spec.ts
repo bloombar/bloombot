@@ -106,13 +106,11 @@ test('a student who messages a self-enrolling course, then connects, ends up enr
   await page.getByRole('button', { name: 'Add category' }).click()
   await page.getByLabel('Category name').fill(categoryName)
   await page.getByLabel('Enabled').check()
-  await page
-    .getByLabel('Students can enrol themselves by messaging this course')
-    .check()
+  await page.getByLabel('Enrol people who message this course').check()
   await page.getByRole('button', { name: 'Save course' }).click()
   await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
   await expect(
-    page.getByLabel('Students can enrol themselves by messaging this course')
+    page.getByLabel('Enrol people who message this course')
   ).toBeChecked()
 
   // CFG-2/D-3 — a course with neither `instructions` nor `promptId` set

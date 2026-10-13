@@ -5119,7 +5119,7 @@
   section: §51 Courses Without Discord
   family: TEN
   phase: 49
-  status: In progress
+  status: In review
   review: false
 - id: WEB-80
   title: The Discord server is chosen first, and everything Discord-specific waits
@@ -5132,5 +5132,5 @@
   section: §51 Courses Without Discord
   family: WEB
   phase: 49
-  status: In progress
+  status: In review
   review: false

@@ -577,3 +577,13 @@ uses no Discord at all, and puts the server choice at the top of the course's Di
 Discord-specific setting disabled until a server is chosen.
 
 **In scope:** TEN-11, WEB-80, WEB-81
+
+## Phase 50 — Rosters for courses without Discord
+
+A roster identified each student by Discord handle, so for a course without Discord it admitted nobody: the
+student who later signed in on the web was a different person from the one the roster created. This phase turns
+each row of such a roster into an email invitation that the student accepts by signing in with that address, and
+shows invitations not yet accepted on the course's People list.
+
+**In scope:** ROST-21, WEB-82
+

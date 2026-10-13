@@ -76,6 +76,7 @@ export const MILESTONE_TITLE = {
   47: 'Phase 47 — Staff usage and topic sets that fit',
   48: 'Phase 48 — Importing a later legacy snapshot',
   49: 'Phase 49 — Courses without Discord',
+  50: 'Phase 50 — Rosters for courses without Discord',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

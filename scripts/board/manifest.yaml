@@ -5152,3 +5152,33 @@
   phase: 49
   status: Done
   review: false
+- id: ROST-21
+  title: A roster for a course without Discord invites by email, and signing in
+    with that email accepts
+  full: "ROST-10 identifies a roster row by its Discord handle, which a course
+    without Discord (TEN-11) never sees: a web-only student signs in by email or
+    Google, so the person a roster created for them was never the person who
+    later asked a question, and the roster admitted nobody. For a course without
+    Discord, a roster row therefore needs no Discord handle, and it becomes an
+    invitation to that course for the row's email address rather than a person.
+    An invitation is accepted by an account that has proven that address —
+    signing in with an emailed link (AUTH-1), or with Google asserting the
+    address is verified (AUTH-2) — when it signs in, or straight away at import
+    when such an account already…"
+  section: §51 Courses Without Discord
+  family: ROST
+  phase: 50
+  status: Backlog
+  review: false
+- id: WEB-82
+  title: A course's people include the students invited but not yet signed in
+  full: A course's People list shows each invitation not yet accepted (ROST-21) as
+    invited, with the name and address the roster gave, so an instructor can see
+    who has not signed in. An instructor can remove an invitation that has not
+    been accepted — the way to correct a mistyped address before somebody else
+    accepts it.
+  section: §51 Courses Without Discord
+  family: WEB
+  phase: 50
+  status: Backlog
+  review: false

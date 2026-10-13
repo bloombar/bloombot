@@ -3743,3 +3743,27 @@ Discord server, and its wording follows the course: with a server it says it app
 course on Discord and to staff on web chat and AI assistants; without one it says it applies only to
 instructors and assistants asking through web chat or an AI assistant, and that students join through a join
 link.
+
+#### ROST-21 A roster for a course without Discord invites by email, and signing in with that email accepts
+
+ROST-10 identifies a roster row by its Discord handle, which a course without Discord (TEN-11) never sees: a
+web-only student signs in by email or Google, so the person a roster created for them was never the person who
+later asked a question, and the roster admitted nobody. For a course without Discord, a roster row therefore
+needs no Discord handle, and it becomes an invitation to that course for the row's email address rather than a
+person.
+
+An invitation is accepted by an account that has proven that address — signing in with an emailed link (AUTH-1),
+or with Google asserting the address is verified (AUTH-2) — when it signs in, or straight away at import when
+such an account already exists. Accepting enrols that account's own person in the organization, creating and
+connecting one the way a join link does (ENRL-8) when it has none, and records the roster as the source
+(ENRL-3). This is not the address match PPL-4 forbids: the account proved the address, and an invitation holds
+no conversations, transcript or allowance to inherit — it grants an enrolment and merges nobody. An enrolment an
+instructor ended is not revived by an invitation (ENRL-6). Re-importing the same address updates the invitation
+rather than duplicating it. A course with Discord keeps ROST-10 unchanged.
+
+#### WEB-82 A course's people include the students invited but not yet signed in
+
+A course's People list shows each invitation not yet accepted (ROST-21) as invited, with the name and address
+the roster gave, so an instructor can see who has not signed in. An instructor can remove an invitation that has
+not been accepted — the way to correct a mistyped address before somebody else accepts it.
+

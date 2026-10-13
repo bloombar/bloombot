@@ -576,4 +576,4 @@ every course, because an unset server meant "the organization's only one". This 
 uses no Discord at all, and puts the server choice at the top of the course's Discord settings, with every
 Discord-specific setting disabled until a server is chosen.
 
-**In scope:** TEN-11, WEB-80
+**In scope:** TEN-11, WEB-80, WEB-81

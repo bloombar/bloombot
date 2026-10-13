@@ -3731,5 +3731,15 @@ kept, so turning Discord back on restores them. Every existing course keeps usin
 
 The Discord server selector is always shown, at the top of a course's Discord settings, with "No Discord"
 as one of its choices. A new course starts with no Discord server selected. While no server is selected,
-every other Discord setting — roles, categories and channels, Discord self-enrolment, and creating the
-channels — is shown but disabled.
+every other Discord setting — roles, categories and channels, and creating the channels — is shown but
+disabled. Self-enrolment by messaging is not one of them; see WEB-81.
+
+#### WEB-81 Self-enrolment by messaging says who it applies to, and stays available without Discord
+
+Enrolling by messaging a course (ENRL-13) is not only a Discord setting: on web chat and through an AI
+assistant it enrols an organization's instructors and assistants the first time they ask (ENRL-16), and a
+student who is not enrolled is never admitted there. The setting therefore stays editable on a course with no
+Discord server, and its wording follows the course: with a server it says it applies to anyone messaging the
+course on Discord and to staff on web chat and AI assistants; without one it says it applies only to
+instructors and assistants asking through web chat or an AI assistant, and that students join through a join
+link.

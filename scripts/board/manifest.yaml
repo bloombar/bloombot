@@ -5127,10 +5127,28 @@
   full: The Discord server selector is always shown, at the top of a course's
     Discord settings, with "No Discord" as one of its choices. A new course
     starts with no Discord server selected. While no server is selected, every
-    other Discord setting — roles, categories and channels, Discord
-    self-enrolment, and creating the channels — is shown but disabled.
+    other Discord setting — roles, categories and channels, and creating the
+    channels — is shown but disabled. Self-enrolment by messaging is not one of
+    them; see WEB-81.
   section: §51 Courses Without Discord
   family: WEB
   phase: 49
   status: Done
+  review: false
+- id: WEB-81
+  title: Self-enrolment by messaging says who it applies to, and stays available
+    without Discord
+  full: "Enrolling by messaging a course (ENRL-13) is not only a Discord setting:
+    on web chat and through an AI assistant it enrols an organization's
+    instructors and assistants the first time they ask (ENRL-16), and a student
+    who is not enrolled is never admitted there. The setting therefore stays
+    editable on a course with no Discord server, and its wording follows the
+    course: with a server it says it applies to anyone messaging the course on
+    Discord and to staff on web chat and AI assistants; without one it says it
+    applies only to instructors and assistants asking through web chat or an AI
+    assistant, and that students join through a join link."
+  section: §51 Courses Without Discord
+  family: WEB
+  phase: 49
+  status: Backlog
   review: false

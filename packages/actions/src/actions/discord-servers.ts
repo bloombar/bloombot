@@ -154,7 +154,7 @@ export const scaffoldDiscordServerAction: Action<
 > = {
   name: 'discordServers.scaffold',
   description:
-    "Create a course's declared categories and channels in its bound Discord server (SRV-6), as a background job — this action enqueues the work; it does not perform it.",
+    "Create a course's declared categories and channels in its bound Discord server (SRV-6), as a background job — this action enqueues the work; it does not perform it. A course that uses no Discord (discordEnabled false) is refused by the job.",
   inputSchema: scaffoldInputSchema,
   policy: {
     descriptor: { resource: 'course', access: 'write' },

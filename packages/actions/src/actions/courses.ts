@@ -152,6 +152,25 @@ function keepOrClear<Value>(
 }
 
 /**
+ * TEN-11 — the `discordEnabled` value a save resolves to. An explicit value
+ * wins. Otherwise naming a server (`discordServerId` a non-empty string)
+ * implies Discord is on — an API or MCP caller that only sets a server on a
+ * course currently marked "no Discord" means to use it, and the repo would
+ * otherwise drop the id. Otherwise the stored value is kept, and a new course
+ * defaults to `true` so API callers written before this field existed behave
+ * as they did (only the web form's new-course default is "No Discord").
+ */
+function resolveDiscordEnabled(
+  given: boolean | undefined,
+  givenServerId: string | null | undefined,
+  stored: boolean | undefined
+): boolean {
+  if (given !== undefined) return given
+  if (givenServerId) return true
+  return stored ?? true
+}
+
+/**
  * TEN-9/TEN-5 — `true` when `discordServerId` is either not supplied at all
  * (nothing to check) or names a server actively bound to `organizationId`.
  * Shared by `courses.save` and `courses.updateSettings`'s policies, both of
@@ -331,6 +350,10 @@ const saveInputSchema = z.strictObject({
   // server, or a removed binding, is refused the same "not found" way TEN-5
   // refuses `projectId`/`id`, not told the binding exists elsewhere.
   discordServerId: z.string().min(1).nullable().optional(),
+  // TEN-11 — whether the course uses Discord at all. Omitted keeps what is
+  // stored (`true` on create, so older API/MCP callers are unchanged);
+  // `false` also clears `discordServerId` (see `resolveDiscordEnabled`).
+  discordEnabled: z.boolean().optional(),
   categories: z.array(categoryInputSchema),
 })
 type SaveInput = z.infer<typeof saveInputSchema>
@@ -503,6 +526,12 @@ export const saveCourseAction: Action<
         input.discordServerId,
         entity.existingCourse?.discordServerId
       ),
+      // TEN-11 — the repo drops `discordServerId` when this is `false`.
+      discordEnabled: resolveDiscordEnabled(
+        input.discordEnabled,
+        input.discordServerId,
+        entity.existingCourse?.discordEnabled
+      ),
       categories: input.categories,
     }
 
@@ -594,6 +623,8 @@ const updateSettingsInputSchema = z.strictObject({
   // checked in this action's policy below, reusing
   // `isOwnDiscordServerOrAbsent`.
   discordServerId: z.string().min(1).nullable().optional(),
+  // TEN-11 — same field and semantics as `saveInputSchema`'s own.
+  discordEnabled: z.boolean().optional(),
 })
 type UpdateSettingsInput = z.infer<typeof updateSettingsInputSchema>
 
@@ -605,7 +636,7 @@ export const updateSettingsCourseAction: Action<
 > = {
   name: 'courses.updateSettings',
   description:
-    "Change one or more of an existing course's settings (title, enabled, roles, model, vector store, request limit, conversation scope, self-enrolment, Discord server) in the caller's organization, leaving its categories and channels untouched. Prefer this over courses.save for any change that is not to the category/channel list — courses.save always replaces that whole list, even when the caller never touched it.",
+    "Change one or more of an existing course's settings (title, enabled, roles, model, vector store, request limit, conversation scope, self-enrolment, Discord server, whether it uses Discord at all) in the caller's organization, leaving its categories and channels untouched. Prefer this over courses.save for any change that is not to the category/channel list — courses.save always replaces that whole list, even when the caller never touched it.",
   inputSchema: updateSettingsInputSchema,
   policy: {
     descriptor: { resource: 'course', access: 'write' },
@@ -657,6 +688,11 @@ export const updateSettingsCourseAction: Action<
       discordServerId: keepOrClear(
         input.discordServerId,
         entity.discordServerId
+      ),
+      discordEnabled: resolveDiscordEnabled(
+        input.discordEnabled,
+        input.discordServerId,
+        entity.discordEnabled
       ),
     }
 

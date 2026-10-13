@@ -53,6 +53,8 @@ export interface ScaffoldButtonProps {
    * does not care can pass `vi.fn()`.
    */
   onConnectDiscord: () => void
+  /** WEB-80 — shown but not usable while the course has no Discord server selected (TEN-11). */
+  disabled?: boolean
   /** Test-only override of `DEFAULT_STILL_QUEUED_HINT_AFTER_MS`. */
   stillQueuedHintAfterMs?: number
   /** Test-only override of `DEFAULT_POLL_INTERVAL_MS`. */
@@ -104,6 +106,7 @@ export function ScaffoldButton({
   organizationId,
   courseId,
   onConnectDiscord,
+  disabled = false,
   stillQueuedHintAfterMs = DEFAULT_STILL_QUEUED_HINT_AFTER_MS,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 }: ScaffoldButtonProps) {
@@ -216,7 +219,7 @@ export function ScaffoldButton({
         variant="secondary"
         icon={<ScaffoldIcon aria-hidden="true" className="size-4" />}
         onClick={() => void handleClick()}
-        disabled={starting || (job !== undefined && !settled)}
+        disabled={disabled || starting || (job !== undefined && !settled)}
       >
         {starting ? 'Starting…' : 'Create Discord channels'}
       </Button>

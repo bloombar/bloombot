@@ -427,6 +427,9 @@ export const duplicateProjectAction: Action<
             // every copied course edited by hand before any of them could
             // be enabled again.
             discordServerId: source.discordServerId,
+            // TEN-11 — a duplicate of a no-Discord course is a no-Discord
+            // course (the server id above is already null for it).
+            discordEnabled: source.discordEnabled,
             categories: source.categories.map((category) => ({
               name: category.name,
               channels: category.channels.map((channel) => ({

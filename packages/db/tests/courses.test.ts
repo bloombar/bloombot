@@ -2172,6 +2172,7 @@ describe('courses repo', () => {
         selfEnrolFromDiscord: course.selfEnrolFromDiscord,
         answerUnenrolled: course.answerUnenrolled,
         discordServerId: course.discordServerId,
+        discordEnabled: course.discordEnabled,
         ...overrides,
       }
     }

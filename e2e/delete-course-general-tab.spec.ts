@@ -22,6 +22,10 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('an owner deletes a course from its own General tab, confirmed by typing its title, and it is gone (WEB-72)', async ({
@@ -35,6 +39,7 @@ test('an owner deletes a course from its own General tab, confirmed by typing it
   const adminsRole = `admins-${suffix}`
 
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // Create a project and a course through the panel itself — the same two
@@ -54,6 +59,7 @@ test('an owner deletes a course from its own General tab, confirmed by typing it
   await page.getByRole('button', { name: projectName, exact: true }).click()
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()

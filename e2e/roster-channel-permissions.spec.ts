@@ -55,6 +55,10 @@ import { createRosterImportHandler } from '../apps/worker/src/handlers/roster-im
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { FakeDiscordGuildServer } from './support/fake-discord-guild-server.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 const RETRY_POLICY: RetryPolicy = { baseDelayMs: 1000, backoffFactor: 2 }
@@ -141,6 +145,7 @@ test("a roster import's channels are private to their own student, their instruc
   const discordServer = await FakeDiscordGuildServer.start()
   try {
     await signIn(page, email)
+    await bindDiscordServer(email, `e2e-guild-${suffix}`)
     await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
     await navigateTo(page, 'Projects')
@@ -152,6 +157,7 @@ test("a roster import's channels are private to their own student, their instruc
 
     await page.getByRole('button', { name: 'New course' }).click()
     await page.getByLabel('Title').fill(courseTitle)
+    await chooseDiscordServer(page)
     await page.getByLabel('Admins role').fill(adminsRole)
     await page.getByLabel('Students role').fill(studentsRole)
     await page.getByRole('button', { name: 'Add category' }).click()

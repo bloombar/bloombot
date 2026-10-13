@@ -25,6 +25,10 @@ import {
 import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('a project is created through the "New project" modal, renamed through its kebab menu, and a course row\'s Chat button opens a real chat for that course (WEB-26, WEB-27, WEB-28, PROJ-6)', async ({
@@ -39,6 +43,7 @@ test('a project is created through the "New project" modal, renamed through its 
   const adminsRole = `admins-${suffix}`
 
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 1. WEB-27: "New project" is a primary button beside the heading, and
@@ -90,6 +95,7 @@ test('a project is created through the "New project" modal, renamed through its 
     .click()
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()
@@ -196,6 +202,7 @@ test("a project is renamed from its own screen's kebab, and a course's own scree
   const adminsRole = `admins-${suffix}`
 
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -242,6 +249,7 @@ test("a project is renamed from its own screen's kebab, and a course's own scree
   // Define and enable a course, the same two steps the spec above drives.
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()

@@ -141,6 +141,9 @@ export const exportCourseAction: Action<
         // (`notCarried`, below) that means nothing in a different tenant.
         selfEnrolFromDiscord: entity.selfEnrolFromDiscord,
         answerUnenrolled: entity.answerUnenrolled,
+        // TEN-11 — carried: it is a setting of the course itself, unlike the
+        // server it may name (`notCarried.discordServer`).
+        discordEnabled: entity.discordEnabled,
         categories: entity.categories.map((category) => ({
           name: category.name,
           channels: category.channels.map((channel) => ({
@@ -286,6 +289,8 @@ export const importCourseAction: Action<
           // database-defaulted column in this platform already gets.
           selfEnrolFromDiscord: exported.selfEnrolFromDiscord ?? false,
           answerUnenrolled: exported.answerUnenrolled ?? true,
+          // TEN-11 — absent in a file written before the setting existed.
+          discordEnabled: exported.discordEnabled ?? true,
           categories: exported.categories,
         },
         tx

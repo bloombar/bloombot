@@ -346,6 +346,18 @@ export const courses = sqliteTable(
     discordServerId: text('discord_server_id').references(
       () => discordServerBindings.serverId
     ),
+    // TEN-11 — whether this course uses Discord at all. `discordServerId`
+    // above cannot say "none": null there means "the organization's only
+    // server". Defaulted to `true` at the database level for the reason
+    // `selfEnrolFromDiscord` below gives for its default: every existing row
+    // means "uses Discord exactly as before". When false, the repo stores
+    // `discordServerId` as null (see `repos/courses.ts`), and every Discord
+    // path (routing, scaffold, role assignment, PROJ-3 name checks, the
+    // second-binding backfill) skips the course. Roles and categories stay
+    // stored so turning Discord back on restores them.
+    discordEnabled: integer('discord_enabled', { mode: 'boolean' })
+      .notNull()
+      .default(true),
     // ENRL-13 — whether asking this course is itself a request to enrol.
     // Defaulted at the database level (the same reasoning `conversationScope`
     // above gives for its own default): added by a migration onto a table

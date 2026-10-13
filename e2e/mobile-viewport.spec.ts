@@ -41,6 +41,10 @@ import {
 
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateToOrganizationSettingsTab } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 import { withRetry } from './support/with-retry.js'
 
@@ -277,6 +281,7 @@ test('the panel is readable on a phone: no screen overflows sideways, and no fie
 
   // 1. The shell itself — header, drawer, footer — right after signing in.
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
   await assertNoHorizontalOverflow(
     page,
@@ -314,6 +319,7 @@ test('the panel is readable on a phone: no screen overflows sideways, and no fie
   const titleField = page.getByLabel('Title')
   await assertFocusDoesNotZoom(titleField, page)
   await titleField.fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-${suffix}`)
   await page.getByLabel('Students role').fill(`students-${suffix}`)
   await page.getByRole('button', { name: 'Save course' }).click()

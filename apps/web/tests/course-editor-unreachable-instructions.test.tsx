@@ -116,6 +116,7 @@ const COURSE: Course = {
   selfEnrolFromDiscord: false,
   answerUnenrolled: true,
   discordServerId: null,
+  discordEnabled: true,
   createdAt: 0,
   aiApprovedAt: 1000,
   categories: [],

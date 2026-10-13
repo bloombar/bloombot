@@ -62,6 +62,10 @@ import {
 import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 /**
@@ -125,6 +129,7 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   //    the same two steps `course-configuration.spec.ts` drives, reused
   //    here rather than duplicated as a fixture.
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -137,6 +142,7 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()
@@ -306,6 +312,7 @@ test('an unapproved course shows the SURF-10 notice, naming the support contact,
   // 1. Sign in, then define and enable a course through the panel alone —
   //    the same steps the answered case above drives.
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -317,6 +324,7 @@ test('an unapproved course shows the SURF-10 notice, naming the support contact,
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()

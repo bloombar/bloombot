@@ -14669,3 +14669,46 @@ therefore collided with already-imported rows: a new row was counted as `matched
   `<prefix>=<course id>`, the prefix being the text before ` - ` compared case-insensitively; a route wins over a
   declared category, and `--route` without `--organization` is refused. A category nothing matches stays
   `unplaceable`. The report's `project` is empty and `courses.matched` is the number of courses available.
+
+## D-151 — Courses without Discord: TEN-11 and WEB-80
+
+A null `courses.discord_server_id` meant "the organization's only server", so there was no way to say "none". A course
+now carries an explicit `discord_enabled` flag (migration `0040_rapid_baron_strucker`).
+
+- **Column.** `discord_enabled integer NOT NULL DEFAULT true`. Every existing row means "uses Discord as before", the same
+  reasoning `answer_unenrolled` gives for its own default. `migrate.test.ts` pins that an existing row comes back `1`.
+- **`false` stores a null server (one place: `normalizeDiscordServer` in `repos/courses.ts`).** A caller sending
+  `discordEnabled: false` with a server id gets the id dropped, not refused: "off" is the stronger statement, and a stale
+  id left in a form must not block turning Discord off. Applied on create, update and `updateCourseSettings`.
+- **At the action layer, naming a server implies Discord on.** `courses.save` / `courses.updateSettings` resolve
+  `discordEnabled` as: explicit value wins; else a non-empty `discordServerId` means `true`; else the stored value is
+  kept (`true` on create). Without the middle rule an MCP caller setting a server on a course marked "no Discord" would
+  have the id silently dropped. The API default stays `true` for callers that predate the field; only the web form's
+  new-course default is "No Discord", so the form always sends `discordEnabled` when creating.
+- **Where a discord-off course is skipped.** Routing (`handle-mention.ts` filters on `RoutableCourseRow.discordEnabled`;
+  `listRoutableCourses` still lists it, so the repo query stays one shared shape); the scaffold job (refused with a
+  reason; the action still enqueues, the worker refuses); PROJ-3 name checks (not a candidate in
+  `findCourseNameConflict`, and the course being saved skips `findSelfConflict` too, so duplicate category names inside a
+  course with no Discord are accepted); TEN-9 refusals on create, update, `updateCourseSettings`, `enableCourse`,
+  `findProjectUnarchiveConflict` and `checkCategoryNameAgainstCourse`; and the second-binding backfill. Turning Discord
+  back on re-runs the checks (`!existing.discordEnabled` counts as "could introduce a collision"), so a clash with a
+  Discord course is refused then, not silently accepted.
+- **Roster import still enrols.** A discord-off course takes an enrolment-only path in `roster-import.ts`: no member
+  lookup, role, category or channel, and every row is resolved by its synthetic `handle:` identity as an unresolved Discord
+  handle is. The per-row person/merge/enrol block was lifted into `importRosterRowPerson`, shared by both paths, so they
+  cannot drift. `RosterImportReport.guildId` is now `string | null` (null for this path) and `limitations` says no Discord
+  work was done.
+- **Stored data is untouched on off.** Roles, categories and channels stay, so turning Discord back on restores them.
+- **Export/import and duplicate carry the flag.** `discordEnabled` is optional in the export file (absent means `true`,
+  no version bump). Duplicate copies it.
+- **Answering elsewhere is unchanged.** `packages/core` never reads the flag; web chat and MCP answer as before.
+- **Web: always-shown selector, server first.** Displayed value: off is "No Discord (web and AI assistant only)"; a stored
+  id is that server (stale ones appear disabled as "no longer active"); null with exactly one active binding shows that
+  binding (TEN-9's fallback); otherwise a disabled "Choose a server…" placeholder. Only changed fields are sent
+  (`discordEnabled`, `discordServerId`), so a legacy null course saved untouched stays null. Dependent controls (roles,
+  the categories fieldset, the self-enrolment checkbox, the scaffold button) are disabled while no server is selected.
+  A stale-server course counts as selected so it is not trapped read-only. `answerUnenrolled` stays enabled: its text is
+  not Discord-specific and WEB-80 does not list it.
+- **Consequence for an organization with no server.** An existing Discord-on legacy course in an organization with zero
+  active bindings now shows the placeholder and its Discord settings are disabled until the person picks "No Discord" or
+  connects a server (the selector offers a link to the organization's Discord tab). That follows WEB-80 as written.

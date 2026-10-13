@@ -1747,6 +1747,47 @@ describe('handleMention — TEN-9: routing never crosses a Discord server bounda
   })
 })
 
+// TEN-11 — a course that uses no Discord is never routed a Discord message,
+// even though its stored category name matches the message's category.
+describe('a course with no Discord (TEN-11)', () => {
+  it('is not routed a message whose category matches its stored one', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      categoryName: 'Week 1',
+      discordEnabled: false,
+    })
+
+    const { deps, model } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, categoryName: 'Week 1' }),
+      deps
+    )
+
+    expect(result.kind).toBe('unrouted')
+    expect(model.calls).toHaveLength(0)
+    expect(
+      wouldRouteToAnEnabledCourse(
+        inboundMention({ guildId, categoryName: 'Week 1' }),
+        testDb.db
+      )
+    ).toBe(false)
+  })
+
+  it('is routed again once Discord is turned back on (control)', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      categoryName: 'Week 1',
+    })
+
+    const { deps } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, categoryName: 'Week 1' }),
+      deps
+    )
+    expect(result.kind).toBe('answered')
+  })
+})
+
 // SURF-9 rework, MF4 — `wouldRouteToAnEnabledCourse` is what the catch-up
 // path's own apology gates on: an apology only makes sense where an answer
 // could actually have happened live.

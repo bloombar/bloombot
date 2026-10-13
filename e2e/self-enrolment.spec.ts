@@ -69,6 +69,10 @@ import { navigateTo } from './support/navigate.js'
 import { createFakeLogger } from './support/fake-logger.js'
 import { FakeModelClient } from './support/fake-model-client.js'
 import { FakeReplyPort } from './support/fake-reply-port.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('a student who messages a self-enrolling course, then connects, ends up enrolled (ENRL-13)', async ({
@@ -84,6 +88,7 @@ test('a student who messages a self-enrolling course, then connects, ends up enr
   //    everything through the panel alone, the same as
   //    `course-configuration.spec.ts`'s own steps 1-3.
   await signIn(page, email)
+  await bindDiscordServer(email, `e2e-guild-${suffix}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -95,6 +100,7 @@ test('a student who messages a self-enrolling course, then connects, ends up enr
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-${suffix}`)
   await page.getByLabel('Students role').fill(`students-${suffix}`)
   await page.getByRole('button', { name: 'Add category' }).click()

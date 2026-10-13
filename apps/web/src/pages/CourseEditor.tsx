@@ -443,6 +443,10 @@ function blankForm() {
     // etc. above already carry — a brand-new course starts undecided, not
     // pinned to whichever server happens to be active right now.
     discordServerId: null as string | null,
+    // TEN-11/WEB-80 — a new course starts with no Discord server selected;
+    // choosing one in the selector turns this on. (The API default for a
+    // caller that omits the field stays `true`.)
+    discordEnabled: false,
     categories: [] as EditableCategory[],
   }
 }
@@ -463,6 +467,7 @@ function formFromCourse(course: Course) {
     selfEnrolFromDiscord: course.selfEnrolFromDiscord,
     answerUnenrolled: course.answerUnenrolled,
     discordServerId: course.discordServerId,
+    discordEnabled: course.discordEnabled,
     categories: course.categories.map((category) => ({
       key: newKey(),
       name: category.name,
@@ -778,35 +783,42 @@ export function CourseEditor({
     DiscordServerBindingSummary[]
   >([])
   const activeBindings = discordBindings.filter(isActiveDiscordBinding)
-  // Must-fix 3 (coordinator round 1 rework): `activeBindings.length > 1`
-  // alone stranded a course whose own `discordServerId` names a binding
-  // that has since been removed — the owner removes the second of two
-  // bindings through `pages/Shell.tsx`'s own per-row Remove, this drops
-  // back to one active binding, the selector disappears, and
-  // `keepOrClear` (`handleSave`, below) keeps preserving the now-inactive
-  // id forever: every save of an enabled course is refused
-  // ("...no longer active..."), with no control anywhere in the panel to
-  // choose a different one or clear it. Offered whenever there is an
-  // actual choice to make (2+ active bindings) *or* the course, as loaded
-  // (`baseline`, not the live `form`), already names one explicitly,
-  // active or not — the second half is what makes a stale assignment
-  // recoverable rather than only diagnosable. `baseline`, deliberately,
-  // not `form`: reading `form.discordServerId` here would make clearing
-  // the field to `null` (choosing the blank option, below) flip this
-  // condition to `false` mid-edit, which would then omit the field from
-  // the save payload entirely — silently un-doing the very clear the
-  // instructor just asked for, since an omitted field means "keep what is
-  // stored" (`handleSave`'s own comment). `baseline` never changes except
-  // when a fresh record is loaded or a save actually succeeds, so this
-  // stays stable for the whole edit, the same way `isDirty`'s own
-  // comparison already relies on it.
-  const offersServerSelector =
-    activeBindings.length > 1 || baseline.discordServerId !== null
+  // WEB-80 — the selector is always shown (it used to be offered only for
+  // 2+ active bindings or a course already naming a server). A course whose
+  // own `discordServerId` names a binding that has since been removed still
+  // gets an explicit, disabled "no longer active" option below, so a stale
+  // assignment reads as exactly that and can be re-pointed or cleared.
+  //
+  // Which choice the selector *displays*:
+  //  - Discord off (TEN-11)           -> "No Discord"
+  //  - a server id stored             -> that server (active or stale)
+  //  - null with exactly one active   -> that binding: TEN-9's fallback, so
+  //    an existing course keeps reading as using the server it always used
+  //  - null otherwise                 -> the disabled "Choose a server…"
+  //    placeholder (legacy and undecidable)
+  // `selectedServerId` is `undefined` for the first and last of those, and
+  // is what every other Discord setting waits for.
+  const selectedServerId: string | undefined = !form.discordEnabled
+    ? undefined
+    : form.discordServerId !== null
+      ? form.discordServerId
+      : activeBindings.length === 1
+        ? activeBindings[0]?.serverId
+        : undefined
+  const serverChosen = selectedServerId !== undefined
+  const selectedServerName = activeBindings.find(
+    (binding) => binding.serverId === selectedServerId
+  )?.serverName
+  const showServerPlaceholder =
+    form.discordEnabled &&
+    form.discordServerId === null &&
+    activeBindings.length !== 1
   // The course's own id, when it is not one of `activeBindings` — a stale
   // reference the `<select>` below still has to show *as* an option (not
   // silently fall back to showing nothing selected, which would look
   // identical to "cleared" while the form still carries the stale value).
   const staleServerId =
+    form.discordEnabled &&
     form.discordServerId !== null &&
     !activeBindings.some((binding) => binding.serverId === form.discordServerId)
       ? form.discordServerId
@@ -1002,15 +1014,17 @@ export function CourseEditor({
         // case for it to rely on.
         selfEnrolFromDiscord: form.selfEnrolFromDiscord,
         answerUnenrolled: form.answerUnenrolled,
-        // TEN-9 — sent only while the selector is actually offered
-        // (`offersServerSelector`, kept in lockstep with the render gate
-        // above — must-fix 3, coordinator round 1 rework): a course this
-        // form does not offer a choice for is not a field this form
-        // manages this render, the same "omitted preserves what is stored"
-        // treatment `promptId`/`vectorStoreId` get above, rather than
-        // forcing every course back to `null` the moment an organization
-        // happens to install a second server.
-        ...(offersServerSelector
+        // TEN-9/TEN-11 — sent only when changed from what was loaded, so a
+        // legacy course with a null server that is saved untouched stays
+        // null (and keeps TEN-9's single-binding fallback) rather than being
+        // pinned to whichever server the selector happened to display. A
+        // brand-new course always sends `discordEnabled`: the API default
+        // is `true`, but this form's new-course default is "No Discord".
+        ...(courseId === undefined ||
+        form.discordEnabled !== baseline.discordEnabled
+          ? { discordEnabled: form.discordEnabled }
+          : {}),
+        ...(form.discordServerId !== baseline.discordServerId
           ? { discordServerId: form.discordServerId }
           : {}),
         categories,
@@ -1438,8 +1452,107 @@ export function CourseEditor({
   // controls under its own intro copy instead of a second, redundant
   // bordered box; the new-course path (this component's own "no tab
   // address to invent" case, this file's module comment) keeps the
-  // original box around this same pair of controls, unchanged.
-  const rolesAndServerFields = (
+  // original box around the same controls.
+  //
+  // WEB-80 — split in two so the server selector can lead: it is the first
+  // thing in the Discord tab (above the intro copy) and the first thing in
+  // the new-course "What this course routes on" box, and every other
+  // Discord setting waits for it (`serverChosen`).
+
+  // WEB-80/WEB-69 — the same way to the organization's Discord tab the
+  // scaffold button's "Connect a server" uses, routed through
+  // `confirmDiscard()` because it unmounts the whole editor.
+  const goToConnectDiscord = async () => {
+    if (await confirmDiscard()) {
+      // WEB-69 — the organization's own Discord tab lives on the settings
+      // screen, not its own route.
+      navigate({
+        kind: 'organization-settings',
+        organizationId,
+        tab: 'discord',
+      })
+    }
+  }
+
+  // TEN-11/WEB-80 — "No Discord" is a real choice, stored explicitly
+  // (`discordEnabled: false`); picking a server turns Discord on and names
+  // it. The sentinel value is not a possible Discord snowflake.
+  const NO_DISCORD_VALUE = 'none'
+  const serverSelector = (
+    <div className="flex flex-col gap-2">
+      <FormField
+        label="Discord server"
+        {...fieldErrorProp(error, 'discordServerId')}
+      >
+        <select
+          aria-label="Discord server"
+          value={
+            !form.discordEnabled
+              ? NO_DISCORD_VALUE
+              : (selectedServerId ?? staleServerId ?? '')
+          }
+          onChange={(event) => {
+            const chosen = event.target.value
+            setForm((current) =>
+              chosen === NO_DISCORD_VALUE
+                ? { ...current, discordEnabled: false, discordServerId: null }
+                : { ...current, discordEnabled: true, discordServerId: chosen }
+            )
+          }}
+          className={textInputClasses}
+        >
+          {/* The legacy undecidable case only (Discord on, no server
+              stored, and not exactly one active binding to fall back to):
+              nothing is chosen yet, and this says so. Never offered as a
+              choice. */}
+          {showServerPlaceholder && (
+            <option value="" disabled>
+              Choose a server…
+            </option>
+          )}
+          <option value={NO_DISCORD_VALUE}>
+            No Discord (web and AI assistant only)
+          </option>
+          {/* The stale option itself, shown so a course pinned to a
+              removed binding reads as exactly that in the control, rather
+              than looking identical to "cleared" while the form still
+              carries the old id; `disabled` steers toward picking an
+              active server or "No Discord" instead. */}
+          {staleServerId && (
+            <option value={staleServerId} disabled>
+              {staleServerId} (no longer active)
+            </option>
+          )}
+          {/* WEB-74 — the option's visible text is the guild's own name
+              (WEB-68's `serverName`), falling back to the id for a
+              binding recorded before that column existed. The *value*
+              stays the snowflake id either way. */}
+          {activeBindings.map((binding) => (
+            <option key={binding.serverId} value={binding.serverId}>
+              {binding.serverName ?? binding.serverId}
+            </option>
+          ))}
+        </select>
+      </FormField>
+      {/* WEB-80 — with no server connected the only choice is "No Discord";
+          say how to get another one. */}
+      {activeBindings.length === 0 && (
+        <p className="text-sm text-neutral-600">
+          This organization has no Discord server connected yet.{' '}
+          <button
+            type="button"
+            onClick={() => void goToConnectDiscord()}
+            className="font-medium text-neutral-900 underline"
+          >
+            Connect a Discord server
+          </button>{' '}
+          to use one here.
+        </p>
+      )}
+    </div>
+  )
+
+  const rolesFields = (
     <>
       <div className="grid gap-3 sm:grid-cols-2">
         <FormField
@@ -1453,6 +1566,7 @@ export function CourseEditor({
         >
           <input
             aria-label="Admins role"
+            disabled={!serverChosen}
             value={form.adminsRole}
             onChange={(event) =>
               setForm((current) => ({
@@ -1470,6 +1584,7 @@ export function CourseEditor({
         >
           <input
             aria-label="Students role"
+            disabled={!serverChosen}
             value={form.studentsRole}
             onChange={(event) =>
               setForm((current) => ({
@@ -1481,65 +1596,6 @@ export function CourseEditor({
           />
         </FormField>
       </div>
-
-      {/* TEN-9 — offered once there is an actual choice to make (2+
-          active bindings — "one binding is not a choice worth making
-          anybody make", this slice's own brief) *or* the course already
-          names a server explicitly, even one that is no longer active
-          (must-fix 3, coordinator round 1 rework) — otherwise a course
-          pinned to a since-removed binding has no way in the product to
-          be re-pointed or cleared, only a refusal that names the problem
-          with no control to fix it. An organization with zero or one
-          active binding and a course that has never named one never sees
-          this at all — it still resolves correctly through
-          `resolveCourseDiscordServer`'s own single-binding fallback,
-          unedited. */}
-      {offersServerSelector && (
-        <FormField
-          label="Discord server"
-          {...fieldErrorProp(error, 'discordServerId')}
-        >
-          <select
-            aria-label="Discord server"
-            value={form.discordServerId ?? ''}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                discordServerId:
-                  event.target.value === '' ? null : event.target.value,
-              }))
-            }
-            className={textInputClasses}
-          >
-            <option value="">Choose a server…</option>
-            {/* The stale option itself, shown so a course pinned to a
-                removed binding reads as exactly that in the control,
-                rather than looking identical to "cleared" while the form
-                still carries the old id — selectable only in the sense
-                that leaving it selected is what a re-save would already
-                do; `disabled` steers toward picking an active server or
-                clearing to `null` instead. */}
-            {staleServerId && (
-              <option value={staleServerId} disabled>
-                {staleServerId} (no longer active)
-              </option>
-            )}
-            {/* WEB-74 — the option's visible text is the guild's own name
-                (WEB-68's `serverName`), falling back to the id for a
-                binding recorded before that column existed. A `<select>`
-                option is a single line, so unlike `DiscordServerRow`'s
-                "name, id alongside" this shows one or the other rather
-                than both — the id is still available by hovering/copying
-                the saved value once chosen. The *value* stays the
-                snowflake id either way; only the label changes. */}
-            {activeBindings.map((binding) => (
-              <option key={binding.serverId} value={binding.serverId}>
-                {binding.serverName ?? binding.serverId}
-              </option>
-            ))}
-          </select>
-        </FormField>
-      )}
     </>
   )
 
@@ -1605,6 +1661,8 @@ export function CourseEditor({
         <input
           type="checkbox"
           aria-label="Students can enrol themselves by messaging this course"
+          // WEB-80 — a Discord setting, so it waits for a server.
+          disabled={!serverChosen}
           checked={form.selfEnrolFromDiscord}
           onChange={(event) =>
             setForm((current) => ({
@@ -1654,7 +1712,13 @@ export function CourseEditor({
   // costs nothing worth guarding against.
   const categoryDuplicates = findCategoryDuplicates(form.categories)
   const categoriesFieldset = (
-    <fieldset className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4">
+    // WEB-80 — `disabled` on a fieldset disables every input and button
+    // inside it (the nested per-category fieldsets included) while no
+    // server is selected; the stored categories stay as they are.
+    <fieldset
+      disabled={!serverChosen}
+      className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"
+    >
       <legend className="px-1 text-section-title font-semibold text-neutral-900">
         Categories
       </legend>
@@ -2032,12 +2096,13 @@ export function CourseEditor({
             aria-label="What this course routes on"
             className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-neutral-50 p-4"
           >
+            {serverSelector}
             <p className="text-sm text-neutral-600">
               A message reaches this course by the Discord category it arrived
               in, or by the author&apos;s role — these names have to match your
               Discord server exactly.
             </p>
-            {rolesAndServerFields}
+            {rolesFields}
           </section>
 
           {enabledControl}
@@ -2256,12 +2321,15 @@ export function CourseEditor({
                     visually distinct region, so a second border around the
                     same fields read as redundant. See `docs/DECISIONS.md`
                     if this needs reconsidering. */}
+                {/* WEB-80 — the server comes first; everything below waits
+                    for it. */}
+                {serverSelector}
                 <p className="text-sm text-neutral-600">
                   A message reaches this course by the Discord category it
                   arrived in, or by the author&apos;s role — these names have to
                   match your Discord server exactly.
                 </p>
-                {rolesAndServerFields}
+                {rolesFields}
 
                 {categoriesFieldset}
 
@@ -2278,11 +2346,19 @@ export function CourseEditor({
                   </h2>
                   <p className="text-sm text-neutral-600">
                     Create this course&apos;s declared categories and channels
-                    in the Discord server bound to this organization.
+                    in{' '}
+                    {selectedServerName !== undefined &&
+                    selectedServerName !== null
+                      ? `the Discord server "${selectedServerName}"`
+                      : 'the Discord server chosen above'}
+                    .
                   </p>
                   <ScaffoldButton
                     organizationId={organizationId}
                     courseId={courseId}
+                    // WEB-80 — waits for a server like the other Discord
+                    // settings on this tab.
+                    disabled={!serverChosen}
                     // SRV-6 — `ScaffoldButton` has no route access of
                     // its own; when its own click-time check finds no
                     // active Discord server binding, it confirms and then
@@ -2296,17 +2372,7 @@ export function CourseEditor({
                     // otherwise vanish with no prompt the moment "Connect
                     // a server" is clicked, unlike every other way out of
                     // this form.
-                    onConnectDiscord={async () => {
-                      if (await confirmDiscard()) {
-                        // WEB-69 — the organization's own Discord tab now
-                        // lives on the settings screen, not its own route.
-                        navigate({
-                          kind: 'organization-settings',
-                          organizationId,
-                          tab: 'discord',
-                        })
-                      }
-                    }}
+                    onConnectDiscord={goToConnectDiscord}
                   />
                 </section>
               </>

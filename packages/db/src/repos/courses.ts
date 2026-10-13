@@ -129,7 +129,32 @@ export interface NewCourse {
   // organization by `@bloombot/actions`' `courses.save` (TEN-5) before this
   // ever sees it — this file only resolves, it does not re-check ownership.
   discordServerId?: string | null
+  // TEN-11 — whether this course uses Discord at all; `undefined` means
+  // `true`, matching `courses.discordEnabled`'s own database default
+  // (`schema.ts`). When `false` the course is stored with a null
+  // `discordServerId` whatever the caller sent (`normalizeDiscordServer`
+  // below), and every Discord-specific check in this file is skipped for it.
+  discordEnabled?: boolean
   categories: NewCourseCategory[]
+}
+
+/**
+ * TEN-11 — the one place `discordEnabled` and `discordServerId` are
+ * reconciled before a write. A course that does not use Discord has no
+ * server, so a caller sending `discordEnabled: false` *and* a server id gets
+ * the id dropped (not refused: the web form and MCP callers both treat "off"
+ * as the stronger statement, and a stale id left in a form must not block
+ * turning Discord off). See `docs/DECISIONS.md` D-151.
+ */
+function normalizeDiscordServer(input: {
+  discordEnabled?: boolean
+  discordServerId?: string | null
+}): { discordEnabled: boolean; discordServerId: string | null } {
+  const discordEnabled = input.discordEnabled ?? true
+  return {
+    discordEnabled,
+    discordServerId: discordEnabled ? (input.discordServerId ?? null) : null,
+  }
 }
 
 /**
@@ -337,6 +362,8 @@ function findCourseNameConflict(
       and(
         eq(courses.organizationId, organizationId),
         eq(courses.enabled, true),
+        // TEN-11 — a course with no Discord has no names to collide on.
+        eq(courses.discordEnabled, true),
         // PROJ-2: a course in an archived project does not route, so it is
         // not a candidate for a collision — unless `includeProjectId` names
         // it explicitly (see above).
@@ -738,7 +765,12 @@ export function createCourse(
   const projectResult = loadOwnedProject(organizationId, input.projectId, db)
   if (!projectResult.ok) return projectResult
 
-  const selfConflict = findSelfConflict(input)
+  // TEN-11 — a course with no Discord has no Discord role or category names
+  // to keep distinct, so none of the name checks apply to it.
+  const discord = normalizeDiscordServer(input)
+  const selfConflict = discord.discordEnabled
+    ? findSelfConflict(input)
+    : undefined
   if (selfConflict) return { ok: false, conflict: selfConflict }
 
   return writeTransaction(db, (tx) => {
@@ -746,14 +778,19 @@ export function createCourse(
     // with no SQL constraint backing this check, running it and the write
     // in the same transaction is what narrows the race between two
     // concurrent saves, rather than eliminating it.
-    if (input.enabled && projectResult.project.archivedAt === null) {
+    if (
+      input.enabled &&
+      discord.discordEnabled &&
+      projectResult.project.archivedAt === null
+    ) {
       // TEN-9 — a course may not be enabled while its own server is
       // undecidable (`resolveCourseDiscordServer`'s two refusal reasons).
       // Resolved before the PROJ-3 check so that check can scope its
       // candidates to the same server rather than the whole organization.
+      // TEN-11 — skipped entirely for a course with no Discord.
       const serverResolution = resolveCourseDiscordServer(
         organizationId,
-        input.discordServerId ?? null,
+        discord.discordServerId,
         tx
       )
       if (!serverResolution.ok) {
@@ -793,7 +830,8 @@ export function createCourse(
         conversationScope: input.conversationScope ?? 'course',
         selfEnrolFromDiscord: input.selfEnrolFromDiscord ?? false,
         answerUnenrolled: input.answerUnenrolled ?? true,
-        discordServerId: input.discordServerId ?? null,
+        discordEnabled: discord.discordEnabled,
+        discordServerId: discord.discordServerId,
         createdAt: Date.now(),
       })
       .returning()
@@ -978,6 +1016,9 @@ export interface RoutableCourseRow {
   studentsRole: string | null
   enabled: boolean
   discordServerId: string | null
+  // TEN-11 — `handle-mention.ts` drops a course with no Discord from the
+  // routing candidates, even when its stored category or role names match.
+  discordEnabled: boolean
 }
 
 /**
@@ -1009,6 +1050,7 @@ export function listRoutableCourses(
       studentsRole: courses.studentsRole,
       enabled: courses.enabled,
       discordServerId: courses.discordServerId,
+      discordEnabled: courses.discordEnabled,
     })
     .from(courses)
     .innerJoin(projects, eq(courses.projectId, projects.id))
@@ -1106,14 +1148,22 @@ export function updateCourse(
   const rolesChanged =
     input.adminsRole !== existing.adminsRole ||
     input.studentsRole !== existing.studentsRole
-  const selfConflict = findSelfConflict(input, { checkRoles: rolesChanged })
+  // TEN-11 — no Discord, no name checks (see `createCourse`).
+  const discord = normalizeDiscordServer(input)
+  const selfConflict = discord.discordEnabled
+    ? findSelfConflict(input, { checkRoles: rolesChanged })
+    : undefined
   if (selfConflict) return { ok: false, conflict: selfConflict }
 
   return writeTransaction(db, (tx) => {
-    if (input.enabled && projectResult.project.archivedAt === null) {
+    if (
+      input.enabled &&
+      discord.discordEnabled &&
+      projectResult.project.archivedAt === null
+    ) {
       const serverResolution = resolveCourseDiscordServer(
         organizationId,
-        input.discordServerId ?? null,
+        discord.discordServerId,
         tx
       )
       if (!serverResolution.ok) {
@@ -1141,7 +1191,9 @@ export function updateCourse(
       const couldIntroduceCrossCourseCollision =
         rolesChanged ||
         input.enabled !== existing.enabled ||
-        (input.discordServerId ?? null) !== existing.discordServerId ||
+        // TEN-11 — turning Discord on is moving into a candidate set too.
+        !existing.discordEnabled ||
+        discord.discordServerId !== existing.discordServerId ||
         input.projectId !== existing.projectId
       const conflictFound = findCourseNameConflict(
         organizationId,
@@ -1172,7 +1224,8 @@ export function updateCourse(
         conversationScope: input.conversationScope ?? 'course',
         selfEnrolFromDiscord: input.selfEnrolFromDiscord ?? false,
         answerUnenrolled: input.answerUnenrolled ?? true,
-        discordServerId: input.discordServerId ?? null,
+        discordEnabled: discord.discordEnabled,
+        discordServerId: discord.discordServerId,
       })
       .where(
         and(
@@ -1225,6 +1278,9 @@ export interface CourseSettingsUpdate {
   selfEnrolFromDiscord: boolean
   answerUnenrolled: boolean
   discordServerId: string | null
+  // TEN-11 — required like every other field here; `courses.updateSettings`
+  // resolves an omitted value against what is stored before calling.
+  discordEnabled: boolean
 }
 
 /**
@@ -1302,16 +1358,22 @@ export function updateCourseSettings(
   const rolesChanged =
     input.adminsRole !== existing.adminsRole ||
     input.studentsRole !== existing.studentsRole
-  const selfConflict = findSelfConflict(nameCheckInput, {
-    checkRoles: rolesChanged,
-  })
+  // TEN-11 — no Discord, no name checks (see `createCourse`).
+  const discord = normalizeDiscordServer(input)
+  const selfConflict = discord.discordEnabled
+    ? findSelfConflict(nameCheckInput, { checkRoles: rolesChanged })
+    : undefined
   if (selfConflict) return { ok: false, conflict: selfConflict }
 
   return writeTransaction(db, (tx) => {
-    if (input.enabled && projectResult.project.archivedAt === null) {
+    if (
+      input.enabled &&
+      discord.discordEnabled &&
+      projectResult.project.archivedAt === null
+    ) {
       const serverResolution = resolveCourseDiscordServer(
         organizationId,
-        input.discordServerId ?? null,
+        discord.discordServerId,
         tx
       )
       if (!serverResolution.ok) {
@@ -1330,7 +1392,8 @@ export function updateCourseSettings(
       const couldIntroduceCrossCourseCollision =
         rolesChanged ||
         input.enabled !== existing.enabled ||
-        (input.discordServerId ?? null) !== existing.discordServerId
+        !existing.discordEnabled ||
+        discord.discordServerId !== existing.discordServerId
       const conflictFound = findCourseNameConflict(
         organizationId,
         nameCheckInput,
@@ -1357,7 +1420,8 @@ export function updateCourseSettings(
         conversationScope: input.conversationScope,
         selfEnrolFromDiscord: input.selfEnrolFromDiscord,
         answerUnenrolled: input.answerUnenrolled,
-        discordServerId: input.discordServerId,
+        discordEnabled: discord.discordEnabled,
+        discordServerId: discord.discordServerId,
       })
       .where(
         and(
@@ -1554,6 +1618,9 @@ function checkCategoryNameAgainstCourse(
   candidateCategoryNames: { name: string }[],
   db: Executor
 ): CourseNameConflict | undefined {
+  // TEN-11 — a course with no Discord has no Discord names to check.
+  if (!course.discordEnabled) return undefined
+
   const nameCheckInput: NameCheckInput = {
     adminsRole: course.adminsRole,
     studentsRole: course.studentsRole,
@@ -1996,7 +2063,14 @@ export function enableCourse(
       .where(eq(projects.id, existing.projectId))
       .get()
 
-    if (project && project.deletedAt === null && project.archivedAt === null) {
+    // TEN-11 — a course with no Discord is never refused for a server it
+    // does not use, and has no names to collide on.
+    if (
+      existing.discordEnabled &&
+      project &&
+      project.deletedAt === null &&
+      project.archivedAt === null
+    ) {
       // TEN-9 — the same "may not enable while undecidable" guard
       // `createCourse`/`updateCourse` apply at save time, re-run here for
       // the same reason the PROJ-3 check just below is re-run: a course
@@ -2195,6 +2269,9 @@ export function findProjectUnarchiveConflict(
         eq(courses.organizationId, organizationId),
         eq(courses.projectId, projectId),
         eq(courses.enabled, true),
+        // TEN-11 — a course with no Discord has no server to be refused for
+        // and no names to collide on.
+        eq(courses.discordEnabled, true),
         // DATA-9 — a soft-deleted course is not a candidate for this check
         // either.
         isNull(courses.deletedAt)

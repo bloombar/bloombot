@@ -17,6 +17,10 @@ import { readFileSync } from 'node:fs'
 
 import { expect, test } from '@playwright/test'
 
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 import { navigateTo } from './support/navigate.js'
 
@@ -36,6 +40,7 @@ test('a course is exported to a file and imported back into a project, numbered 
   //    names, a category (CFG-4) and instructions (FILE-4), through the
   //    panel alone.
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -47,6 +52,7 @@ test('a course is exported to a file and imported back into a project, numbered 
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByRole('button', { name: 'Add category' }).click()

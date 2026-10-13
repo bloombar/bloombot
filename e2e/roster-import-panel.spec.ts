@@ -66,6 +66,10 @@ import { createRosterImportHandler } from '../apps/worker/src/handlers/roster-im
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { FakeDiscordGuildServer } from './support/fake-discord-guild-server.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 const RETRY_POLICY: RetryPolicy = { baseDelayMs: 1000, backoffFactor: 2 }
@@ -134,6 +138,7 @@ test('an instructor imports a roster through the panel; an unparseable row is re
     //    one numbered student category (CFG-4) for the roster's own
     //    channels to land in.
     await signIn(page, email)
+    await bindDiscordServer(email)
     await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
     await navigateTo(page, 'Projects')
@@ -146,6 +151,7 @@ test('an instructor imports a roster through the panel; an unparseable row is re
 
     await page.getByRole('button', { name: 'New course' }).click()
     await page.getByLabel('Title').fill(courseTitle)
+    await chooseDiscordServer(page)
     await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
     await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
     await page.getByRole('button', { name: 'Add category' }).click()

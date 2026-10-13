@@ -76,6 +76,10 @@ import { E2E_ATTACHMENT_STORAGE_DIR, E2E_DATABASE_PATH } from './support/env.js'
 import { createFakeLogger } from './support/fake-logger.js'
 import { FakeOpenAiFilesServer } from './support/fake-openai-files-server.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 const RETRY_POLICY: RetryPolicy = { baseDelayMs: 1000, backoffFactor: 2 }
@@ -169,6 +173,7 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
     // 1. Sign in, create a project and a course — the same panel-only path
     //    `course-configuration.spec.ts` already proves for CFG-2..4.
     await signIn(page, email)
+    await bindDiscordServer(email)
     await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
     await navigateTo(page, 'Projects')
@@ -181,6 +186,7 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
 
     await page.getByRole('button', { name: 'New course' }).click()
     await page.getByLabel('Title').fill(courseTitle)
+    await chooseDiscordServer(page)
     await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
     await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
     await page.getByRole('button', { name: 'Save course' }).click()

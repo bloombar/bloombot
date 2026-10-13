@@ -24,6 +24,10 @@ import {
 import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('a person deletes their own history in a course, confirmed by naming the course, and the thread is empty afterward (WEB-73)', async ({
@@ -39,6 +43,7 @@ test('a person deletes their own history in a course, confirmed by naming the co
   // 1. Sign in, then define and enable a course — the same two steps
   //    `chat.spec.ts` drives, reused here rather than duplicated.
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -50,6 +55,7 @@ test('a person deletes their own history in a course, confirmed by naming the co
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()

@@ -76,6 +76,32 @@ async function runScaffold(
   )
 }
 
+/** TEN-11 — turns Discord off for a seeded course through the real repo, leaving everything else as it was. */
+function turnDiscordOff(organizationId: string, courseId: string): void {
+  const course = courses.getCourse(organizationId, courseId, testDb.db)
+  if (!course) throw new Error('setup: course missing')
+  const result = courses.updateCourseSettings(
+    organizationId,
+    courseId,
+    {
+      title: course.title,
+      enabled: course.enabled,
+      adminsRole: course.adminsRole,
+      studentsRole: course.studentsRole,
+      model: course.model,
+      vectorStoreId: course.vectorStoreId,
+      maxRequestsPerDay: course.maxRequestsPerDay,
+      conversationScope: course.conversationScope,
+      selfEnrolFromDiscord: course.selfEnrolFromDiscord,
+      answerUnenrolled: course.answerUnenrolled,
+      discordServerId: null,
+      discordEnabled: false,
+    },
+    testDb.db
+  )
+  if (!result?.ok) throw new Error('setup: could not turn Discord off')
+}
+
 describe('discordServers.scaffold handler', () => {
   // SRV-6: a course with a named-channels category and a bare category
   // produces exactly those categories and channels in the fake, with the
@@ -1586,5 +1612,22 @@ describe('discordServers.scaffold handler', () => {
         runScaffold(seeded.organizationId, seeded.courseId)
       ).rejects.toThrow(/more than one active Discord server/)
     })
+  })
+  // TEN-11 — a course that uses no Discord has no guild to build in. The job
+  // is refused with a reason that names the cause, and Discord is never
+  // called. Fails without the handler's own check: the course's null server
+  // would otherwise fall back to the organization's one binding and build.
+  it('refuses a course that uses no Discord, without calling Discord', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    turnDiscordOff(seeded.organizationId, seeded.courseId)
+
+    await expect(
+      runScaffold(seeded.organizationId, seeded.courseId)
+    ).rejects.toThrow(/uses no Discord/)
+    expect(discordServer.requests).toHaveLength(0)
   })
 })

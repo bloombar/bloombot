@@ -21,6 +21,10 @@ import { randomUUID } from 'node:crypto'
 
 import { expect, test } from '@playwright/test'
 
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
 
@@ -32,6 +36,7 @@ test('a same-course category duplicate is flagged inline and never reaches the s
 
   await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
+  await bindDiscordServer(email)
 
   await navigateTo(page, 'Projects')
   await page.getByRole('button', { name: 'New project' }).click()
@@ -61,6 +66,7 @@ test('a same-course category duplicate is flagged inline and never reaches the s
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(`Web Design — ${suffix}`)
+  await chooseDiscordServer(page)
   await page.getByRole('button', { name: 'Add category' }).click()
   await page.getByRole('button', { name: 'Add category' }).click()
   const categoryInputs = page.getByLabel('Category name')
@@ -111,6 +117,7 @@ test('a category matching another course only by case/spelling is refused by the
 
   await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
+  await bindDiscordServer(email)
 
   await navigateTo(page, 'Projects')
   await page.getByRole('button', { name: 'New project' }).click()
@@ -127,6 +134,7 @@ test('a category matching another course only by case/spelling is refused by the
   // leave the second course's save going through uncontested.
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(firstCourseTitle)
+  await chooseDiscordServer(page)
   await page.getByRole('button', { name: 'Add category' }).click()
   await page.getByLabel('Category name').fill(sharedCategoryName)
   await page.getByLabel('Enabled').check()
@@ -138,6 +146,7 @@ test('a category matching another course only by case/spelling is refused by the
   await page.getByRole('button', { name: projectName, exact: true }).click()
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(secondCourseTitle)
+  await chooseDiscordServer(page)
   await page.getByRole('button', { name: 'Add category' }).click()
   // Differs only by case and surrounding whitespace from the first course's
   // own category — this form's own client-side check only ever compares

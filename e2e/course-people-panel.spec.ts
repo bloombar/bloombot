@@ -41,6 +41,10 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { completeSignIn, signIn } from './support/sign-in.js'
 
 test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL-9)', async ({
@@ -56,6 +60,7 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   // 1. Sign in and define a course — the same panel-only path
   //    `join-links-panel.spec.ts` already establishes.
   await signIn(page, ownerEmail)
+  await bindDiscordServer(ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -68,6 +73,7 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()
@@ -285,6 +291,7 @@ test('clicking a person’s name in the People panel opens their transcript, alr
 
   // 1. Sign in and define an enabled course.
   await signIn(page, ownerEmail)
+  await bindDiscordServer(ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -296,6 +303,7 @@ test('clicking a person’s name in the People panel opens their transcript, alr
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()

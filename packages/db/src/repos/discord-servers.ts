@@ -139,6 +139,9 @@ function backfillNullServerCoursesOnNewSecondBinding(
     .where(
       and(
         eq(courses.organizationId, organizationId),
+        // TEN-11 — a course with no Discord never meant "the previous sole
+        // server"; pinning it would quietly turn Discord back on for it.
+        eq(courses.discordEnabled, true),
         isNull(courses.discordServerId)
       )
     )

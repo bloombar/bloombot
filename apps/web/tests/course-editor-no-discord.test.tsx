@@ -1,0 +1,334 @@
+/**
+ * `pages/CourseEditor.tsx` (TEN-11, WEB-80): the Discord server selector is
+ * always shown, leads the Discord settings, offers "No Discord", and every
+ * other Discord-specific control is shown but disabled while no server is
+ * selected. A new course starts with no Discord.
+ */
+
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import type {
+  Course,
+  DiscordServerBindingSummary,
+  Project,
+} from '../src/api/types.js'
+import { CourseEditor } from '../src/pages/CourseEditor.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
+
+const {
+  getCourse,
+  saveCourse,
+  listCourseAttachments,
+  listCourseInstructionRevisions,
+  listCourseJoinLinks,
+  listCourseWebSources,
+  listCourseEnrolments,
+  listDiscordServers,
+} = vi.hoisted(() => ({
+  getCourse: vi.fn(),
+  saveCourse: vi.fn(),
+  listCourseAttachments: vi.fn(),
+  listCourseInstructionRevisions: vi.fn(),
+  listCourseJoinLinks: vi.fn(),
+  listCourseWebSources: vi.fn(),
+  listCourseEnrolments: vi.fn(),
+  listDiscordServers: vi.fn(),
+}))
+
+vi.mock('../src/api/client.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/api/client.js')>(
+    '../src/api/client.js'
+  )
+  return {
+    ...actual,
+    getCourse,
+    saveCourse,
+    listCourseAttachments,
+    listCourseInstructionRevisions,
+    listCourseJoinLinks,
+    listCourseWebSources,
+    listCourseEnrolments,
+    listDiscordServers,
+  }
+})
+
+const BINDING: DiscordServerBindingSummary = {
+  serverId: 'guild-a',
+  organizationId: 'org-1',
+  installedByAccountId: 'account-1',
+  installedAt: 0,
+  removedAt: null,
+  serverName: 'CS 101',
+}
+
+beforeEach(() => {
+  listCourseAttachments.mockResolvedValue([])
+  listCourseInstructionRevisions.mockResolvedValue([])
+  listCourseJoinLinks.mockResolvedValue([])
+  listCourseWebSources.mockResolvedValue([])
+  listCourseEnrolments.mockResolvedValue([])
+  listDiscordServers.mockResolvedValue([BINDING])
+})
+
+afterEach(() => {
+  vi.resetAllMocks()
+})
+
+const PROJECT: Project = {
+  id: 'project-1',
+  organizationId: 'org-1',
+  name: 'Fall 2026',
+  archivedAt: null,
+  createdAt: 0,
+}
+
+const COURSE: Course = {
+  id: 'course-1',
+  organizationId: 'org-1',
+  projectId: 'project-1',
+  title: 'Web Design',
+  enabled: true,
+  adminsRole: 'admins-wd',
+  studentsRole: 'students-wd',
+  promptId: null,
+  instructions: null,
+  model: null,
+  vectorStoreId: null,
+  maxRequestsPerDay: null,
+  conversationScope: 'course',
+  selfEnrolFromDiscord: false,
+  answerUnenrolled: true,
+  discordServerId: null,
+  discordEnabled: false,
+  createdAt: 0,
+  aiApprovedAt: 1000,
+  categories: [
+    {
+      id: 'cat-1',
+      name: 'Web Design - GLOBAL',
+      channels: [{ id: 'chan-1', name: 'announcements', adminsOnly: false }],
+    },
+  ],
+}
+
+function renderExisting() {
+  return renderWithModal(
+    <CourseEditor
+      navigate={vi.fn()}
+      organizationId="org-1"
+      project={PROJECT}
+      courseId="course-1"
+      tab="discord"
+      onSaved={vi.fn()}
+      onOpenChat={vi.fn()}
+      onCancel={vi.fn()}
+    />
+  )
+}
+
+function renderNew() {
+  return renderWithModal(
+    <CourseEditor
+      navigate={vi.fn()}
+      organizationId="org-1"
+      project={PROJECT}
+      courseId={undefined}
+      onSaved={vi.fn()}
+      onOpenChat={vi.fn()}
+      onCancel={vi.fn()}
+    />
+  )
+}
+
+/** Every Discord-specific control the brief names, found by its accessible name. */
+function discordControls() {
+  return {
+    adminsRole: screen.getByLabelText('Admins role'),
+    studentsRole: screen.getByLabelText('Students role'),
+    categoryName: screen.getByLabelText('Category name'),
+    addCategory: screen.getByRole('button', { name: 'Add category' }),
+    addChannel: screen.getByRole('button', { name: 'Add channel' }),
+    scaffold: screen.getByRole('button', { name: 'Create Discord channels' }),
+  }
+}
+
+describe('CourseEditor Discord tab with a course that uses no Discord (TEN-11, WEB-80)', () => {
+  it('leads the tab with the server selector, above the intro copy, roles and categories', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    renderExisting()
+
+    const select = await screen.findByLabelText('Discord server')
+    const panel = screen.getByRole('tabpanel', { name: 'Discord' })
+    const intro = within(panel).getByText(/A message reaches this course/)
+    const roles = within(panel).getByLabelText('Admins role')
+    const position = (a: Element, b: Element) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING
+    expect(position(select, intro)).toBeTruthy()
+    expect(position(select, roles)).toBeTruthy()
+    expect(select).toHaveValue('none')
+  })
+
+  it('disables every Discord-specific control while "No Discord" is selected, keeping them rendered', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    renderExisting()
+    await screen.findByLabelText('Discord server')
+
+    for (const control of Object.values(discordControls())) {
+      expect(control).toBeDisabled()
+    }
+  })
+
+  it('enables them once a server is chosen, and sends both the flag and the server', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue({
+      ...COURSE,
+      discordEnabled: true,
+      discordServerId: 'guild-a',
+    })
+    renderExisting()
+    const select = await screen.findByLabelText('Discord server')
+    await screen.findByRole('option', { name: 'CS 101' })
+
+    fireEvent.change(select, { target: { value: 'guild-a' } })
+
+    for (const control of Object.values(discordControls())) {
+      expect(control).toBeEnabled()
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({
+          discordEnabled: true,
+          discordServerId: 'guild-a',
+        })
+      )
+    )
+  })
+
+  // The self-enrolment checkbox lives on the General tab for an existing
+  // course; it waits for a server like the Discord tab's own controls.
+  it('disables the self-enrolment checkbox on the General tab while no server is selected, and enables it with one', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    renderExisting()
+    const select = await screen.findByLabelText('Discord server')
+    await screen.findByRole('option', { name: 'CS 101' })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    const checkbox = screen.getByLabelText(
+      'Students can enrol themselves by messaging this course'
+    )
+    expect(checkbox).toBeDisabled()
+
+    fireEvent.change(select, { target: { value: 'guild-a' } })
+    expect(checkbox).toBeEnabled()
+  })
+
+  it('names the selected server in the channels copy', async () => {
+    getCourse.mockResolvedValue({
+      ...COURSE,
+      discordEnabled: true,
+      discordServerId: 'guild-a',
+    })
+    renderExisting()
+    await screen.findByLabelText('Discord server')
+    await screen.findByRole('option', { name: 'CS 101' })
+
+    expect(
+      screen.getByText(/in the Discord server "CS 101"/)
+    ).toBeInTheDocument()
+  })
+
+  it('disables the controls for the legacy undecidable case (Discord on, no server, two bindings) and offers the placeholder', async () => {
+    listDiscordServers.mockResolvedValue([
+      BINDING,
+      { ...BINDING, serverId: 'guild-b', serverName: null },
+    ])
+    getCourse.mockResolvedValue({ ...COURSE, discordEnabled: true })
+    renderExisting()
+    const select = await screen.findByLabelText('Discord server')
+    await screen.findByRole('option', { name: 'guild-b' })
+
+    expect(
+      within(select).getByRole('option', { name: 'Choose a server…' })
+    ).toBeDisabled()
+    expect(discordControls().adminsRole).toBeDisabled()
+  })
+
+  it('shows a legacy single-binding null course as using that server, with its controls enabled', async () => {
+    getCourse.mockResolvedValue({ ...COURSE, discordEnabled: true })
+    renderExisting()
+    const select = await screen.findByLabelText('Discord server')
+
+    await waitFor(() => expect(select).toHaveValue('guild-a'))
+    expect(discordControls().adminsRole).toBeEnabled()
+  })
+
+  it('choosing "No Discord" sends discordEnabled false and a null server, and keeps the stored roles', async () => {
+    getCourse.mockResolvedValue({
+      ...COURSE,
+      discordEnabled: true,
+      discordServerId: 'guild-a',
+    })
+    saveCourse.mockResolvedValue(COURSE)
+    renderExisting()
+    const select = await screen.findByLabelText('Discord server')
+    await waitFor(() => expect(select).toHaveValue('guild-a'))
+
+    fireEvent.change(select, { target: { value: 'none' } })
+    expect(screen.getByLabelText('Admins role')).toHaveValue('admins-wd')
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({
+          discordEnabled: false,
+          discordServerId: null,
+          adminsRole: 'admins-wd',
+        })
+      )
+    )
+  })
+})
+
+describe('CourseEditor new course (TEN-11, WEB-80)', () => {
+  it('starts with No Discord, the selector leading the routing section, and the dependent controls disabled', async () => {
+    renderNew()
+
+    const select = await screen.findByLabelText('Discord server')
+    expect(select).toHaveValue('none')
+    const section = screen.getByRole('region', {
+      name: 'What this course routes on',
+    })
+    expect(within(section).getByLabelText('Discord server')).toBe(select)
+    expect(screen.getByLabelText('Admins role')).toBeDisabled()
+    expect(screen.getByLabelText('Students role')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add category' })).toBeDisabled()
+    expect(
+      screen.getByLabelText(
+        'Students can enrol themselves by messaging this course'
+      )
+    ).toBeDisabled()
+  })
+
+  it('saves with discordEnabled false unless a server is chosen', async () => {
+    saveCourse.mockResolvedValue(COURSE)
+    renderNew()
+    await screen.findByLabelText('Discord server')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() => expect(saveCourse).toHaveBeenCalled())
+    const [, sent] = saveCourse.mock.calls[0] as [
+      string,
+      { discordEnabled?: boolean; discordServerId?: string | null },
+    ]
+    expect(sent.discordEnabled).toBe(false)
+    expect(sent).not.toHaveProperty('discordServerId')
+  })
+})

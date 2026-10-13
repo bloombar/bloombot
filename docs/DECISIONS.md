@@ -14728,3 +14728,8 @@ now carries an explicit `discord_enabled` flag (migration `0040_rapid_baron_stru
   deliberately never merges or links people on an address match (PPL-4; a join-link redemption refuses on one), so a
   person created from a roster with no identity could not later be claimed by that student's web sign-in. Needs its own
   slice.
+
+- WEB-81 reverses WEB-80's disabling of the self-enrolment checkbox. The same
+  setting enrols instructors and assistants on their first ask through web chat
+  and MCP (ENRL-16), so it still matters with no Discord. The checkbox is
+  always editable; only its label and help text follow the selected server.

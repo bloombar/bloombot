@@ -1,5 +1,5 @@
 /**
- * `pages/CourseEditor.tsx` (TEN-11, WEB-80): the Discord server selector is
+ * `pages/CourseEditor.tsx` (TEN-11, WEB-80, WEB-81): the Discord server selector is
  * always shown, leads the Discord settings, offers "No Discord", and every
  * other Discord-specific control is shown but disabled while no server is
  * selected. A new course starts with no Discord.
@@ -213,22 +213,52 @@ describe('CourseEditor Discord tab with a course that uses no Discord (TEN-11, W
     )
   })
 
-  // The self-enrolment checkbox lives on the General tab for an existing
-  // course; it waits for a server like the Discord tab's own controls.
-  it('disables the self-enrolment checkbox on the General tab while no server is selected, and enables it with one', async () => {
+  // WEB-81 — the self-enrolment checkbox lives on the General tab for an
+  // existing course and stays editable without Discord; only its wording
+  // follows the selected server.
+  it('keeps the self-enrolment checkbox enabled with No Discord, with the staff wording, and switches wording once a server is chosen', async () => {
     getCourse.mockResolvedValue(COURSE)
     renderExisting()
     const select = await screen.findByLabelText('Discord server')
     await screen.findByRole('option', { name: 'CS 101' })
 
     fireEvent.click(screen.getByRole('tab', { name: 'General' }))
-    const checkbox = screen.getByLabelText(
-      'Students can enrol themselves by messaging this course'
-    )
-    expect(checkbox).toBeDisabled()
+    expect(
+      screen.getByLabelText('Enrol staff who ask this course')
+    ).toBeEnabled()
+    expect(screen.getByText(/Without Discord this applies only/)).toBeVisible()
 
     fireEvent.change(select, { target: { value: 'guild-a' } })
-    expect(checkbox).toBeEnabled()
+    expect(
+      screen.getByLabelText('Enrol people who message this course')
+    ).toBeEnabled()
+    expect(
+      screen.getByText(/Anyone who messages this course on Discord/)
+    ).toBeVisible()
+    expect(
+      screen.queryByLabelText('Enrol staff who ask this course')
+    ).not.toBeInTheDocument()
+  })
+
+  it('saves selfEnrolFromDiscord true after ticking the box with No Discord', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+    renderExisting()
+    await screen.findByLabelText('Discord server')
+    await screen.findByRole('option', { name: 'CS 101' })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    fireEvent.click(screen.getByLabelText('Enrol staff who ask this course'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({
+          selfEnrolFromDiscord: true,
+        })
+      )
+    )
   })
 
   it('names the selected server in the channels copy', async () => {
@@ -386,11 +416,15 @@ describe('CourseEditor new course (TEN-11, WEB-80)', () => {
     expect(screen.getByLabelText('Admins role')).toBeDisabled()
     expect(screen.getByLabelText('Students role')).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Add category' })).toBeDisabled()
+    // WEB-81 — not a Discord-only setting, so it stays editable.
     expect(
-      screen.getByLabelText(
-        'Students can enrol themselves by messaging this course'
-      )
-    ).toBeDisabled()
+      screen.getByLabelText('Enrol staff who ask this course')
+    ).toBeEnabled()
+
+    fireEvent.change(select, { target: { value: 'guild-a' } })
+    expect(
+      screen.getByLabelText('Enrol people who message this course')
+    ).toBeEnabled()
   })
 
   it('saves with discordEnabled false unless a server is chosen', async () => {

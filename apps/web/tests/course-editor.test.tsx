@@ -212,9 +212,7 @@ describe('CourseEditor (WEB-8)', () => {
       )
     ).toBeInTheDocument()
     expect(
-      screen.getByText(
-        'Students who message the bot will be added to the course roster.'
-      )
+      screen.getByText(/Without Discord this applies only to instructors/)
     ).toBeInTheDocument()
     expect(
       screen.getByText('Respond to messages from unenrolled students.')
@@ -665,9 +663,7 @@ describe('CourseEditor self-enrolment settings (ENRL-13/ENRL-14)', () => {
     await screen.findByDisplayValue('Web Design')
 
     expect(
-      screen.getByLabelText(
-        'Students can enrol themselves by messaging this course'
-      )
+      screen.getByLabelText('Enrol people who message this course')
     ).toBeChecked()
     expect(
       screen.getByLabelText('Answer students who are not enrolled')
@@ -688,9 +684,7 @@ describe('CourseEditor self-enrolment settings (ENRL-13/ENRL-14)', () => {
     )
 
     expect(
-      screen.getByLabelText(
-        'Students can enrol themselves by messaging this course'
-      )
+      screen.getByLabelText('Enrol staff who ask this course')
     ).not.toBeChecked()
     expect(
       screen.getByLabelText('Answer students who are not enrolled')
@@ -715,9 +709,7 @@ describe('CourseEditor self-enrolment settings (ENRL-13/ENRL-14)', () => {
     await screen.findByDisplayValue('Web Design')
 
     fireEvent.click(
-      screen.getByLabelText(
-        'Students can enrol themselves by messaging this course'
-      )
+      screen.getByLabelText('Enrol people who message this course')
     )
     fireEvent.click(
       screen.getByLabelText('Answer students who are not enrolled')

@@ -1812,6 +1812,63 @@ export const membershipInvitations = sqliteTable(
   ]
 )
 
+// ROST-21 — an invitation to a course for an email address, made by a roster
+// import of a course without Discord (TEN-11). It is not a person: it holds no
+// conversations or allowance, only the address and the name the roster gave.
+// An account that has proven the address accepts it (`repos/course-invitations.ts
+// #claimInvitationsForAccount`), which enrols that account's own person.
+// One open invitation per (course, email); accepting or removing one frees the
+// slot. A hard-deleted course or organization deletes its invitations.
+export const COURSE_INVITATION_OUTCOMES = [
+  'enrolled',
+  'already_enrolled',
+  'refused_ended',
+] as const
+export type CourseInvitationOutcome =
+  (typeof COURSE_INVITATION_OUTCOMES)[number]
+
+export const courseInvitations = sqliteTable(
+  'course_invitations',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    // Trimmed and lower-cased by the repo, the same convention `accounts.email`
+    // uses, so it matches the account that proved it.
+    email: text('email').notNull(),
+    firstName: text('first_name'),
+    lastName: text('last_name'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    acceptedAt: integer('accepted_at'),
+    acceptedPersonId: text('accepted_person_id').references(() => people.id),
+    // What accepting did; null until accepted.
+    outcome: text('outcome', { enum: COURSE_INVITATION_OUTCOMES }),
+    revokedAt: integer('revoked_at'),
+    revokedByAccountId: text('revoked_by_account_id').references(
+      () => accounts.id
+    ),
+  },
+  (table) => [
+    // At most one open (neither accepted nor removed) invitation per
+    // (course, email): a re-import updates it instead of duplicating it.
+    uniqueIndex('course_invitations_course_email_open_unique')
+      .on(table.courseId, table.email)
+      .where(sql`${table.acceptedAt} is null and ${table.revokedAt} is null`),
+    // What the sign-in claim looks invitations up by.
+    index('course_invitations_email_idx').on(table.email),
+    index('course_invitations_organization_id_idx').on(table.organizationId),
+    check(
+      'course_invitations_outcome_check',
+      sql`${table.outcome} is null or ${table.outcome} in ('enrolled', 'already_enrolled', 'refused_ended')`
+    ),
+  ]
+)
+
 // FILE-6/MDL-9 — a course's own websites: named by an instructor alongside
 // its uploaded knowledge files, and turned by `@bloombot/openai`'s adapter
 // into a `web_search` tool restricted to exactly this list of domains

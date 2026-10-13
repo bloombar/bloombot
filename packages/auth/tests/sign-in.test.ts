@@ -9,7 +9,16 @@ import { spawn } from 'node:child_process'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { accounts, organizations, people, schema } from '@bloombot/db'
+import {
+  accounts,
+  courseInvitations,
+  courses,
+  enrolments,
+  organizations,
+  people,
+  projects,
+  schema,
+} from '@bloombot/db'
 
 import { RecordingEmailSender } from '../src/email.js'
 import type { GoogleIdentity } from '../src/link.js'
@@ -1119,5 +1128,149 @@ describe('ensureWebPersonForAccount (LINK-6/7/8)', () => {
     )
 
     expect(personA.id).not.toBe(personB.id)
+  })
+})
+
+// ROST-21: signing in with a proven address accepts the roster invitations
+// addressed to it.
+describe('sign-in accepts roster invitations (ROST-21)', () => {
+  /** A course without Discord in an organization of its own, invited `email`. */
+  function seedInvitation(email: string) {
+    const orgId = crypto.randomUUID()
+    organizations.createOrganization(
+      orgId,
+      { name: 'Teaching org', isPersonal: false },
+      testDb.db
+    )
+    const project = projects.createProject(orgId, { name: 'Fall' }, testDb.db)
+    const saved = courses.createCourse(
+      orgId,
+      {
+        projectId: project.id,
+        title: 'Web',
+        enabled: true,
+        adminsRole: null,
+        studentsRole: null,
+        categories: [],
+        discordEnabled: false,
+      },
+      testDb.db
+    )
+    if (!saved || !saved.ok) throw new Error('course not created')
+    courseInvitations.upsertInvitation(
+      orgId,
+      { courseId: saved.course.id, email },
+      testDb.db
+    )
+    return { orgId, courseId: saved.course.id }
+  }
+
+  function enrolledVia(orgId: string, courseId: string, accountId: string) {
+    const person = people.resolveIdentity(
+      orgId,
+      { surface: 'web', externalId: accountId },
+      testDb.db
+    )
+    return person
+      ? enrolments.getActiveEnrolment(orgId, courseId, person.id, testDb.db)
+      : undefined
+  }
+
+  it('a magic-link sign-in of a new account accepts the invitation', () => {
+    testDb = createTestDatabase()
+    const { orgId, courseId } = seedInvitation('ada@example.edu')
+    const { token } = issueSignInToken('ada@example.edu', testDb.db)
+
+    const result = redeemSignInLink(token, testDb.db)
+
+    expect(result?.createdAccount).toBe(true)
+    expect(enrolledVia(orgId, courseId, result!.account.id)?.source).toBe(
+      'roster'
+    )
+  })
+
+  it('a magic-link sign-in of a returning account accepts an invitation made after it first signed in', () => {
+    testDb = createTestDatabase()
+    const first = redeemSignInLink(
+      issueSignInToken('ada@example.edu', testDb.db).token,
+      testDb.db
+    )
+    const { orgId, courseId } = seedInvitation('ada@example.edu')
+    expect(enrolledVia(orgId, courseId, first!.account.id)).toBeUndefined()
+
+    const again = redeemSignInLink(
+      issueSignInToken('ada@example.edu', testDb.db).token,
+      testDb.db
+    )
+
+    expect(again?.createdAccount).toBe(false)
+    expect(enrolledVia(orgId, courseId, again!.account.id)?.source).toBe(
+      'roster'
+    )
+  })
+
+  it('a Google sign-in of a new account accepts the invitation', () => {
+    testDb = createTestDatabase()
+    const { orgId, courseId } = seedInvitation('ada@example.edu')
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({ email: 'ada@example.edu' }),
+      testDb.db
+    )
+
+    expect(result?.createdAccount).toBe(true)
+    expect(enrolledVia(orgId, courseId, result!.account.id)?.source).toBe(
+      'roster'
+    )
+  })
+
+  it('a Google sign-in of a returning account accepts the invitation', () => {
+    testDb = createTestDatabase()
+    redeemSignInLink(
+      issueSignInToken('ada@example.edu', testDb.db).token,
+      testDb.db
+    )
+    const { orgId, courseId } = seedInvitation('ada@example.edu')
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({ email: 'ada@example.edu' }),
+      testDb.db
+    )
+
+    expect(result?.createdAccount).toBe(false)
+    expect(enrolledVia(orgId, courseId, result!.account.id)).toBeDefined()
+  })
+
+  it('an unverified Google identity never reaches the invitation', () => {
+    testDb = createTestDatabase()
+    const { orgId, courseId } = seedInvitation('ada@example.edu')
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({
+        email: 'ada@example.edu',
+        emailVerified: false,
+      }),
+      testDb.db
+    )
+
+    expect(result).toBeUndefined()
+    expect(
+      courseInvitations.listOpenInvitationsForCourse(orgId, courseId, testDb.db)
+    ).toHaveLength(1)
+    expect(testDb.db.select().from(schema.accounts).all()).toHaveLength(0)
+  })
+
+  it('an invitation for another address is left open', () => {
+    testDb = createTestDatabase()
+    const { orgId, courseId } = seedInvitation('someone-else@example.edu')
+
+    redeemSignInLink(
+      issueSignInToken('ada@example.edu', testDb.db).token,
+      testDb.db
+    )
+
+    expect(
+      courseInvitations.listOpenInvitationsForCourse(orgId, courseId, testDb.db)
+    ).toHaveLength(1)
   })
 })

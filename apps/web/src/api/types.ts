@@ -480,6 +480,15 @@ export interface CourseEnrolment {
   reinstatedAt: number | null
 }
 
+/** ROST-21/WEB-82 — one open invitation, as `courseInvitations.list` returns it: a student a roster invited by email who has not signed in yet. Mirrors `packages/actions/src/actions/course-invitations.ts`'s own `CourseInvitationSummary` by hand, the same "this app does not import `@bloombot/actions`" boundary as every other shape here. */
+export interface CourseInvitation {
+  id: string
+  email: string
+  firstName: string | null
+  lastName: string | null
+  createdAt: number
+}
+
 /** WEB-10 — `GET /organizations/:organizationId/chat/courses`'s own entries: just enough to pick one, not `CourseSummary`'s full instructor-facing shape. */
 export interface ChatCourse {
   id: string
@@ -524,6 +533,15 @@ export interface JobStatus {
  */
 export interface RosterImportReport {
   parseErrors: { line: number; message: string }[]
+  /** ROST-21: invitations newly made / refreshed by a roster for a course without Discord. Absent on a report from before they existed. */
+  invitationsCreated?: number
+  invitationsUpdated?: number
+  /** ROST-21: invitations an existing account accepted straight away, and what accepting did. */
+  invitationsAccepted?: {
+    line: number
+    email: string
+    outcome: 'enrolled' | 'already_enrolled' | 'refused_ended'
+  }[]
   peopleCreated: { line: number; discord: string; personId: string }[]
   peopleMerged: { line: number; discord: string; personId: string }[]
   unresolvedHandles: { line: number; discord: string; email: string }[]

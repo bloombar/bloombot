@@ -2465,13 +2465,15 @@ export function CourseEditor({
                     Roster
                   </h2>
                   <p className="text-sm text-neutral-600">
-                    Import a class roster to enrol every student and create
-                    their private Discord channel.
+                    {baseline.discordEnabled
+                      ? 'Import a class roster to enrol every student and create their private Discord channel.'
+                      : 'Import a class roster to invite every student by email. Each is enrolled when they sign in with that address.'}
                   </p>
                   <RosterImport
                     organizationId={organizationId}
                     courseId={courseId}
                     courseTitle={form.title}
+                    discordEnabled={baseline.discordEnabled}
                     {...(viewerAccountId !== undefined
                       ? { viewerAccountId }
                       : {})}

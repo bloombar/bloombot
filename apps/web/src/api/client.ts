@@ -39,6 +39,7 @@ import type {
   Course,
   CourseAttachmentSummary,
   CourseEnrolment,
+  CourseInvitation,
   CourseExportResult,
   CourseInstructionRevisionSummary,
   CourseJoinLinkSummary,
@@ -1011,6 +1012,28 @@ export function reinstateCourseEnrolment(
 ): Promise<{ reinstated: boolean }> {
   return dispatchAction(organizationId, 'enrolments.reinstate', {
     enrolmentId,
+  })
+}
+
+/** WEB-82: a course's open invitations — students a roster invited by email who have not signed in yet (ROST-21). */
+export function listCourseInvitations(
+  organizationId: string,
+  courseId: string
+): Promise<CourseInvitation[]> {
+  return dispatchAction<CourseInvitation[]>(
+    organizationId,
+    'courseInvitations.list',
+    { courseId }
+  )
+}
+
+/** WEB-82: remove an invitation not yet accepted — corrects a mistyped address. */
+export function revokeCourseInvitation(
+  organizationId: string,
+  invitationId: string
+): Promise<{ revoked: boolean }> {
+  return dispatchAction(organizationId, 'courseInvitations.revoke', {
+    invitationId,
   })
 }
 

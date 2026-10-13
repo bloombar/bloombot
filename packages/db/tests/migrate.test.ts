@@ -70,6 +70,7 @@ describe('runMigrations', () => {
       'course_categories',
       'course_channels',
       'course_instruction_revisions',
+      'course_invitations',
       'course_join_links',
       'course_self_enrolment_intents',
       'course_web_sources',
@@ -135,6 +136,22 @@ describe('runMigrations', () => {
       'revoked_at',
       'revoked_by_account_id',
       'role',
+    ])
+    // ROST-21 — an invitation to a course for an email address.
+    expect(schema.course_invitations).toEqual([
+      'accepted_at',
+      'accepted_person_id',
+      'course_id',
+      'created_at',
+      'email',
+      'first_name',
+      'id',
+      'last_name',
+      'organization_id',
+      'outcome',
+      'revoked_at',
+      'revoked_by_account_id',
+      'updated_at',
     ])
     // ENRL-12 — `secret_ciphertext`/`secret_nonce`/`secret_auth_tag` added by
     // this slice, all three nullable together (this schema's own doc

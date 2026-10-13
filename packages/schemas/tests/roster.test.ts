@@ -218,4 +218,56 @@ describe('parseRosterCsv', () => {
       },
     ])
   })
+
+  // ROST-21: a course without Discord has no handle column to ask for.
+  describe('with the Discord column ignored', () => {
+    const options = { discord: 'ignored' } as const
+
+    it('accepts a file with no Discord header', () => {
+      const csv = [
+        'First,Last,Email,GitHub',
+        'Ada,Lovelace,ada@example.edu,adal',
+      ].join('\n')
+
+      const result = parseRosterCsv(csv, options)
+
+      expect(result.errors).toEqual([])
+      expect(result.rows.map((r) => r.row.email)).toEqual(['ada@example.edu'])
+      expect(result.rows[0]?.row.discord).toBe('')
+    })
+
+    it('accepts a blank Discord cell', () => {
+      const csv = [HEADER, 'Ada,Lovelace,ada@example.edu,,adal'].join('\n')
+
+      const result = parseRosterCsv(csv, options)
+
+      expect(result.errors).toEqual([])
+      expect(result.rows).toHaveLength(1)
+    })
+
+    it('still requires the other columns and a valid email', () => {
+      const missing = parseRosterCsv('First,Last,GitHub\nA,B,c', options)
+      expect(missing.errors[0]?.message).toContain('Email')
+
+      const bad = parseRosterCsv(
+        [HEADER, 'Ada,Lovelace,not-an-email,,adal'].join('\n'),
+        options
+      )
+      expect(bad.rows).toEqual([])
+      expect(bad.errors).toHaveLength(1)
+    })
+
+    it('leaves the default mode requiring the header and a handle', () => {
+      const noHeader = parseRosterCsv(
+        'First,Last,Email,GitHub\nAda,Lovelace,ada@example.edu,adal'
+      )
+      expect(noHeader.errors[0]?.message).toContain('Discord')
+
+      const blank = parseRosterCsv(
+        [HEADER, 'Ada,Lovelace,ada@example.edu,,adal'].join('\n')
+      )
+      expect(blank.rows).toEqual([])
+      expect(blank.errors).toHaveLength(1)
+    })
+  })
 })

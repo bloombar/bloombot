@@ -10,20 +10,27 @@
  */
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
-import type { CourseEnrolment } from '../src/api/types.js'
+import type { CourseEnrolment, CourseInvitation } from '../src/api/types.js'
 import { CoursePeople } from '../src/components/CoursePeople.js'
 import { useNavigationGuard } from '../src/hooks/navigation-guard.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
-const { listCourseEnrolments, endCourseEnrolment, reinstateCourseEnrolment } =
-  vi.hoisted(() => ({
-    listCourseEnrolments: vi.fn(),
-    endCourseEnrolment: vi.fn(),
-    reinstateCourseEnrolment: vi.fn(),
-  }))
+const {
+  listCourseEnrolments,
+  endCourseEnrolment,
+  reinstateCourseEnrolment,
+  listCourseInvitations,
+  revokeCourseInvitation,
+} = vi.hoisted(() => ({
+  listCourseEnrolments: vi.fn(),
+  endCourseEnrolment: vi.fn(),
+  reinstateCourseEnrolment: vi.fn(),
+  listCourseInvitations: vi.fn(),
+  revokeCourseInvitation: vi.fn(),
+}))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
@@ -34,8 +41,28 @@ vi.mock('../src/api/client.js', async () => {
     listCourseEnrolments,
     endCourseEnrolment,
     reinstateCourseEnrolment,
+    listCourseInvitations,
+    revokeCourseInvitation,
   }
 })
+
+// WEB-82 — no invitations unless a test says otherwise.
+beforeEach(() => {
+  listCourseInvitations.mockResolvedValue([])
+})
+
+function invitation(
+  overrides: Partial<CourseInvitation> = {}
+): CourseInvitation {
+  return {
+    id: 'invitation-1',
+    email: 'grace@example.edu',
+    firstName: 'Grace',
+    lastName: 'Hopper',
+    createdAt: Date.now(),
+    ...overrides,
+  }
+}
 
 function entry(overrides: Partial<CourseEnrolment> = {}): CourseEnrolment {
   return {
@@ -666,5 +693,116 @@ describe('CoursePeople (WEB-22)', () => {
         personId: 'person-1',
       })
     })
+  })
+})
+
+// WEB-82 — students a roster invited by email who have not signed in yet.
+describe('CoursePeople — invitations (WEB-82)', () => {
+  it('shows no "Invited" section when nobody is invited', async () => {
+    listCourseEnrolments.mockResolvedValue([])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Nobody is enrolled yet.')
+    expect(screen.queryByText(/Invited — not signed in yet/)).toBeNull()
+  })
+
+  it('lists each open invitation with its name, address and date', async () => {
+    listCourseEnrolments.mockResolvedValue([])
+    listCourseInvitations.mockResolvedValue([
+      invitation(),
+      invitation({
+        id: 'invitation-2',
+        email: 'noname@example.edu',
+        firstName: null,
+        lastName: null,
+      }),
+    ])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    expect(
+      await screen.findByText('Invited — not signed in yet (2)')
+    ).toBeInTheDocument()
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument()
+    expect(screen.getByText(/Email: grace@example.edu/)).toBeInTheDocument()
+    expect(screen.getAllByText(/Invited: /)).toHaveLength(2)
+    // No name: the address is the heading.
+    expect(screen.getByText('noname@example.edu')).toBeInTheDocument()
+  })
+
+  it('removes an invitation only after confirming, then refreshes the list', async () => {
+    listCourseEnrolments.mockResolvedValue([])
+    listCourseInvitations
+      .mockResolvedValueOnce([invitation()])
+      .mockResolvedValue([])
+    revokeCourseInvitation.mockResolvedValue({ revoked: true })
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Remove the invitation for Grace Hopper',
+      })
+    )
+    // Nothing happens until the confirmation is accepted.
+    expect(revokeCourseInvitation).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Remove invitation' })
+    )
+
+    await waitFor(() =>
+      expect(revokeCourseInvitation).toHaveBeenCalledWith(
+        'org-1',
+        'invitation-1'
+      )
+    )
+    await waitFor(() =>
+      expect(screen.queryByText(/Invited — not signed in yet/)).toBeNull()
+    )
+  })
+
+  it('does not remove the invitation when the confirmation is cancelled', async () => {
+    listCourseEnrolments.mockResolvedValue([])
+    listCourseInvitations.mockResolvedValue([invitation()])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Remove the invitation for Grace Hopper',
+      })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(revokeCourseInvitation).not.toHaveBeenCalled()
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument()
   })
 })

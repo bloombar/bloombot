@@ -15,6 +15,7 @@ import BetterSqlite3 from 'better-sqlite3'
 
 import {
   accounts as accountsRepo,
+  courseInvitations as courseInvitationsRepo,
   memberships as membershipsRepo,
   organizations as organizationsRepo,
   people as peopleRepo,
@@ -543,6 +544,11 @@ export function redeemSignInLink(
       healWebPersonForReturningAccount(account.id, tx)
     }
 
+    // ROST-21: the emailed link proved this address, so any roster
+    // invitation addressed to it is accepted now. Never throws and never
+    // blocks sign-in (`claimInvitationsForAccount`'s own doc comment).
+    courseInvitationsRepo.claimInvitationsForAccount(account.id, tx)
+
     const session = createSession(account.id, tx)
     return {
       account,
@@ -617,6 +623,11 @@ export function signInWithGoogle(
     // account may already have one or more connected people (LINK-10) with
     // roster or earlier-Google names to leave alone.
     fillNamesFromGoogleIdentity(identity, account.id, tx)
+
+    // ROST-21: Google asserted this address as verified (an unverified one
+    // was rejected above), so roster invitations for it are accepted now.
+    // After the name fill, so a roster's name (ROST-18) lands last.
+    courseInvitationsRepo.claimInvitationsForAccount(account.id, tx)
 
     const session = createSession(account.id, tx)
     // AUTH-6: Google sign-in never leaves the tab it started in

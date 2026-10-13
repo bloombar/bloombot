@@ -24,16 +24,9 @@ import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
-import { getAccountById } from './accounts.js'
 import * as enrolments from './enrolments.js'
-import {
-  connectIdentity,
-  createPerson,
-  fillPersonNamesFromAccount,
-  findPeopleByEmail,
-  getPerson,
-  resolveIdentity,
-} from './people.js'
+import { getPerson } from './people.js'
+import { findOrCreateWebPersonForAccount } from './web-person.js'
 import { courseJoinLinks } from '../schema.js'
 
 export type CourseJoinLink = typeof courseJoinLinks.$inferSelect
@@ -370,64 +363,16 @@ export function redeemJoinLinkForWebAccount(
     const link = findLiveJoinLinkByHash(secretHash, now, tx)
     if (!link) return undefined
 
-    const identity = { surface: 'web' as const, externalId: accountId }
-    let person = resolveIdentity(link.organizationId, identity, tx)
-    if (!person) {
-      // ENRL-6/ENRL-8 rework — see this function's own doc comment. Only
-      // reachable here, never for an account that already resolved to a
-      // person above: an existing person's own `reviveEnded: false` (via
-      // `enrolViaJoinLink`, below) already protects that pairing directly.
-      const account = getAccountById(accountId, tx)
-      if (account) {
-        const matches = findPeopleByEmail(
-          link.organizationId,
-          account.email,
-          tx
-        )
-        const wasRemoved = matches.some((match) =>
-          enrolments.hasEndedEnrolment(
-            link.organizationId,
-            link.courseId,
-            match.id,
-            tx
-          )
-        )
-        if (wasRemoved) return undefined
-      }
-
-      const created = createPerson(link.organizationId, {}, tx)
-      // `connectIdentity` refuses (`undefined`) on exactly three conditions
-      // (its own doc comment): `personId` foreign or absent, already merged
-      // away, or the identity already belonging to a *different* person —
-      // none can fire here, the same reasoning
-      // `createConnectedWebPerson`'s own comment gives for its identical
-      // shape: `link.organizationId` and `created.id` were both just used
-      // or minted in this same transaction, and this exact `identity` cannot
-      // already belong to anyone else, since `resolveIdentity` just found
-      // nobody holding it a moment ago, inside the same transaction.
-      const connected = connectIdentity(
-        link.organizationId,
-        created.id,
-        identity,
-        tx
-      )
-      if (!connected) {
-        throw new Error(
-          `redeemJoinLinkForWebAccount: connectIdentity refused for a person (${created.id}) and organization (${link.organizationId}) this function just created — should be unreachable`
-        )
-      }
-      // AUTH-7 — this account's `web` identity has just been given a brand
-      // new person here, in an organization it had none in yet; fill in
-      // whatever names an earlier Google sign-in already recorded on the
-      // account, the same fill-only call `sign-in.ts#createConnectedWebPerson`/
-      // `#ensureWebPersonForAccount` already make for their own identical
-      // shape.
-      fillPersonNamesFromAccount(link.organizationId, created.id, accountId, tx)
-      // The only later use of `person` is its own `id` (below), which
-      // `connectIdentity` never changes — no re-read needed to see
-      // `created` "as it actually stands" the way `connectedAt` would.
-      person = created
-    }
+    // ENRL-6/ENRL-8 rework — see this function's own doc comment. The shared
+    // helper creates and connects the person, and refuses (`undefined`) when
+    // the account's verified address names somebody already removed here.
+    const person = findOrCreateWebPersonForAccount(
+      link.organizationId,
+      link.courseId,
+      accountId,
+      tx
+    )
+    if (!person) return undefined
 
     // WEB-25 — read before `enrolViaJoinLink`, not after; see this
     // function's own doc comment on why the enrolment it returns cannot

@@ -144,6 +144,9 @@ describe('ACT-6 — machine-readable catalog', () => {
         'courseJoinLinks.revoke',
         // ENRL-12 — added by this slice.
         'courseJoinLinks.reveal',
+        // ROST-21/WEB-82 — added by this slice.
+        'courseInvitations.list',
+        'courseInvitations.revoke',
         // FILE-6/WEB-31 — added by this slice.
         'courseWebSources.add',
         'courseWebSources.list',

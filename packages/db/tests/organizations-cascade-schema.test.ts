@@ -130,6 +130,7 @@ describe('TEN-10 — the tenant cascade covers every table with a real foreign k
     'courseSelfEnrolmentIntents',
     'courseWebSources',
     'membershipInvitations',
+    'courseInvitations',
   ])(
     '%s is covered (previously missing, found during ROST-20 review)',
     (table) => {

@@ -15,6 +15,7 @@ import type { Database, Executor, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
 import {
   accounts,
+  courseInvitations,
   discordInstallStates,
   mcpOauthAccessTokens,
   mcpOauthAuthorizationCodes,
@@ -446,6 +447,12 @@ export function permanentlyDeleteAccount(
       .run()
     tx.delete(membershipInvitations)
       .where(eq(membershipInvitations.createdByAccountId, accountId))
+      .run()
+    // ROST-21 — who removed an invitation is an audit note, nullable, so it
+    // never keeps an account from being removed.
+    tx.update(courseInvitations)
+      .set({ revokedByAccountId: null })
+      .where(eq(courseInvitations.revokedByAccountId, accountId))
       .run()
     tx.delete(sessions).where(eq(sessions.accountId, accountId)).run()
     tx.delete(discordInstallStates)

@@ -1151,7 +1151,11 @@ export function updateCourse(
   // TEN-11 — no Discord, no name checks (see `createCourse`).
   const discord = normalizeDiscordServer(input)
   const selfConflict = discord.discordEnabled
-    ? findSelfConflict(input, { checkRoles: rolesChanged })
+    ? findSelfConflict(input, {
+        // TEN-11 — turning Discord on is the first time these role names
+        // matter, so they are checked in full even if unchanged.
+        checkRoles: rolesChanged || !existing.discordEnabled,
+      })
     : undefined
   if (selfConflict) return { ok: false, conflict: selfConflict }
 
@@ -1361,7 +1365,10 @@ export function updateCourseSettings(
   // TEN-11 — no Discord, no name checks (see `createCourse`).
   const discord = normalizeDiscordServer(input)
   const selfConflict = discord.discordEnabled
-    ? findSelfConflict(nameCheckInput, { checkRoles: rolesChanged })
+    ? findSelfConflict(nameCheckInput, {
+        // TEN-11 — see `updateCourse`: turning Discord on re-checks roles.
+        checkRoles: rolesChanged || !existing.discordEnabled,
+      })
     : undefined
   if (selfConflict) return { ok: false, conflict: selfConflict }
 

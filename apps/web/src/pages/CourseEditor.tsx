@@ -782,6 +782,14 @@ export function CourseEditor({
   const [discordBindings, setDiscordBindings] = useState<
     DiscordServerBindingSummary[]
   >([])
+  // WEB-80 — whether `discordBindings` can be believed yet. `[]` means "none
+  // connected" only once this is `'ready'`; while `'loading'` or after a
+  // `'failed'` read it means "unknown", and nothing below may claim a server
+  // is missing, removed or unconnected on that basis.
+  const [bindingsStatus, setBindingsStatus] = useState<
+    'loading' | 'ready' | 'failed'
+  >('loading')
+  const bindingsReady = bindingsStatus === 'ready'
   const activeBindings = discordBindings.filter(isActiveDiscordBinding)
   // WEB-80 — the selector is always shown (it used to be offered only for
   // 2+ active bindings or a course already naming a server). A course whose
@@ -798,26 +806,41 @@ export function CourseEditor({
   //    placeholder (legacy and undecidable)
   // `selectedServerId` is `undefined` for the first and last of those, and
   // is what every other Discord setting waits for.
-  const selectedServerId: string | undefined = !form.discordEnabled
-    ? undefined
-    : form.discordServerId !== null
-      ? form.discordServerId
-      : activeBindings.length === 1
-        ? activeBindings[0]?.serverId
-        : undefined
+  const resolveServerId = (state: {
+    discordEnabled: boolean
+    discordServerId: string | null
+  }): string | undefined => {
+    if (!state.discordEnabled) return undefined
+    if (state.discordServerId !== null) return state.discordServerId
+    // The single-binding fallback needs the list. While it loads the
+    // answer is unknown, so nothing is chosen yet; if it failed to load,
+    // trust the server-side fallback (TEN-9) rather than lock the course.
+    if (bindingsStatus === 'failed') return 'unknown'
+    return bindingsReady && activeBindings.length === 1
+      ? activeBindings[0]?.serverId
+      : undefined
+  }
+  const selectedServerId = resolveServerId(form)
   const serverChosen = selectedServerId !== undefined
-  const selectedServerName = activeBindings.find(
-    (binding) => binding.serverId === selectedServerId
+  // The scaffold button and its copy follow what is *saved* (the baseline),
+  // not unsaved edits: the job runs against the stored course.
+  const savedServerId = resolveServerId(baseline)
+  const serverEditedSinceSave =
+    form.discordEnabled !== baseline.discordEnabled ||
+    form.discordServerId !== baseline.discordServerId
+  const savedServerName = activeBindings.find(
+    (binding) => binding.serverId === savedServerId
   )?.serverName
   const showServerPlaceholder =
     form.discordEnabled &&
     form.discordServerId === null &&
-    activeBindings.length !== 1
+    !(bindingsReady && activeBindings.length === 1)
   // The course's own id, when it is not one of `activeBindings` — a stale
   // reference the `<select>` below still has to show *as* an option (not
   // silently fall back to showing nothing selected, which would look
   // identical to "cleared" while the form still carries the stale value).
   const staleServerId =
+    bindingsReady &&
     form.discordEnabled &&
     form.discordServerId !== null &&
     !activeBindings.some((binding) => binding.serverId === form.discordServerId)
@@ -826,17 +849,21 @@ export function CourseEditor({
 
   useEffect(() => {
     let stale = false
+    setBindingsStatus('loading')
     listDiscordServers(organizationId).then(
       (bindings) => {
-        if (!stale) setDiscordBindings(bindings)
+        if (stale) return
+        setDiscordBindings(bindings)
+        setBindingsStatus('ready')
       },
       () => {
-        // Best-effort: a failed lookup here just means the selector stays
-        // hidden (`activeBindings.length` reads `0`) — an organization with
-        // exactly one binding, or none, keeps saving exactly as it always
-        // has (TEN-9's own requirement), and a genuinely ambiguous course
-        // still gets refused server-side, with the reason surfaced through
-        // this form's ordinary `ErrorMessage` (`handleSave`'s own catch).
+        if (!stale) setBindingsStatus('failed')
+        // Best-effort: a failed lookup is reported beside the selector
+        // (`bindingsStatus === 'failed'`) rather than treated as "no server
+        // connected". The course keeps saving as it always has (TEN-9's own
+        // requirement), and a genuinely ambiguous course still gets refused
+        // server-side, with the reason surfaced through this form's ordinary
+        // `ErrorMessage` (`handleSave`'s own catch).
       }
     )
     return () => {
@@ -1486,10 +1513,17 @@ export function CourseEditor({
       >
         <select
           aria-label="Discord server"
+          // WEB-80 — nothing to choose between until the list has loaded.
+          disabled={bindingsStatus === 'loading'}
           value={
             !form.discordEnabled
               ? NO_DISCORD_VALUE
-              : (selectedServerId ?? staleServerId ?? '')
+              : form.discordServerId !== null
+                ? form.discordServerId
+                : selectedServerId !== undefined &&
+                    selectedServerId !== 'unknown'
+                  ? selectedServerId
+                  : ''
           }
           onChange={(event) => {
             const chosen = event.target.value
@@ -1507,8 +1541,18 @@ export function CourseEditor({
               choice. */}
           {showServerPlaceholder && (
             <option value="" disabled>
-              Choose a server…
+              {bindingsStatus === 'loading'
+                ? 'Loading servers…'
+                : bindingsStatus === 'failed'
+                  ? 'Servers could not be loaded'
+                  : 'Choose a server…'}
             </option>
+          )}
+          {/* While the list loads (or if it failed) a stored id cannot be
+              matched to a server, so it is shown plainly — never as "no
+              longer active", which we cannot know yet. */}
+          {!bindingsReady && form.discordEnabled && form.discordServerId && (
+            <option value={form.discordServerId}>{form.discordServerId}</option>
           )}
           <option value={NO_DISCORD_VALUE}>
             No Discord (web and AI assistant only)
@@ -1536,7 +1580,13 @@ export function CourseEditor({
       </FormField>
       {/* WEB-80 — with no server connected the only choice is "No Discord";
           say how to get another one. */}
-      {activeBindings.length === 0 && (
+      {bindingsStatus === 'failed' && (
+        <p role="alert" className="text-sm text-danger-700">
+          Could not load this organization&apos;s Discord servers. Reload to try
+          again.
+        </p>
+      )}
+      {bindingsReady && activeBindings.length === 0 && (
         <p className="text-sm text-neutral-600">
           This organization has no Discord server connected yet.{' '}
           <button
@@ -2347,18 +2397,19 @@ export function CourseEditor({
                   <p className="text-sm text-neutral-600">
                     Create this course&apos;s declared categories and channels
                     in{' '}
-                    {selectedServerName !== undefined &&
-                    selectedServerName !== null
-                      ? `the Discord server "${selectedServerName}"`
+                    {savedServerName !== undefined && savedServerName !== null
+                      ? `the Discord server "${savedServerName}"`
                       : 'the Discord server chosen above'}
                     .
                   </p>
                   <ScaffoldButton
                     organizationId={organizationId}
                     courseId={courseId}
-                    // WEB-80 — waits for a server like the other Discord
-                    // settings on this tab.
-                    disabled={!serverChosen}
+                    // WEB-80 — follows the *saved* server, not unsaved
+                    // edits: the job runs against the stored course.
+                    disabled={
+                      savedServerId === undefined || serverEditedSinceSave
+                    }
                     // SRV-6 — `ScaffoldButton` has no route access of
                     // its own; when its own click-time check finds no
                     // active Discord server binding, it confirms and then
@@ -2374,6 +2425,11 @@ export function CourseEditor({
                     // this form.
                     onConnectDiscord={goToConnectDiscord}
                   />
+                  {serverEditedSinceSave && (
+                    <p className="text-sm text-neutral-600">
+                      Save to apply the server change first.
+                    </p>
+                  )}
                 </section>
               </>
             )}

@@ -274,3 +274,37 @@ describe('MCP-2 — the tool surface is chosen, not derived', () => {
     })
   })
 })
+
+// TEN-11 — the scaffold confirmation says plainly when the course uses no
+// Discord, instead of naming a server that will never be built in.
+describe('discordServers.scaffold confirmation text (TEN-11)', () => {
+  const describeTarget = MCP_TOOL_SURFACE.find(
+    (entry) => entry.actionName === 'discordServers.scaffold'
+  )?.describeTarget
+
+  it('names the server for a course that uses Discord', () => {
+    expect(
+      describeTarget?.(
+        {
+          title: 'Web Design',
+          discordServerId: 'guild-1',
+          discordEnabled: true,
+        },
+        {}
+      )
+    ).toContain('Discord server guild-1')
+  })
+
+  it('says the scaffold will be refused for a course that uses no Discord', () => {
+    const text = describeTarget?.(
+      {
+        title: 'Web Design',
+        discordServerId: null,
+        discordEnabled: false,
+      },
+      {}
+    )
+    expect(text).toContain('uses no Discord')
+    expect(text).toContain('Web Design')
+  })
+})

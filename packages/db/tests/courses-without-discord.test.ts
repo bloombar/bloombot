@@ -368,4 +368,238 @@ describe('courses without Discord (TEN-11)', () => {
     )
     expect(result?.ok).toBe(false)
   })
+  // Rework round 1 — guards the review found untested.
+
+  /** A full `CourseSettingsUpdate` from a stored course, overridable. */
+  function settingsFor(
+    course: coursesRepo.Course,
+    overrides: Partial<coursesRepo.CourseSettingsUpdate> = {}
+  ): coursesRepo.CourseSettingsUpdate {
+    return {
+      title: course.title,
+      enabled: course.enabled,
+      adminsRole: course.adminsRole,
+      studentsRole: course.studentsRole,
+      model: null,
+      vectorStoreId: null,
+      maxRequestsPerDay: null,
+      conversationScope: course.conversationScope,
+      selfEnrolFromDiscord: false,
+      answerUnenrolled: true,
+      discordServerId: null,
+      discordEnabled: course.discordEnabled,
+      ...overrides,
+    }
+  }
+
+  it('edits an enabled discord-off course in a two-binding organization without an ambiguity refusal', () => {
+    testDb = createTestDatabase()
+    const { orgId, project, installer } = seed(testDb)
+    bind(testDb, orgId, installer.id, '404040404040404031')
+    bind(testDb, orgId, installer.id, '404040404040404032')
+    const created = ok(
+      courses.createCourse(
+        orgId,
+        input(project.id, { discordEnabled: false }),
+        testDb.db
+      )
+    )
+
+    const viaSave = courses.updateCourse(
+      orgId,
+      created.id,
+      input(project.id, { title: 'Renamed', discordEnabled: false }),
+      testDb.db
+    )
+    expect(viaSave?.ok).toBe(true)
+
+    const viaSettings = courses.updateCourseSettings(
+      orgId,
+      created.id,
+      settingsFor(created, { title: 'Renamed again' }),
+      testDb.db
+    )
+    expect(viaSettings?.ok).toBe(true)
+  })
+
+  it('refuses turning Discord on when the role names clash with a Discord course, even if nothing else changed', () => {
+    testDb = createTestDatabase()
+    const { orgId, project } = seed(testDb)
+    // A uses the roles; B (off) shares them but not the categories.
+    ok(courses.createCourse(orgId, input(project.id), testDb.db))
+    const b = ok(
+      courses.createCourse(
+        orgId,
+        input(project.id, {
+          title: 'B',
+          discordEnabled: false,
+          categories: [{ name: 'B-ONLY', channels: [] }],
+        }),
+        testDb.db
+      )
+    )
+
+    const viaSave = courses.updateCourse(
+      orgId,
+      b.id,
+      input(project.id, {
+        title: 'B',
+        discordEnabled: true,
+        categories: [{ name: 'B-ONLY', channels: [] }],
+      }),
+      testDb.db
+    )
+    expect(viaSave?.ok).toBe(false)
+    if (viaSave && !viaSave.ok) {
+      expect(['adminsRole', 'studentsRole']).toContain(viaSave.conflict.field)
+    }
+
+    const viaSettings = courses.updateCourseSettings(
+      orgId,
+      b.id,
+      settingsFor(b, { discordEnabled: true }),
+      testDb.db
+    )
+    expect(viaSettings?.ok).toBe(false)
+  })
+
+  it('re-checks the within-course role clash when Discord is turned back on', () => {
+    testDb = createTestDatabase()
+    const { orgId, project } = seed(testDb)
+    // Admins "TA" and students "ta" are the same Discord role.
+    const off = ok(
+      courses.createCourse(
+        orgId,
+        input(project.id, {
+          discordEnabled: false,
+          adminsRole: 'TA',
+          studentsRole: 'ta',
+        }),
+        testDb.db
+      )
+    )
+
+    const viaSave = courses.updateCourse(
+      orgId,
+      off.id,
+      input(project.id, {
+        discordEnabled: true,
+        adminsRole: 'TA',
+        studentsRole: 'ta',
+      }),
+      testDb.db
+    )
+    expect(viaSave?.ok).toBe(false)
+
+    const viaSettings = courses.updateCourseSettings(
+      orgId,
+      off.id,
+      settingsFor(off, { discordEnabled: true }),
+      testDb.db
+    )
+    expect(viaSettings?.ok).toBe(false)
+  })
+
+  it('unarchives a project holding an enabled discord-off course in a two-binding organization', () => {
+    testDb = createTestDatabase()
+    const { orgId, project, installer } = seed(testDb)
+    bind(testDb, orgId, installer.id, '404040404040404041')
+    bind(testDb, orgId, installer.id, '404040404040404042')
+    ok(
+      courses.createCourse(
+        orgId,
+        input(project.id, { discordEnabled: false }),
+        testDb.db
+      )
+    )
+    projects.archiveProject(orgId, project.id, testDb.db)
+
+    const result = projects.unarchiveProject(orgId, project.id, testDb.db)
+    expect(result?.ok).toBe(true)
+  })
+
+  it('accepts a category on a discord-off course even when a Discord course already uses that name', () => {
+    testDb = createTestDatabase()
+    const { orgId, project } = seed(testDb)
+    ok(courses.createCourse(orgId, input(project.id), testDb.db))
+    const off = ok(
+      courses.createCourse(
+        orgId,
+        input(project.id, {
+          title: 'Off',
+          adminsRole: 'x',
+          studentsRole: 'y',
+          discordEnabled: false,
+          categories: [],
+        }),
+        testDb.db
+      )
+    )
+
+    const added = courses.addCourseCategory(orgId, off.id, 'GLOBAL', testDb.db)
+    expect(added?.ok).toBe(true)
+  })
+
+  it('accepts duplicate category names within a discord-off course, but not within a Discord one', () => {
+    testDb = createTestDatabase()
+    const { orgId, project } = seed(testDb)
+    const dup = [
+      { name: 'Week 1', channels: [] },
+      { name: 'week 1', channels: [] },
+    ]
+
+    const off = courses.createCourse(
+      orgId,
+      input(project.id, { discordEnabled: false, categories: dup }),
+      testDb.db
+    )
+    expect(off.ok).toBe(true)
+
+    const on = courses.createCourse(
+      orgId,
+      input(project.id, {
+        title: 'On',
+        adminsRole: 'p',
+        studentsRole: 'q',
+        categories: dup,
+      }),
+      testDb.db
+    )
+    expect(on.ok).toBe(false)
+  })
+  it('accepts clashing roles and duplicate categories when updating a discord-off course', () => {
+    testDb = createTestDatabase()
+    const { orgId, project } = seed(testDb)
+    const off = ok(
+      courses.createCourse(
+        orgId,
+        input(project.id, { discordEnabled: false }),
+        testDb.db
+      )
+    )
+
+    const viaSave = courses.updateCourse(
+      orgId,
+      off.id,
+      input(project.id, {
+        discordEnabled: false,
+        adminsRole: 'TA',
+        studentsRole: 'ta',
+        categories: [
+          { name: 'Week 1', channels: [] },
+          { name: 'week 1', channels: [] },
+        ],
+      }),
+      testDb.db
+    )
+    expect(viaSave?.ok).toBe(true)
+
+    const viaSettings = courses.updateCourseSettings(
+      orgId,
+      off.id,
+      settingsFor(off, { adminsRole: 'Staff', studentsRole: 'staff' }),
+      testDb.db
+    )
+    expect(viaSettings?.ok).toBe(true)
+  })
 })

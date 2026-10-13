@@ -129,6 +129,14 @@ test('a course with no Discord is saved and enabled in a two-server organization
   await expect(page.getByLabel('Admins role')).toBeEnabled()
   await expect(page.getByLabel('Students role')).toBeEnabled()
   await expect(page.getByRole('button', { name: 'Add category' })).toBeEnabled()
+  // The channels job runs against the saved course, so it waits for a save.
+  await expect(
+    page.getByRole('button', { name: 'Create Discord channels' })
+  ).toBeDisabled()
+  await expect(
+    page.getByText('Save to apply the server change first.')
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Save course' }).click()
   await expect(
     page.getByRole('button', { name: 'Create Discord channels' })
   ).toBeEnabled()

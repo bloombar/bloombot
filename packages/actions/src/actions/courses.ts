@@ -396,7 +396,9 @@ export const saveCourseAction: Action<
       if (
         !isOwnDiscordServerOrAbsent(
           context.organizationId,
-          input.discordServerId,
+          // TEN-11 — with Discord explicitly off the repo drops the id, so
+          // a stale or foreign one must not block turning Discord off.
+          input.discordEnabled === false ? undefined : input.discordServerId,
           context.db
         )
       ) {
@@ -653,7 +655,9 @@ export const updateSettingsCourseAction: Action<
       if (
         !isOwnDiscordServerOrAbsent(
           context.organizationId,
-          input.discordServerId,
+          // TEN-11 — with Discord explicitly off the repo drops the id, so
+          // a stale or foreign one must not block turning Discord off.
+          input.discordEnabled === false ? undefined : input.discordServerId,
           context.db
         )
       ) {

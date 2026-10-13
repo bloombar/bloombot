@@ -69,10 +69,17 @@ function bindNow(email: string, requestedServerId?: string): string {
     if (!account) throw new Error('bindDiscordServer: account not found')
     const [membership] = memberships.listMembershipsForAccount(account.id, db)
     if (!membership) throw new Error('bindDiscordServer: membership not found')
-    const existing = discordServers
+    const active = discordServers
       .listDiscordServerBindingsForOrganization(membership.organizationId, db)
-      .find((binding) => binding.removedAt === null)
-    if (existing) return existing.serverId
+      .filter((binding) => binding.removedAt === null)
+    // No specific id asked for: any active server will do. A specific id is
+    // honoured: used if already bound, otherwise claimed too.
+    if (requestedServerId === undefined && active[0]) {
+      return active[0].serverId
+    }
+    if (active.some((binding) => binding.serverId === requestedServerId)) {
+      return requestedServerId as string
+    }
     const serverId =
       requestedServerId ?? `e2e-guild-${randomUUID().slice(0, 8)}`
     const claimed = discordServers.claimDiscordServerBinding(

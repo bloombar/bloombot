@@ -4,17 +4,19 @@
  * round trip, and project duplication.
  */
 
-import { accounts, courses, projects } from '@bloombot/db'
+import { accounts, courses, discordServers, projects } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   duplicateProjectAction,
   exportCourseAction,
+  scaffoldDiscordServerAction,
   importCourseAction,
   saveCourseAction,
   updateSettingsCourseAction,
 } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
+import { ActionConflictError } from '../src/errors.js'
 import {
   seedOrganizationWithBoundServer,
   seedOrganizationWithProject,
@@ -254,5 +256,110 @@ describe('course portability and duplication (TEN-11)', () => {
     })
     expect(copies).toHaveLength(1)
     expect(copies[0]?.discordEnabled).toBe(false)
+  })
+})
+
+describe('a stale server id and discordEnabled false (TEN-11)', () => {
+  it('courses.save accepts a removed binding id when Discord is turned off, and drops it', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, serverId } = seedOrganizationWithBoundServer(
+      testDb.db
+    )
+    const project = projects.createProject(
+      organizationId,
+      { name: 'Fall' },
+      testDb.db
+    )
+    discordServers.removeDiscordServerBinding(
+      organizationId,
+      serverId,
+      testDb.db
+    )
+
+    const course = await dispatch(
+      saveCourseAction,
+      saveInput(project.id, {
+        discordEnabled: false,
+        discordServerId: serverId,
+      }),
+      { organizationId, db: testDb.db }
+    )
+
+    expect(course.discordEnabled).toBe(false)
+    expect(course.discordServerId).toBeNull()
+  })
+
+  it('courses.updateSettings accepts a removed binding id when Discord is turned off', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, serverId } = seedOrganizationWithBoundServer(
+      testDb.db
+    )
+    const project = projects.createProject(
+      organizationId,
+      { name: 'Fall' },
+      testDb.db
+    )
+    const created = await dispatch(
+      saveCourseAction,
+      saveInput(project.id, { discordServerId: serverId }),
+      { organizationId, db: testDb.db }
+    )
+    discordServers.removeDiscordServerBinding(
+      organizationId,
+      serverId,
+      testDb.db
+    )
+
+    const updated = await dispatch(
+      updateSettingsCourseAction,
+      { id: created.id, discordEnabled: false, discordServerId: serverId },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(updated.discordEnabled).toBe(false)
+    expect(updated.discordServerId).toBeNull()
+  })
+})
+
+describe('discordServers.scaffold and a course with no Discord (TEN-11)', () => {
+  it('refuses up front instead of queueing a job', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const course = await dispatch(
+      saveCourseAction,
+      saveInput(projectId, { discordEnabled: false }),
+      { organizationId, db: testDb.db }
+    )
+
+    const countJobs = () =>
+      (
+        testDb.db.$client
+          .prepare('select count(*) as n from jobs where kind = ?')
+          .get('discordServers.scaffold') as { n: number }
+      ).n
+    await expect(
+      dispatch(
+        scaffoldDiscordServerAction,
+        { courseId: course.id },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toBeInstanceOf(ActionConflictError)
+    expect(countJobs()).toBe(0)
+  })
+
+  it('still queues a job for a course that uses Discord', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const course = await dispatch(saveCourseAction, saveInput(projectId), {
+      organizationId,
+      db: testDb.db,
+    })
+
+    const result = await dispatch(
+      scaffoldDiscordServerAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db }
+    )
+    expect(result.jobId).toBeTruthy()
   })
 })

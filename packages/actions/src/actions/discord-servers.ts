@@ -25,7 +25,7 @@
 import { courses, discordServers, jobs, organizations } from '@bloombot/db'
 import { z } from 'zod'
 
-import { ActionRefusedError } from '../errors.js'
+import { ActionConflictError, ActionRefusedError } from '../errors.js'
 import type { Action } from '../types.js'
 
 type Organization = ReturnType<typeof organizations.getOrganizationById>
@@ -162,6 +162,14 @@ export const scaffoldDiscordServerAction: Action<
       courses.getCourse(context.organizationId, input.courseId, context.db),
   },
   execute: ({ organizationId, entity, db }) => {
+    // TEN-11 — a course with no Discord has no server to build in; refuse
+    // here rather than queue a job the worker would only fail (it keeps its
+    // own check as a backstop).
+    if (!entity.discordEnabled) {
+      throw new ActionConflictError({
+        message: `Course "${entity.title}" uses no Discord. Choose a Discord server for it before creating channels.`,
+      })
+    }
     const job = jobs.enqueueJob(
       organizationId,
       {

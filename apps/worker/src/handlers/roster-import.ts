@@ -826,6 +826,52 @@ function importRosterRowPerson(
   return { person, member }
 }
 
+/** Parses the CSV and tags each row with its line, the shape both import paths loop over. */
+function parseRosterRows(csvText: string): {
+  rows: RosterRowWithLine[]
+  parseErrors: RosterParseError[]
+} {
+  const { rows, errors } = parseRosterCsv(csvText)
+  return {
+    rows: rows.map(({ line, row }) => ({ line, ...row })),
+    parseErrors: errors,
+  }
+}
+
+/** An all-empty report; the Discord path then fills in its role and category results. */
+function newRosterImportReport(
+  courseId: string,
+  guildId: string | null,
+  parseErrors: RosterParseError[],
+  limitations: string[]
+): RosterImportReport {
+  return {
+    courseId,
+    guildId,
+    parseErrors,
+    peopleCreated: [],
+    peopleMerged: [],
+    rosterFieldsDeclined: [],
+    unresolvedHandles: [],
+    ambiguousHandles: [],
+    channelsCreated: [],
+    channelsAlreadyPresent: [],
+    channelAccessGranted: [],
+    channelAccessGrantFailed: [],
+    channelsNotCreated: [],
+    channelsFailed: [],
+    channelNameDisambiguated: [],
+    channelOwnershipConflicts: [],
+    channelsOrphaned: [],
+    unresolvedRoles: [],
+    rolesCreated: [],
+    categoriesCreated: [],
+    categoriesFailed: [],
+    categoriesPermissionsNotRepaired: [],
+    limitations,
+  }
+}
+
 /** ROST-3: a channel is named after the local part of the student's email address — a stable, recognizable name that does not depend on the student's own (self-reported, frequently wrong) Discord handle. Slugged the same way every other channel name this app creates is (`normalizeChannelName`), so a later `listGuildChannels` match is comparing like with like. */
 function channelNameForEmail(email: string): string {
   const localPart = email.split('@')[0] ?? email
@@ -1349,39 +1395,15 @@ export function createRosterImportHandler(
     // unresolved Discord handle is, merged and enrolled by the same
     // `importRosterRowPerson` the Discord path uses.
     if (!course.discordEnabled) {
-      const { rows: parsedRows, errors: parseErrors } = parseRosterCsv(
-        payload.csvText
-      )
-      const report: RosterImportReport = {
-        courseId: course.id,
-        guildId: null,
-        parseErrors,
-        peopleCreated: [],
-        peopleMerged: [],
-        rosterFieldsDeclined: [],
-        unresolvedHandles: [],
-        ambiguousHandles: [],
-        channelsCreated: [],
-        channelsAlreadyPresent: [],
-        channelAccessGranted: [],
-        channelAccessGrantFailed: [],
-        channelsNotCreated: [],
-        channelsFailed: [],
-        channelNameDisambiguated: [],
-        channelOwnershipConflicts: [],
-        channelsOrphaned: [],
-        unresolvedRoles: [],
-        rolesCreated: [],
-        categoriesCreated: [],
-        categoriesFailed: [],
-        categoriesPermissionsNotRepaired: [],
-        limitations: [NO_DISCORD_LIMITATION],
-      }
-      for (const { line, row } of parsedRows) {
+      const { rows, parseErrors } = parseRosterRows(payload.csvText)
+      const report = newRosterImportReport(course.id, null, parseErrors, [
+        NO_DISCORD_LIMITATION,
+      ])
+      for (const row of rows) {
         importRosterRowPerson(
           context,
           course,
-          { line, ...row },
+          row,
           { kind: 'unresolved' },
           report
         )
@@ -1415,13 +1437,7 @@ export function createRosterImportHandler(
     }
     const guildId = serverResolution.binding.serverId
 
-    const { rows: parsedRows, errors: parseErrors } = parseRosterCsv(
-      payload.csvText
-    )
-    const rows: RosterRowWithLine[] = parsedRows.map(({ line, row }) => ({
-      line,
-      ...row,
-    }))
+    const { rows, parseErrors } = parseRosterRows(payload.csvText)
 
     const [existingChannels, roles, members] = await Promise.all([
       deps.discordRestClient.listGuildChannels(deps.botToken, guildId),
@@ -1796,29 +1812,14 @@ export function createRosterImportHandler(
     }
 
     const report: RosterImportReport = {
-      courseId: course.id,
-      guildId,
-      parseErrors,
-      peopleCreated: [],
-      peopleMerged: [],
-      rosterFieldsDeclined: [],
-      unresolvedHandles: [],
-      ambiguousHandles: [],
-      channelsCreated: [],
-      channelsAlreadyPresent: [],
-      channelAccessGranted: [],
-      channelAccessGrantFailed: [],
-      channelsNotCreated: [],
-      channelsFailed: [],
-      channelNameDisambiguated: [],
-      channelOwnershipConflicts: [],
-      channelsOrphaned: [],
+      ...newRosterImportReport(course.id, guildId, parseErrors, [
+        WELCOME_MESSAGE_NOT_SENT,
+      ]),
       unresolvedRoles,
       rolesCreated,
       categoriesCreated,
       categoriesFailed,
       categoriesPermissionsNotRepaired,
-      limitations: [WELCOME_MESSAGE_NOT_SENT],
     }
 
     // Round 3's "cheap one": every row's own handle resolution, computed

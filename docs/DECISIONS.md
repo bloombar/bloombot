@@ -14712,3 +14712,19 @@ now carries an explicit `discord_enabled` flag (migration `0040_rapid_baron_stru
 - **Consequence for an organization with no server.** An existing Discord-on legacy course in an organization with zero
   active bindings now shows the placeholder and its Discord settings are disabled until the person picks "No Discord" or
   connects a server (the selector offers a link to the organization's Discord tab). That follows WEB-80 as written.
+- **Rework round 1.** Turning Discord on (false to true) re-runs the role self-check and the cross-course checks in full,
+  even when no role name changed. `courses.save` / `courses.updateSettings` skip the server-ownership check when
+  `discordEnabled` is false, so a stale or removed server id cannot block turning Discord off. `discordServers.scaffold`
+  refuses a discord-off course up front (the worker check stays as a backstop). The editor tracks whether the server list
+  is loading, ready or failed: while loading or after a failure it never says "no longer active" or "no server connected",
+  and after a failure a legacy null course stays editable (the server-side TEN-9 fallback still applies). The scaffold
+  button and its copy follow the saved course, not unsaved edits, and show "Save to apply the server change first."
+- **Known limit: legacy-import.** Re-saving a course through the legacy importer resets `discordEnabled` to `true`.
+  Left as is.
+- **Known limit: zero servers.** An organization with no active server, holding a legacy Discord-on course, cannot edit
+  that course's roles or categories until it picks "No Discord" or connects a server (stated above; WEB-80 as written).
+- **Not done: a roster for a web-only course without Discord handles.** The roster still requires a Discord cell, and a
+  person is identified by Discord handle. Matching roster rows by email would be a new identity scheme: the platform
+  deliberately never merges or links people on an address match (PPL-4; a join-link redemption refuses on one), so a
+  person created from a roster with no identity could not later be claimed by that student's web sign-in. Needs its own
+  slice.

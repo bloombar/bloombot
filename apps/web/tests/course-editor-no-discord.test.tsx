@@ -192,9 +192,15 @@ describe('CourseEditor Discord tab with a course that uses no Discord (TEN-11, W
 
     fireEvent.change(select, { target: { value: 'guild-a' } })
 
-    for (const control of Object.values(discordControls())) {
+    const { scaffold, ...others } = discordControls()
+    for (const control of Object.values(others)) {
       expect(control).toBeEnabled()
     }
+    // The scaffold job runs against the saved course, so it waits for a save.
+    expect(scaffold).toBeDisabled()
+    expect(
+      screen.getByText('Save to apply the server change first.')
+    ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
     await waitFor(() =>
       expect(saveCourse).toHaveBeenCalledWith(
@@ -290,6 +296,80 @@ describe('CourseEditor Discord tab with a course that uses no Discord (TEN-11, W
         })
       )
     )
+  })
+})
+
+describe('CourseEditor while the Discord servers load or fail to load (WEB-80)', () => {
+  it('while loading, does not call a stored server "no longer active" or claim none is connected, and locks a legacy null course', async () => {
+    listDiscordServers.mockReturnValue(new Promise(() => {}))
+    getCourse.mockResolvedValue({
+      ...COURSE,
+      discordEnabled: true,
+      discordServerId: 'guild-a',
+    })
+    renderExisting()
+    const select = await screen.findByLabelText('Discord server')
+
+    expect(select).toBeDisabled()
+    expect(select).toHaveValue('guild-a')
+    expect(screen.queryByText(/no longer active/)).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/no Discord server connected yet/)
+    ).not.toBeInTheDocument()
+  })
+
+  it('while loading, a legacy null course shows a loading placeholder, not the undecidable one', async () => {
+    listDiscordServers.mockReturnValue(new Promise(() => {}))
+    getCourse.mockResolvedValue({ ...COURSE, discordEnabled: true })
+    renderExisting()
+    const select = await screen.findByLabelText('Discord server')
+
+    expect(
+      within(select).getByRole('option', { name: 'Loading servers…' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/no Discord server connected yet/)
+    ).not.toBeInTheDocument()
+  })
+
+  it('after a failed load, shows an error, does not mislabel the stored server, and leaves a legacy null course editable', async () => {
+    listDiscordServers.mockRejectedValue(new Error('boom'))
+    getCourse.mockResolvedValue({ ...COURSE, discordEnabled: true })
+    renderExisting()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Could not load this organization/
+    )
+    expect(
+      screen.queryByText(/no Discord server connected yet/)
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/no longer active/)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Admins role')).toBeEnabled()
+  })
+
+  it('scaffold button and copy follow the saved server: unsaved No Discord does not enable or rename it', async () => {
+    getCourse.mockResolvedValue({
+      ...COURSE,
+      discordEnabled: true,
+      discordServerId: 'guild-a',
+    })
+    renderExisting()
+    const select = await screen.findByLabelText('Discord server')
+    await screen.findByRole('option', { name: 'CS 101' })
+    const scaffold = screen.getByRole('button', {
+      name: 'Create Discord channels',
+    })
+    expect(scaffold).toBeEnabled()
+
+    fireEvent.change(select, { target: { value: 'none' } })
+
+    expect(scaffold).toBeDisabled()
+    expect(
+      screen.getByText('Save to apply the server change first.')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/in the Discord server "CS 101"/)
+    ).toBeInTheDocument()
   })
 })
 

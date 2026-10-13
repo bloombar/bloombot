@@ -329,6 +329,9 @@ function loadRoutableCourses(
   const routable: RoutableCourse[] = rows
     .filter(
       (row) =>
+        // TEN-11 — a course that uses no Discord is never routed a Discord
+        // message, even when its stored category or role names would match.
+        row.discordEnabled &&
         discordServers.pickCourseServerId(
           row.discordServerId,
           activeBindings

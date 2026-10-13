@@ -121,12 +121,13 @@ test('an organization with two active Discord bindings lists both, and a course 
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
-  await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
-  await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
 
+  // WEB-80 — the server is chosen first: roles stay disabled until then.
   const serverSelect = page.getByLabel('Discord server')
   await expect(serverSelect).toBeVisible()
   await serverSelect.selectOption(guildB)
+  await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
+  await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
 
   await page.getByRole('button', { name: 'Save course' }).click()
   // The save succeeded once the settings tabs appear — they only render

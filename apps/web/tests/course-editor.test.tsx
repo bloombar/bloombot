@@ -85,12 +85,22 @@ beforeEach(() => {
   listCourseJoinLinks.mockResolvedValue([])
   listCourseWebSources.mockResolvedValue([])
   listCourseEnrolments.mockResolvedValue([])
-  // TEN-9 — no active bindings by default, so the server selector stays
-  // hidden unless a test opts into two or more (`activeBindings.length > 1`,
-  // `pages/CourseEditor.tsx`'s own guard); individual tests below override
-  // this where the selector is what they are actually testing.
-  listDiscordServers.mockResolvedValue([])
+  // TEN-9/WEB-80 — exactly one active binding by default, so a legacy
+  // course (Discord on, no server stored) reads as using that server and its
+  // Discord settings are enabled, the way every existing course behaves.
+  // Individual tests below override this where the selector is what they
+  // are actually testing.
+  listDiscordServers.mockResolvedValue([DEFAULT_BINDING])
 })
+
+const DEFAULT_BINDING: DiscordServerBindingSummary = {
+  serverId: 'guild-default',
+  organizationId: 'org-1',
+  installedByAccountId: 'account-1',
+  installedAt: 0,
+  removedAt: null,
+  serverName: null,
+}
 
 const PROJECT: Project = {
   id: 'project-1',
@@ -117,6 +127,7 @@ const COURSE: Course = {
   selfEnrolFromDiscord: false,
   answerUnenrolled: true,
   discordServerId: null,
+  discordEnabled: true,
   createdAt: 0,
   // COST-8 — approved by default: this fixture exists to exercise the rest
   // of the editor, not the pending-approval banner (which has its own
@@ -1902,7 +1913,10 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     serverName: null,
   }
 
-  it('stays hidden when the organization holds zero or one active binding', async () => {
+  // WEB-80 — the selector is always shown (it used to be hidden for zero or
+  // one active binding), and a legacy course with no stored server reads as
+  // using the organization's one binding.
+  it('is always shown, reading a legacy null course as using the one active binding', async () => {
     listDiscordServers.mockResolvedValue([BINDING_A])
     getCourse.mockResolvedValue(COURSE)
 
@@ -1919,9 +1933,43 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
-    // WEB-35: the selector lives on the Discord tab.
     fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
-    expect(screen.queryByLabelText('Discord server')).not.toBeInTheDocument()
+    const select = await screen.findByLabelText('Discord server')
+    await waitFor(() => expect(select).toHaveValue('guild-a'))
+    expect(
+      within(select).getByRole('option', {
+        name: 'No Discord (web and AI assistant only)',
+      })
+    ).toBeInTheDocument()
+    // The legacy null course already has a server, so the placeholder is not
+    // offered.
+    expect(
+      within(select).queryByRole('option', { name: 'Choose a server…' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows only "No Discord" and a way to connect a server when the organization has none', async () => {
+    listDiscordServers.mockResolvedValue([])
+    getCourse.mockResolvedValue({ ...COURSE, discordEnabled: false })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="discord"
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    const select = await screen.findByLabelText('Discord server')
+    expect(within(select).getAllByRole('option')).toHaveLength(1)
+    expect(select).toHaveValue('none')
+    expect(
+      screen.getByRole('button', { name: 'Connect a Discord server' })
+    ).toBeInTheDocument()
   })
 
   it('offers a choice once the organization holds two or more active bindings, and saves the one chosen', async () => {
@@ -2005,7 +2053,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
   })
 
-  it('does not send discordServerId at all while the selector is hidden — never forces every course to null the moment a second server is installed', async () => {
+  it('does not send discordServerId or discordEnabled when neither was touched — a legacy null course stays null, keeping the single-binding fallback (TEN-9)', async () => {
     listDiscordServers.mockResolvedValue([])
     getCourse.mockResolvedValue(COURSE)
     saveCourse.mockResolvedValue(COURSE)
@@ -2034,6 +2082,35 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     await waitFor(() => expect(saveCourse).toHaveBeenCalled())
     const [, sentInput] = saveCourse.mock.calls[0] as [string, object]
     expect(sentInput).not.toHaveProperty('discordServerId')
+    expect(sentInput).not.toHaveProperty('discordEnabled')
+  })
+
+  it('saves a legacy single-binding null course untouched without pinning it to the displayed server', async () => {
+    listDiscordServers.mockResolvedValue([BINDING_A])
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onOpenChat={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() => expect(saveCourse).toHaveBeenCalled())
+    const [, sentInput] = saveCourse.mock.calls[0] as [string, object]
+    expect(sentInput).not.toHaveProperty('discordServerId')
+    expect(sentInput).not.toHaveProperty('discordEnabled')
   })
 
   // Must-fix 3 (coordinator round 1 rework): a course pinned to a
@@ -2082,10 +2159,14 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
   })
 
-  it('clearing a stale server assignment back to null is also possible, and sent explicitly', async () => {
+  it('choosing "No Discord" on a course pinned to a stale server is possible, and sent explicitly', async () => {
     listDiscordServers.mockResolvedValue([BINDING_A])
     getCourse.mockResolvedValue({ ...COURSE, discordServerId: 'guild-b' })
-    saveCourse.mockResolvedValue({ ...COURSE, discordServerId: null })
+    saveCourse.mockResolvedValue({
+      ...COURSE,
+      discordServerId: null,
+      discordEnabled: false,
+    })
 
     renderWithModal(
       <CourseEditor
@@ -2103,13 +2184,16 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     // WEB-35: the selector lives on the Discord tab.
     fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
     const select = await screen.findByLabelText('Discord server')
-    fireEvent.change(select, { target: { value: '' } })
+    fireEvent.change(select, { target: { value: 'none' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
 
     await waitFor(() =>
       expect(saveCourse).toHaveBeenCalledWith(
         'org-1',
-        expect.objectContaining({ discordServerId: null })
+        expect.objectContaining({
+          discordServerId: null,
+          discordEnabled: false,
+        })
       )
     )
   })
@@ -2761,21 +2845,14 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
     )
     await screen.findByDisplayValue('Web Design - GLOBAL')
 
-    // Dirties the form from the Discord tab itself.
-    fireEvent.change(screen.getByLabelText('Admins role'), {
-      target: { value: 'new-admins-role' },
+    // Dirties the form from the Discord tab itself: with no server
+    // connected, "No Discord" is the one choice, and picking it is an edit.
+    fireEvent.change(screen.getByLabelText('Discord server'), {
+      target: { value: 'none' },
     })
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Create Discord channels' })
-    )
-    const connectDialog = await screen.findByRole('dialog', {
-      name: 'Connect a Discord server first',
-    })
-    fireEvent.click(
-      within(connectDialog).getByRole('button', {
-        name: 'Connect a server',
-      })
+      screen.getByRole('button', { name: 'Connect a Discord server' })
     )
 
     // The unsaved-changes prompt, not a straight navigation.
@@ -2790,7 +2867,7 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
     await waitFor(() => expect(discardDialog).not.toBeVisible())
     expect(navigate).not.toHaveBeenCalled()
     // The edit is still there — "keep editing" discards nothing.
-    expect(screen.getByLabelText('Admins role')).toHaveValue('new-admins-role')
+    expect(screen.getByLabelText('Discord server')).toHaveValue('none')
   })
 
   it("confirming the discard prompt navigates to the organization's Discord page", async () => {
@@ -2812,20 +2889,12 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
     )
     await screen.findByDisplayValue('Web Design - GLOBAL')
 
-    fireEvent.change(screen.getByLabelText('Admins role'), {
-      target: { value: 'new-admins-role' },
+    fireEvent.change(screen.getByLabelText('Discord server'), {
+      target: { value: 'none' },
     })
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Create Discord channels' })
-    )
-    const connectDialog = await screen.findByRole('dialog', {
-      name: 'Connect a Discord server first',
-    })
-    fireEvent.click(
-      within(connectDialog).getByRole('button', {
-        name: 'Connect a server',
-      })
+      screen.getByRole('button', { name: 'Connect a Discord server' })
     )
 
     const discardDialog = await screen.findByRole('dialog', {
@@ -2864,15 +2933,7 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
     await screen.findByDisplayValue('Web Design - GLOBAL')
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Create Discord channels' })
-    )
-    const connectDialog = await screen.findByRole('dialog', {
-      name: 'Connect a Discord server first',
-    })
-    fireEvent.click(
-      within(connectDialog).getByRole('button', {
-        name: 'Connect a server',
-      })
+      await screen.findByRole('button', { name: 'Connect a Discord server' })
     )
 
     await waitFor(() =>
@@ -2938,6 +2999,12 @@ describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
     )
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Web Design' },
+    })
+    // WEB-80 — a new course starts with no Discord, which disables the
+    // categories; choose the server first.
+    await screen.findByRole('option', { name: 'guild-default' })
+    fireEvent.change(screen.getByLabelText('Discord server'), {
+      target: { value: 'guild-default' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
     fireEvent.click(screen.getByRole('button', { name: 'Add category' }))

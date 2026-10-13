@@ -40,6 +40,10 @@ import {
 import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('an instructor reads a course’s own Usage and Transcripts tabs, filters by student, and exports (WEB-63/WEB-64)', async ({
@@ -55,6 +59,7 @@ test('an instructor reads a course’s own Usage and Transcripts tabs, filters b
   // 1. Sign in and define an enabled course — the same panel-only path
   //    every other spec in this suite establishes.
   await signIn(page, ownerEmail)
+  await bindDiscordServer(ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -66,6 +71,7 @@ test('an instructor reads a course’s own Usage and Transcripts tabs, filters b
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()

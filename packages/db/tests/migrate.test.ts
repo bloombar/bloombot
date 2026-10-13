@@ -202,6 +202,7 @@ describe('runMigrations', () => {
       'created_at',
       'deleted_at',
       'deleted_by_account_id',
+      'discord_enabled',
       'discord_server_id',
       'enabled',
       'id',
@@ -1028,6 +1029,79 @@ describe('runMigrations', () => {
       self_enrol_from_discord: 0,
       answer_unenrolled: 1,
     })
+  })
+
+  // TEN-11 — 0040 adds `discord_enabled` to a `courses` table that already
+  // holds rows. Every existing course means "uses Discord as before", so the
+  // column must come back `1` — not `0`, and not a refused migration. Fails
+  // without the database-level `DEFAULT true` on the column.
+  it('applies 0040 to a database that already has a course, defaulting discordEnabled to true', () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0039 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 39
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0039) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0039,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    const organizationId = randomUUID()
+    const projectId = randomUUID()
+    const courseId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+    db.$client
+      .prepare(
+        'insert into projects (id, organization_id, name, archived_at, created_at) values (?, ?, ?, null, ?)'
+      )
+      .run(projectId, organizationId, 'Fall 2026', now)
+    db.$client
+      .prepare(
+        `insert into courses
+          (id, organization_id, project_id, title, enabled, admins_role,
+           students_role, conversation_scope, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        courseId,
+        organizationId,
+        projectId,
+        'Web Design',
+        1,
+        'admins-wd',
+        'students-wd',
+        'course',
+        now
+      )
+
+    expect(() => runMigrations(db as Database)).not.toThrow()
+
+    const course = db.$client
+      .prepare('select * from courses where id = ?')
+      .get(courseId)
+    expect(course).toMatchObject({ id: courseId, discord_enabled: 1 })
   })
 
   // PROJ-7: 0026 rebuilds `courses` itself (drizzle-kit's own SQLite

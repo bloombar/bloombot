@@ -302,7 +302,8 @@ function describeRemoveCourseChannelTarget(entity: unknown): string {
  * runs at all) the moment a `null` course would have to choose between two
  * or more active bindings, which is the identical case `apps/web`'s own
  * course editor only offers a server *selector* for in the first place
- * (one binding needs no choice; several does). So the server name is
+ * (one binding needs no choice; several does — TEN-11/WEB-80 since made the
+ * selector always visible, which does not change this reasoning). So the server name is
  * omitted from this confirmation only when there is exactly one candidate
  * (nothing to disambiguate) or none at all (nothing to name) — never the
  * case where naming it would actually have told a human something they
@@ -310,12 +311,23 @@ function describeRemoveCourseChannelTarget(entity: unknown): string {
  * resolve unambiguously by the time it runs.
  */
 function describeScaffoldTarget(entity: unknown): string {
-  const course = entity as { title?: unknown; discordServerId?: unknown } | null
+  const course = entity as {
+    title?: unknown
+    discordServerId?: unknown
+    discordEnabled?: unknown
+  } | null
   const title = typeof course?.title === 'string' ? course.title : undefined
   const serverId =
     typeof course?.discordServerId === 'string'
       ? course.discordServerId
       : undefined
+  // TEN-11 — a course with no Discord has nothing to build; the job will be
+  // refused, and the confirmation says why instead of naming a server.
+  if (course?.discordEnabled === false) {
+    return title === undefined
+      ? 'a course that uses no Discord (the scaffold will be refused)'
+      : `the course "${title}", which uses no Discord (the scaffold will be refused)`
+  }
   if (title === undefined) {
     return serverId ? `a course, in Discord server ${serverId}` : 'a course'
   }

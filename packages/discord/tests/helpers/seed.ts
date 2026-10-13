@@ -54,6 +54,8 @@ export interface SeedOptions {
   connectDefaultAuthor?: boolean
   /** COST-8 — approve the seeded course by default (see below); `false` for a test that specifically wants a pending course, the same "opt out" shape `connectDefaultAuthor` above already gives. */
   approve?: boolean
+  /** TEN-11 — defaults to `true`, matching `courses.discordEnabled`'s own database default. */
+  discordEnabled?: boolean
 }
 
 /** One organization, one Discord server bound to it, and one enabled course with a single category. */
@@ -114,6 +116,7 @@ export function seedBoundServerWithCourse(
           : options.instructions,
       selfEnrolFromDiscord: options.selfEnrolFromDiscord ?? false,
       answerUnenrolled: options.answerUnenrolled ?? true,
+      discordEnabled: options.discordEnabled ?? true,
       categories: [
         { name: options.categoryName ?? 'Test Category', channels: [] },
       ],

@@ -78,6 +78,10 @@ export const exportedCourseSchema = z.strictObject({
   // `schema.ts`'s own database columns carry — today's behaviour).
   selfEnrolFromDiscord: z.boolean().optional(),
   answerUnenrolled: z.boolean().optional(),
+  // TEN-11 — whether the course uses Discord at all. Optional for the same
+  // reason as the two above; an absent value means `true`, the behaviour
+  // every course had before this setting existed.
+  discordEnabled: z.boolean().optional(),
   categories: z.array(categorySchema),
   /** FILE-6/MDL-9 — the course's own websites, as normalized domains. */
   websites: z.array(z.string().min(1)),

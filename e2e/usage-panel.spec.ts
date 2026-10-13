@@ -62,6 +62,10 @@ import {
   navigateTo,
   navigateToOrganizationSettingsTab,
 } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test("an instructor sees their course's spend and a student approaching its daily limit, from the Usage screen (COST-4)", async ({
@@ -81,6 +85,7 @@ test("an instructor sees their course's spend and a student approaching its dail
   //    threshold (`@bloombot/db`'s `usage.ts`), so this spec needs only one
   //    real conversation to reach both halves of COST-4 at once.
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -93,6 +98,7 @@ test("an instructor sees their course's spend and a student approaching its dail
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Max requests per day').fill('1')

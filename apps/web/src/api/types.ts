@@ -291,9 +291,11 @@ export interface CourseSummary {
   // TEN-9 — which of the organization's (possibly several) Discord servers
   // this course routes in. `null` resolves through the organization's own
   // single active binding when it has exactly one (`repos/discord-servers.ts#resolveCourseDiscordServer`);
-  // `pages/CourseEditor.tsx`'s own server selector only offers a choice at
-  // all once the organization holds more than one active binding.
+  // `pages/CourseEditor.tsx`'s own server selector is always shown (WEB-80).
   discordServerId: string | null
+  // TEN-11 — whether this course uses Discord at all. `false` means it is
+  // never routed a Discord message and `discordServerId` is always `null`.
+  discordEnabled: boolean
   createdAt: number
   // COST-8 — read-only: no course owner can set this (`courses.save`'s own
   // input schema declares no such field), only read it. `null` means

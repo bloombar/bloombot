@@ -48,6 +48,10 @@ import {
 
 import { E2E_DATABASE_PATH, E2E_PUBLIC_APP_URL } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { completeSignIn, requestSignInLink, signIn } from './support/sign-in.js'
 
 test('an owner issues and copies a join link; a real visitor redeems it; revoking stops new admission without un-enrolling them (WEB-20, ENRL-4)', async ({
@@ -71,6 +75,7 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
   // 1. Sign in and define a course — the same panel-only path
   //    `course-configuration.spec.ts` already proves for CFG-2..4.
   await signIn(page, ownerEmail)
+  await bindDiscordServer(ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -83,6 +88,7 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()
@@ -251,6 +257,7 @@ test('an owner chooses an expiry when issuing a join link, and it is what gets p
   const weekMs = 7 * 24 * 60 * 60 * 1000
 
   await signIn(page, ownerEmail)
+  await bindDiscordServer(ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -263,6 +270,7 @@ test('an owner chooses an expiry when issuing a join link, and it is what gets p
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-w23-${suffix}`)
   await page.getByLabel('Students role').fill(`students-w23-${suffix}`)
   await page.getByLabel('Enabled').check()
@@ -350,6 +358,7 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
   const courseTitle = `ENRL-12 Course — ${suffix}`
 
   await signIn(page, ownerEmail)
+  await bindDiscordServer(ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -362,6 +371,7 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-e12-${suffix}`)
   await page.getByLabel('Students role').fill(`students-e12-${suffix}`)
   await page.getByLabel('Enabled').check()

@@ -99,6 +99,25 @@ describe('ScaffoldButton (SRV-6)', () => {
     expect(await screen.findByText('Queued…')).toBeInTheDocument()
   })
 
+  // WEB-80 — a course with no Discord server selected shows the button but
+  // it cannot be used.
+  it('is rendered but disabled, and enqueues nothing, when told to wait for a server', () => {
+    renderWithModal(
+      <ScaffoldButton
+        organizationId="org-1"
+        courseId="course-1"
+        onConnectDiscord={vi.fn()}
+        disabled
+      />
+    )
+    const button = screen.getByRole('button', {
+      name: 'Create Discord channels',
+    })
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(scaffoldCourseDiscord).not.toHaveBeenCalled()
+  })
+
   it('a job stuck pending past the hint threshold tells the person the worker might not be running', async () => {
     scaffoldCourseDiscord.mockResolvedValue({ jobId: 'job-1' })
     getJobStatus.mockResolvedValue(job({ status: 'pending' }))

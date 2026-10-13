@@ -584,6 +584,10 @@ export interface SaveCourseInput {
   // nullable fields above; validated server-side as an active binding of
   // the caller's own organization (`courses.save`'s own policy).
   discordServerId?: string | null
+  // TEN-11 — omitted keeps what is stored (`true` on create for API callers);
+  // `pages/CourseEditor.tsx` always sends it when creating a course, since a
+  // new course starts with no Discord (WEB-80).
+  discordEnabled?: boolean
   categories: SaveCourseCategoryInput[]
 }
 

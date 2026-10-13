@@ -40,6 +40,10 @@ import {
 
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('a platform administrator opens a pending course from the list, reads its settings, and approves it from that screen (ADMIN-6, ADMIN-13)', async ({
@@ -57,6 +61,7 @@ test('a platform administrator opens a pending course from the list, reads its s
   //    alone — left pending, COST-8's default for a non-administrator-owned
   //    course.
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -68,6 +73,7 @@ test('a platform administrator opens a pending course from the list, reads its s
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-${suffix}`)
   await page.getByLabel('Students role').fill(`students-${suffix}`)
   await page.getByLabel('Enabled').check()

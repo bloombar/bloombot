@@ -35,6 +35,10 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('a course is soft-deleted from its own row kebab, confirmed by typing its title, and a restore brings it back (PROJ-8, WEB-50, PROJ-11)', async ({
@@ -48,6 +52,7 @@ test('a course is soft-deleted from its own row kebab, confirmed by typing its t
   const adminsRole = `admins-${suffix}`
 
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // Create a project and a course through the panel itself — the same two
@@ -65,6 +70,7 @@ test('a course is soft-deleted from its own row kebab, confirmed by typing its t
   await page.getByRole('button', { name: projectName, exact: true }).click()
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()
@@ -183,6 +189,7 @@ test('a project — and its course — is soft-deleted from its own row kebab, c
   const adminsRole = `admins-${suffix}`
 
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -197,6 +204,7 @@ test('a project — and its course — is soft-deleted from its own row kebab, c
   await page.getByRole('button', { name: projectName, exact: true }).click()
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()

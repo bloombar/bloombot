@@ -361,7 +361,8 @@ export interface RosterFieldsDeclinedEntry {
 /** ROST-9..12's own report — what `@bloombot/actions`' `jobs.get` read action hands back once an import job succeeds. */
 export interface RosterImportReport {
   courseId: string
-  guildId: string
+  // TEN-11 — `null` for a course with no Discord: there is no guild.
+  guildId: string | null
   /** ROST-9: a row that did not parse, with its own line number. */
   parseErrors: RosterParseError[]
   /** A row whose handle matched nobody yet in this organization — a new person (and identity) was created for it (ROST-10). */
@@ -458,6 +459,10 @@ export interface RosterImportReport {
    */
   limitations: string[]
 }
+
+/** TEN-11 — what a roster import of a course with no Discord says it did not do. */
+const NO_DISCORD_LIMITATION =
+  'This course uses no Discord: students were enrolled, but no Discord roles, categories or private channels were created or checked.'
 
 /** Rework finding 13's own text for `limitations` — one entry today (ROST-6's pinned welcome message), kept as a named constant so the report and `docs/DECISIONS.md` can be grepped for the same wording. */
 const WELCOME_MESSAGE_NOT_SENT =
@@ -669,6 +674,202 @@ function resolveMember(
   if (onlyMatch) return { kind: 'resolved', member: onlyMatch }
 
   return { kind: 'unresolved' }
+}
+
+/**
+ * ROST-10, ENRL-3 and PPL-4 for one roster row: resolve (or create) the
+ * person, merge the roster's fields onto them, enrol them, and record what
+ * happened on `report`. Shared by the Discord path and the TEN-11 path below
+ * (a course with no Discord), so both enrol identically — only what happens
+ * to the row's Discord handle and private channel differs. `member` is the
+ * guild member the handle resolved to, `undefined` when it did not (or when
+ * there is no guild at all).
+ */
+function importRosterRowPerson(
+  context: JobContext,
+  course: CourseWithCategories,
+  row: RosterRowWithLine,
+  resolution: MemberResolution,
+  report: RosterImportReport
+) {
+  // ---- ROST-10: person resolution, merged never overwritten (PPL-4) ----
+  const member = resolution.kind === 'resolved' ? resolution.member : undefined
+  // See this file's own module comment: a resolved member's real
+  // snowflake is used when available (recognized by any later message
+  // from that same account); an unresolved (or ambiguous — rework
+  // finding 8) handle falls back to a synthetic, handle-keyed identity
+  // so the row is still kept and a re-import still recognizes it, at
+  // the cost of not yet reconciling with a snowflake identity
+  // established later.
+  const identity = {
+    surface: 'discord' as const,
+    externalId: member ? member.id : `handle:${normalizeHandle(row.discord)}`,
+  }
+  const existedBeforehand = people.resolveIdentity(
+    context.organizationId,
+    identity,
+    context.db
+  )
+  const person = people.resolvePersonByIdentity(
+    context.organizationId,
+    identity,
+    context.db
+  )
+  const desiredFields = {
+    firstName: row.first || null,
+    lastName: row.last || null,
+    email: row.email || null,
+    githubHandle: row.github || null,
+  } as const
+  // ROST-18: a person who already existed before this import has their
+  // name overwritten by a non-empty roster cell, never merely filled —
+  // the maintainer's own call that the roster is authoritative for a
+  // name, ahead of Google's own claims (AUTH-7) or an earlier import's
+  // typo. A blank cell writes nothing (`overwriteRosterFields` is only
+  // ever called with the roster's own non-empty values), and a
+  // *brand-new* person (nothing to overwrite yet) still gets its first
+  // name from the ordinary fill-only `mergeRosterFields` call below.
+  if (existedBeforehand) {
+    const nameOverwrite: Partial<
+      Pick<people.RosterFields, 'firstName' | 'lastName'>
+    > = {}
+    if (row.first) nameOverwrite.firstName = row.first
+    if (row.last) nameOverwrite.lastName = row.last
+    if (Object.keys(nameOverwrite).length > 0) {
+      people.overwriteRosterFields(
+        context.organizationId,
+        person.id,
+        nameOverwrite,
+        context.db
+      )
+    }
+  }
+  const mergedPerson = people.mergeRosterFields(
+    context.organizationId,
+    person.id,
+    {
+      email: desiredFields.email,
+      githubHandle: desiredFields.githubHandle,
+      // Only asked of `mergeRosterFields` for a person new to this
+      // import — a returning person's name was just handled above,
+      // authoritatively, and must not also be *filled* here (a no-op in
+      // practice, since `overwriteRosterFields` already set it, but
+      // redundant and confusing to read as though this were still the
+      // fill-only path for names).
+      ...(existedBeforehand
+        ? {}
+        : {
+            firstName: desiredFields.firstName,
+            lastName: desiredFields.lastName,
+          }),
+    },
+    context.db
+  )
+  // ENRL-3: a roster row is one of the three admission decisions — this
+  // is what actually enrols the row's person into the course, recording
+  // `source: 'roster'`. Idempotent the same way person resolution above
+  // is (`enrolments.ts#admit`): a re-import of the same roster leaves
+  // an already-active enrolment exactly as it found it, rather than
+  // erroring or duplicating it. Rework finding 3: it also leaves an
+  // *ended* enrolment (ENRL-6) exactly as ended — `enrolViaRoster`'s own
+  // doc comment — so re-importing the term's roster after an instructor
+  // has removed a student does not quietly bring them back.
+  enrolments.enrolViaRoster(
+    context.organizationId,
+    { courseId: course.id, personId: person.id },
+    context.db
+  )
+  // Rework finding 13 (first bullet): `mergeRosterFields` only ever
+  // fills a field that was `null` (PPL-4) — a field the roster asked
+  // for but that did not end up stored as the roster's own value was
+  // declined because a surface already proved a different one, not
+  // because anything failed. Compared against what actually landed,
+  // not merely re-asserted from `desiredFields`, so a re-import of a
+  // corrected roster row can tell the correction did not take.
+  //
+  // ROST-18: `firstName`/`lastName` are deliberately absent from this
+  // list — a returning person's name is now *overwritten*, not merged
+  // (above), so it can no longer be "declined" the way `mergeRosterFields`'s
+  // own fill-only fields can; a brand-new person's name, filled by
+  // `mergeRosterFields`, can also never be declined (nothing was there
+  // to refuse it). Only `email`/`githubHandle` still go through the
+  // fill-only path this check exists for.
+  const declinedFields = (
+    [
+      ['email', desiredFields.email],
+      ['githubHandle', desiredFields.githubHandle],
+    ] as const
+  )
+    .filter(
+      ([field, desired]) =>
+        desired !== null && mergedPerson?.[field] !== desired
+    )
+    .map(([field]) => field)
+  if (declinedFields.length > 0) {
+    report.rosterFieldsDeclined.push({
+      line: row.line,
+      discord: row.discord,
+      personId: person.id,
+      fields: declinedFields,
+    })
+  }
+  const personEntry: PersonReportEntry = {
+    line: row.line,
+    discord: row.discord,
+    personId: person.id,
+  }
+  if (existedBeforehand) {
+    report.peopleMerged.push(personEntry)
+  } else {
+    report.peopleCreated.push(personEntry)
+  }
+  return { person, member }
+}
+
+/** Parses the CSV and tags each row with its line, the shape both import paths loop over. */
+function parseRosterRows(csvText: string): {
+  rows: RosterRowWithLine[]
+  parseErrors: RosterParseError[]
+} {
+  const { rows, errors } = parseRosterCsv(csvText)
+  return {
+    rows: rows.map(({ line, row }) => ({ line, ...row })),
+    parseErrors: errors,
+  }
+}
+
+/** An all-empty report; the Discord path then fills in its role and category results. */
+function newRosterImportReport(
+  courseId: string,
+  guildId: string | null,
+  parseErrors: RosterParseError[],
+  limitations: string[]
+): RosterImportReport {
+  return {
+    courseId,
+    guildId,
+    parseErrors,
+    peopleCreated: [],
+    peopleMerged: [],
+    rosterFieldsDeclined: [],
+    unresolvedHandles: [],
+    ambiguousHandles: [],
+    channelsCreated: [],
+    channelsAlreadyPresent: [],
+    channelAccessGranted: [],
+    channelAccessGrantFailed: [],
+    channelsNotCreated: [],
+    channelsFailed: [],
+    channelNameDisambiguated: [],
+    channelOwnershipConflicts: [],
+    channelsOrphaned: [],
+    unresolvedRoles: [],
+    rolesCreated: [],
+    categoriesCreated: [],
+    categoriesFailed: [],
+    categoriesPermissionsNotRepaired: [],
+    limitations,
+  }
 }
 
 /** ROST-3: a channel is named after the local part of the student's email address — a stable, recognizable name that does not depend on the student's own (self-reported, frequently wrong) Discord handle. Slugged the same way every other channel name this app creates is (`normalizeChannelName`), so a later `listGuildChannels` match is comparing like with like. */
@@ -1187,6 +1388,29 @@ export function createRosterImportHandler(
     const studentCategoryBaseName =
       payload.studentCategoryBaseName ?? `${course.title} - STUDENTS`
 
+    // TEN-11 — a course with no Discord is still enrolled from a roster,
+    // but nothing here may touch a guild: no member lookup, no role
+    // created or looked up, no student category or private channel. Every
+    // row is resolved by its (synthetic) handle identity exactly as an
+    // unresolved Discord handle is, merged and enrolled by the same
+    // `importRosterRowPerson` the Discord path uses.
+    if (!course.discordEnabled) {
+      const { rows, parseErrors } = parseRosterRows(payload.csvText)
+      const report = newRosterImportReport(course.id, null, parseErrors, [
+        NO_DISCORD_LIMITATION,
+      ])
+      for (const row of rows) {
+        importRosterRowPerson(
+          context,
+          course,
+          row,
+          { kind: 'unresolved' },
+          report
+        )
+      }
+      return report
+    }
+
     // TEN-9 — resolved through the course's own server, not "the
     // organization's one binding": before this, an organization installing
     // a second server (this slice's own point) made every roster import
@@ -1213,13 +1437,7 @@ export function createRosterImportHandler(
     }
     const guildId = serverResolution.binding.serverId
 
-    const { rows: parsedRows, errors: parseErrors } = parseRosterCsv(
-      payload.csvText
-    )
-    const rows: RosterRowWithLine[] = parsedRows.map(({ line, row }) => ({
-      line,
-      ...row,
-    }))
+    const { rows, parseErrors } = parseRosterRows(payload.csvText)
 
     const [existingChannels, roles, members] = await Promise.all([
       deps.discordRestClient.listGuildChannels(deps.botToken, guildId),
@@ -1594,29 +1812,14 @@ export function createRosterImportHandler(
     }
 
     const report: RosterImportReport = {
-      courseId: course.id,
-      guildId,
-      parseErrors,
-      peopleCreated: [],
-      peopleMerged: [],
-      rosterFieldsDeclined: [],
-      unresolvedHandles: [],
-      ambiguousHandles: [],
-      channelsCreated: [],
-      channelsAlreadyPresent: [],
-      channelAccessGranted: [],
-      channelAccessGrantFailed: [],
-      channelsNotCreated: [],
-      channelsFailed: [],
-      channelNameDisambiguated: [],
-      channelOwnershipConflicts: [],
-      channelsOrphaned: [],
+      ...newRosterImportReport(course.id, guildId, parseErrors, [
+        WELCOME_MESSAGE_NOT_SENT,
+      ]),
       unresolvedRoles,
       rolesCreated,
       categoriesCreated,
       categoriesFailed,
       categoriesPermissionsNotRepaired,
-      limitations: [WELCOME_MESSAGE_NOT_SENT],
     }
 
     // Round 3's "cheap one": every row's own handle resolution, computed
@@ -1664,139 +1867,13 @@ export function createRosterImportHandler(
       const row = rows[rowIndex] as RosterRowWithLine
       // ---- ROST-10: person resolution, merged never overwritten (PPL-4) ----
       const resolution = resolutionsByRow[rowIndex] as MemberResolution
-      const member =
-        resolution.kind === 'resolved' ? resolution.member : undefined
-      // See this file's own module comment: a resolved member's real
-      // snowflake is used when available (recognized by any later message
-      // from that same account); an unresolved (or ambiguous — rework
-      // finding 8) handle falls back to a synthetic, handle-keyed identity
-      // so the row is still kept and a re-import still recognizes it, at
-      // the cost of not yet reconciling with a snowflake identity
-      // established later.
-      const identity = {
-        surface: 'discord' as const,
-        externalId: member
-          ? member.id
-          : `handle:${normalizeHandle(row.discord)}`,
-      }
-      const existedBeforehand = people.resolveIdentity(
-        context.organizationId,
-        identity,
-        context.db
+      const { person, member } = importRosterRowPerson(
+        context,
+        course,
+        row,
+        resolution,
+        report
       )
-      const person = people.resolvePersonByIdentity(
-        context.organizationId,
-        identity,
-        context.db
-      )
-      const desiredFields = {
-        firstName: row.first || null,
-        lastName: row.last || null,
-        email: row.email || null,
-        githubHandle: row.github || null,
-      } as const
-      // ROST-18: a person who already existed before this import has their
-      // name overwritten by a non-empty roster cell, never merely filled —
-      // the maintainer's own call that the roster is authoritative for a
-      // name, ahead of Google's own claims (AUTH-7) or an earlier import's
-      // typo. A blank cell writes nothing (`overwriteRosterFields` is only
-      // ever called with the roster's own non-empty values), and a
-      // *brand-new* person (nothing to overwrite yet) still gets its first
-      // name from the ordinary fill-only `mergeRosterFields` call below.
-      if (existedBeforehand) {
-        const nameOverwrite: Partial<
-          Pick<people.RosterFields, 'firstName' | 'lastName'>
-        > = {}
-        if (row.first) nameOverwrite.firstName = row.first
-        if (row.last) nameOverwrite.lastName = row.last
-        if (Object.keys(nameOverwrite).length > 0) {
-          people.overwriteRosterFields(
-            context.organizationId,
-            person.id,
-            nameOverwrite,
-            context.db
-          )
-        }
-      }
-      const mergedPerson = people.mergeRosterFields(
-        context.organizationId,
-        person.id,
-        {
-          email: desiredFields.email,
-          githubHandle: desiredFields.githubHandle,
-          // Only asked of `mergeRosterFields` for a person new to this
-          // import — a returning person's name was just handled above,
-          // authoritatively, and must not also be *filled* here (a no-op in
-          // practice, since `overwriteRosterFields` already set it, but
-          // redundant and confusing to read as though this were still the
-          // fill-only path for names).
-          ...(existedBeforehand
-            ? {}
-            : {
-                firstName: desiredFields.firstName,
-                lastName: desiredFields.lastName,
-              }),
-        },
-        context.db
-      )
-      // ENRL-3: a roster row is one of the three admission decisions — this
-      // is what actually enrols the row's person into the course, recording
-      // `source: 'roster'`. Idempotent the same way person resolution above
-      // is (`enrolments.ts#admit`): a re-import of the same roster leaves
-      // an already-active enrolment exactly as it found it, rather than
-      // erroring or duplicating it. Rework finding 3: it also leaves an
-      // *ended* enrolment (ENRL-6) exactly as ended — `enrolViaRoster`'s own
-      // doc comment — so re-importing the term's roster after an instructor
-      // has removed a student does not quietly bring them back.
-      enrolments.enrolViaRoster(
-        context.organizationId,
-        { courseId: course.id, personId: person.id },
-        context.db
-      )
-      // Rework finding 13 (first bullet): `mergeRosterFields` only ever
-      // fills a field that was `null` (PPL-4) — a field the roster asked
-      // for but that did not end up stored as the roster's own value was
-      // declined because a surface already proved a different one, not
-      // because anything failed. Compared against what actually landed,
-      // not merely re-asserted from `desiredFields`, so a re-import of a
-      // corrected roster row can tell the correction did not take.
-      //
-      // ROST-18: `firstName`/`lastName` are deliberately absent from this
-      // list — a returning person's name is now *overwritten*, not merged
-      // (above), so it can no longer be "declined" the way `mergeRosterFields`'s
-      // own fill-only fields can; a brand-new person's name, filled by
-      // `mergeRosterFields`, can also never be declined (nothing was there
-      // to refuse it). Only `email`/`githubHandle` still go through the
-      // fill-only path this check exists for.
-      const declinedFields = (
-        [
-          ['email', desiredFields.email],
-          ['githubHandle', desiredFields.githubHandle],
-        ] as const
-      )
-        .filter(
-          ([field, desired]) =>
-            desired !== null && mergedPerson?.[field] !== desired
-        )
-        .map(([field]) => field)
-      if (declinedFields.length > 0) {
-        report.rosterFieldsDeclined.push({
-          line: row.line,
-          discord: row.discord,
-          personId: person.id,
-          fields: declinedFields,
-        })
-      }
-      const personEntry: PersonReportEntry = {
-        line: row.line,
-        discord: row.discord,
-        personId: person.id,
-      }
-      if (existedBeforehand) {
-        report.peopleMerged.push(personEntry)
-      } else {
-        report.peopleCreated.push(personEntry)
-      }
       if (resolution.kind === 'unresolved') {
         report.unresolvedHandles.push({
           line: row.line,

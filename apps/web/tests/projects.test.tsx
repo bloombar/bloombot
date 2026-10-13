@@ -676,6 +676,7 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
     selfEnrolFromDiscord: false,
     answerUnenrolled: true,
     discordServerId: null,
+    discordEnabled: true,
     createdAt: 0,
     aiApprovedAt: 1000,
   }

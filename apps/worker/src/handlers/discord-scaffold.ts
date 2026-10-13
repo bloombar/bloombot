@@ -417,6 +417,16 @@ export function createDiscordScaffoldHandler(
       )
     }
 
+    // TEN-11 — a course with no Discord has no guild to scaffold into. The
+    // web panel disables the button, but a queued or MCP-issued job still
+    // gets here, so it is refused with a reason rather than falling through
+    // to "the organization's one binding".
+    if (!course.discordEnabled) {
+      throw new Error(
+        `discordServers.scaffold: course "${course.id}" uses no Discord — choose a Discord server for it before scaffolding`
+      )
+    }
+
     // TEN-9 — the guild this course scaffolds into is resolved through the
     // course's *own* server, not "the organization's one binding": an
     // organization holding two or more active bindings is an ordinary case

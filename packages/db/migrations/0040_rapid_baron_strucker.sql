@@ -1,0 +1,1 @@
+ALTER TABLE `courses` ADD `discord_enabled` integer DEFAULT true NOT NULL;

@@ -95,6 +95,7 @@ const COURSE: CourseSummary = {
   selfEnrolFromDiscord: false,
   answerUnenrolled: true,
   discordServerId: null,
+  discordEnabled: true,
   createdAt: 0,
   aiApprovedAt: 1000,
 }

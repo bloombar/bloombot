@@ -65,6 +65,32 @@ function namesByEmail(report: RosterImportReport): Record<string, string> {
   return out
 }
 
+/** TEN-11 — turns Discord off for a seeded course through the real repo, leaving everything else as it was. */
+function turnDiscordOff(organizationId: string, courseId: string): void {
+  const course = courses.getCourse(organizationId, courseId, testDb.db)
+  if (!course) throw new Error('setup: course missing')
+  const result = courses.updateCourseSettings(
+    organizationId,
+    courseId,
+    {
+      title: course.title,
+      enabled: course.enabled,
+      adminsRole: course.adminsRole,
+      studentsRole: course.studentsRole,
+      model: course.model,
+      vectorStoreId: course.vectorStoreId,
+      maxRequestsPerDay: course.maxRequestsPerDay,
+      conversationScope: course.conversationScope,
+      selfEnrolFromDiscord: course.selfEnrolFromDiscord,
+      answerUnenrolled: course.answerUnenrolled,
+      discordServerId: null,
+      discordEnabled: false,
+    },
+    testDb.db
+  )
+  if (!result?.ok) throw new Error('setup: could not turn Discord off')
+}
+
 /** Runs the handler directly (no queue) against `discordServer`. */
 async function runImport(
   organizationId: string,
@@ -3716,6 +3742,47 @@ describe('roster.import handler', () => {
         },
       ])
       expect(report.channelsNotCreated).toHaveLength(3)
+    })
+  })
+  // TEN-11 — a roster import of a course that uses no Discord still enrols
+  // every student, but touches no guild: no member lookup, no role created,
+  // no category or channel. Fails without the handler's own branch: the
+  // course would fall back to the organization's bound server and build
+  // roles and channels in it.
+  describe('a course that uses no Discord (TEN-11)', () => {
+    it('enrols the students and makes no Discord call, role or channel', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      turnDiscordOff(seeded.organizationId, seeded.courseId)
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv,
+        { createStudentCategories: true }
+      )
+
+      expect(discordServer.requests).toHaveLength(0)
+      expect(report.guildId).toBeNull()
+      expect(report.rolesCreated).toEqual([])
+      expect(report.channelsCreated).toEqual([])
+      expect(report.categoriesCreated).toEqual([])
+      expect(report.unresolvedHandles).toEqual([])
+      expect(report.peopleCreated).toHaveLength(1)
+
+      const personId = report.peopleCreated[0]?.personId as string
+      const enrolment = enrolments.getActiveEnrolment(
+        seeded.organizationId,
+        seeded.courseId,
+        personId,
+        testDb.db
+      )
+      expect(enrolment?.source).toBe('roster')
     })
   })
 })

@@ -44,6 +44,10 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('an owner adds a website (typed as a URL), sees it reduced to its domain, a duplicate is refused, and removing one takes effect (FILE-6, WEB-31)', async ({
@@ -57,6 +61,7 @@ test('an owner adds a website (typed as a URL), sees it reduced to its domain, a
   // 1. Sign in and define a course — the same panel-only path
   //    `course-configuration.spec.ts` already proves for CFG-2..4.
   await signIn(page, ownerEmail)
+  await bindDiscordServer(ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -68,6 +73,7 @@ test('an owner adds a website (typed as a URL), sees it reduced to its domain, a
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-ws-${suffix}`)
   await page.getByLabel('Students role').fill(`students-ws-${suffix}`)
   await page.getByLabel('Enabled').check()

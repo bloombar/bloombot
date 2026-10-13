@@ -53,6 +53,7 @@ function result(
       selfEnrolFromDiscord: false,
       answerUnenrolled: true,
       discordServerId: null,
+      discordEnabled: true,
       createdAt: 0,
       // COST-8 — an import stays pending unless it lands in an
       // administrator-owned organization (`courses.ts#approveIfAdministratorOwned`'s

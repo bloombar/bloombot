@@ -66,6 +66,10 @@ import { navigateTo } from './support/navigate.js'
 import { createFakeLogger } from './support/fake-logger.js'
 import { FakeModelClient } from './support/fake-model-client.js'
 import { FakeReplyPort } from './support/fake-reply-port.js'
+import {
+  bindDiscordServer,
+  chooseDiscordServer,
+} from './support/discord-server.js'
 import { signIn } from './support/sign-in.js'
 
 test('a project and course defined entirely in the panel route and answer a matching message (QA-8)', async ({
@@ -84,6 +88,7 @@ test('a project and course defined entirely in the panel route and answer a matc
   // 1. Sign in — the same emailed-link flow `auth-flow.spec.ts` exercises,
   //    which also creates this account's own personal organization (TEN-1).
   await signIn(page, email)
+  await bindDiscordServer(email, `e2e-guild-${suffix}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 2. Create a project (WEB-7/PROJ-1), through the panel alone.
@@ -99,6 +104,7 @@ test('a project and course defined entirely in the panel route and answer a matc
   //    (CFG-4) — the two names that decide routing (WEB-9) — and enable it.
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByRole('button', { name: 'Add category' }).click()
@@ -441,6 +447,7 @@ test("a channel row's name input, checkbox and remove button stay on one line, a
   const email = `web40-${suffix}@example.edu`
 
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -456,6 +463,7 @@ test("a channel row's name input, checkbox and remove button stay on one line, a
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(`Web Design — ${suffix}`)
+  await chooseDiscordServer(page)
   await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByRole('button', { name: 'Add category' }).click()
@@ -502,6 +510,7 @@ test('a course with both role fields left blank saves successfully, and its own 
   const email = `proj7-${suffix}@example.edu`
 
   await signIn(page, email)
+  await bindDiscordServer(email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -519,6 +528,7 @@ test('a course with both role fields left blank saves successfully, and its own 
   await page.getByLabel('Title').fill(`Web Design — ${suffix}`)
   // Admins role/Students role left blank on purpose — this is the case
   // under test.
+  await chooseDiscordServer(page)
   await page.getByRole('button', { name: 'Add category' }).click()
   await page.getByLabel('Category name').fill(`Web Design - GLOBAL - ${suffix}`)
   await page.getByRole('button', { name: 'Save course' }).click()

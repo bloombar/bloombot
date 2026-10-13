@@ -5168,7 +5168,7 @@
   section: §51 Courses Without Discord
   family: ROST
   phase: 50
-  status: In review
+  status: Done
   review: false
 - id: WEB-82
   title: A course's people include the students invited but not yet signed in
@@ -5180,5 +5180,5 @@
   section: §51 Courses Without Discord
   family: WEB
   phase: 50
-  status: In review
+  status: Done
   review: false
